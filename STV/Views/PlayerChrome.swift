@@ -4,17 +4,23 @@ struct PlayerIconButton: View {
     let symbol: String
     let label: String
     var tint: Color = .white
+    var transparent = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            // Redesign: 40 pt glass circle (rgba(20,20,24,.42) + blur 16, white 14 % hairline) in a 44 pt hit area.
             Image(systemName: symbol)
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(tint)
                 .frame(width: 40, height: 40)
-                .background { Circle().fill(.ultraThinMaterial).overlay(Circle().fill(.black.opacity(0.42))) }
-                .overlay { Circle().strokeBorder(.white.opacity(0.14), lineWidth: 0.5) }
+                .background {
+                    if !transparent {
+                        Circle().fill(.ultraThinMaterial).overlay(Circle().fill(.black.opacity(0.42)))
+                    }
+                }
+                .overlay {
+                    if !transparent { Circle().strokeBorder(.white.opacity(0.14), lineWidth: 0.5) }
+                }
                 .environment(\.colorScheme, .dark)
                 .frame(width: 44, height: 44)
                 .contentShape(Circle())
