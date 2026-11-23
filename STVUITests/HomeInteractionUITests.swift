@@ -163,7 +163,7 @@ final class HomeInteractionUITests: XCTestCase {
         XCTAssertTrue(waitHittable(el("home.search"), false), "search/filter header should hide on upward scroll")
         XCTAssertTrue(el("home.channels").isHittable, "top category bar must remain visible while scrolling")
         XCTAssertTrue(waitHittable(el("tab.0"), false), "bottom navigation should hide with the header")
-        XCTAssertTrue(waitForHeightIncrease(home, from: initialHeight, by: 40), "home feed should expand into the collapsed tab-bar area")
+        XCTAssertTrue(waitForHeightIncrease(home, from: initialHeight, by: 40), "home feed should expand after the search header collapses")
         // Continue to the feed end: bottom bounce and pagination must not restore chrome.
         for _ in 0..<8 { home.swipeUp() }
         XCTAssertFalse(el("home.search").isHittable, "search header must stay hidden at the feed end")
