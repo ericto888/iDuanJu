@@ -280,9 +280,6 @@ struct PlayerScreen: View {
         .onDisappear { co.teardown(); adjuster.restoreBrightness(); OrientationGate.lockPortrait() }
         .compatOnChange(of: co.current) { new in
             scrubbing = false
-            if let new, co.episodes.indices.contains(new) {
-                showOSD("第\(co.episodes[new].ep)集")
-            }
             if new != nil {
                 centerSuppressed = true
                 if co.lastAdvanceWasAuto {
