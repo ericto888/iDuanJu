@@ -139,6 +139,7 @@ final class HomeInteractionUITests: XCTestCase {
         XCTAssertTrue(el("tab.0").isHittable, "root tab navigation did not return on downward scroll")
     }
 
+    // Focused regression target used by player-validation.yml.
     func testHomeChromeHidesAndRestores() {
         XCTAssertTrue(el("home.card").waitForExistence(timeout: 20), "home feed did not load")
         let home = el("home.page.红果")
