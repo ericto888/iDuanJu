@@ -106,6 +106,9 @@ struct HomeView: View {
     @State private var scrolled: [HomeSource: Bool] = [:]
     @State private var headerHidden = false
     @State private var lastFeedOffset: [HomeSource: CGFloat] = [:]
+    @State private var lastBottomBarOffset: [HomeSource: CGFloat] = [:]
+    @State private var lastBottomBarSampleTime: [HomeSource: TimeInterval] = [:]
+    private let bottomBarRevealVelocity: CGFloat = 400
     private var pinned: Bool { scrolled[source] ?? false }
     @State private var showChannels = false
 
@@ -152,14 +155,26 @@ struct HomeView: View {
         .animation(.easeInOut(duration: 0.22), value: headerHidden)
         .compatOnChange(of: source) { _ in
             lastFeedOffset.removeAll()
+            lastBottomBarOffset.removeAll()
+            lastBottomBarSampleTime.removeAll()
             setHeaderHidden(false)
+            setBottomBarHidden(false)
         }
-        .onAppear { NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: false) }
+        .onAppear {
+            NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: false)
+            NotificationCenter.default.post(name: .homeBottomBarVisibilityChanged, object: false)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .homeChromeResetRequested)) { _ in
             lastFeedOffset.removeAll()
+            lastBottomBarOffset.removeAll()
+            lastBottomBarSampleTime.removeAll()
             setHeaderHidden(false)
+            setBottomBarHidden(false)
         }
-        .onDisappear { NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: false) }
+        .onDisappear {
+            NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: false)
+            NotificationCenter.default.post(name: .homeBottomBarVisibilityChanged, object: false)
+        }
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showChannels) { channelPanel }
         .compatOnChange(of: SourceGate.shared.visibleSites) { if !HomeSource.all.contains(source) { source = .hongguo } }
@@ -171,9 +186,42 @@ struct HomeView: View {
         NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: hidden)
     }
 
+    private func setBottomBarHidden(_ hidden: Bool) {
+        NotificationCenter.default.post(name: .homeBottomBarVisibilityChanged, object: hidden)
+    }
+
+    /// Mirrors guoapp-next: hide on any deliberate upward movement; reveal only on a fast downward flick.
+    /// Reaching the top always restores the bar. Header visibility remains governed by its existing rule.
+    private func handleBottomBarOffset(_ offset: CGFloat, for feedSource: HomeSource) {
+        guard feedSource == source else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let previous = lastBottomBarOffset[feedSource]
+        let previousTime = lastBottomBarSampleTime[feedSource]
+        lastBottomBarOffset[feedSource] = offset
+        lastBottomBarSampleTime[feedSource] = now
+
+        if offset > -8 {
+            setBottomBarHidden(false)
+            return
+        }
+        guard let previous, let previousTime else { return }
+        let delta = offset - previous
+        guard abs(delta) > 1.5 else { return }
+        if delta < 0 {
+            setBottomBarHidden(true)
+        } else {
+            let elapsed = max(now - previousTime, 0.001)
+            let velocity = delta / elapsed
+            if velocity >= bottomBarRevealVelocity {
+                setBottomBarHidden(false)
+            }
+        }
+    }
+
     private func handleFeedOffset(_ offset: CGFloat, for feedSource: HomeSource) {
         // TabView keeps adjacent pages alive; only the selected source may drive global chrome.
         guard feedSource == source else { return }
+        handleBottomBarOffset(offset, for: feedSource)
         let previous = lastFeedOffset[feedSource]
         lastFeedOffset[feedSource] = offset
         guard let previous else {
