@@ -99,8 +99,7 @@ struct PlayerScreen: View {
         let a = aspect
         var w = area.width, h = w / a
         if h > area.height { h = area.height; w = h * a }
-        let lift: CGFloat = portraitLandscapeClip ? 44 : 0
-        return CGRect(x: area.midX - w / 2, y: area.midY - h / 2 - lift, width: w, height: h)
+        return CGRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h)
     }
 
     var body: some View {
@@ -116,12 +115,12 @@ struct PlayerScreen: View {
                     // A single in-window layer remains the PiP source across paging, rotation and buffering.
                     PlayerLayerView(coordinator: co, fill: fillScreen, engine: co.engineKind)
                         .accessibilityElement(children: .contain).accessibilityIdentifier(suppliedDetail == nil ? "player.video" : "novel.media.status").accessibilityValue(suppliedDetail == nil ? (fillScreen ? "fill" : "fit") : String(format: "已播放 %.2f 秒", co.time))
-                        .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - pageDrift(co.current ?? 0, page: full.height) - (portraitLandscapeClip ? 44 : 0))
+                        .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - pageDrift(co.current ?? 0, page: full.height))
                         .allowsHitTesting(false)
                     if let held = co.heldFrame {
                         // Previous episode's last frame, riding with the swipe until the next one is on screen.
                         Image(uiImage: held.image).resizable()
-                            .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - pageDrift(held.index, page: full.height) - (portraitLandscapeClip ? 44 : 0))
+                            .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - pageDrift(held.index, page: full.height))
                             .allowsHitTesting(false).accessibilityHidden(true)
                     }
                     Group {
