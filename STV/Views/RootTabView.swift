@@ -21,7 +21,7 @@ struct RootTabView: View {
                     .transition(.move(edge: .leading).combined(with: .opacity))
                 }
                 TabView(selection: $tab) {
-                    Stack(path: $paths[0], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { HomeView() }.tag(0)
+                    Stack(path: $paths[0], reserveBottomBar: false) { HomeView() }.tag(0)
                     Stack(path: $paths[1], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { TVBoxHubView() }.tag(1)
                     Stack(path: $paths[2], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { CategoryView() }.tag(2)
                     Stack(path: $paths[3], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { ProfileView() }.tag(3)
