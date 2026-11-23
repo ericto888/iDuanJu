@@ -240,6 +240,7 @@ struct HomeView: View {
                         NovelHomeView(embedded: true).tag(s)
                     } else {
                         HomeFeedPage(source: s,
+                                     bottomBarHidden: headerHidden,
                                      tab: Binding(get: { subs[s] ?? s.subs[0] }, set: { subs[s] = $0 }),
                                      onHero: { heroCovers[s] = $0 },
                                      onScrolled: { v in if scrolled[s] != v { scrolled[s] = v } },
@@ -407,6 +408,7 @@ struct HomeView: View {
 /// One source page: secondary board chips → hero → real board sections. Vertical scroll inside a horizontal pager.
 private struct HomeFeedPage: View {
     let source: HomeSource
+    let bottomBarHidden: Bool
     @Binding var tab: HomeTab
     var onHero: (String) -> Void
     var onScrolled: (Bool) -> Void = { _ in }
@@ -459,7 +461,8 @@ private struct HomeFeedPage: View {
             }
             // Fixed scroll tail keeps the last card reachable above the floating tab bar.
             // It does not alter the viewport when the bar is shown or hidden.
-            .padding(.bottom, 96)
+            .padding(.bottom, bottomBarHidden ? 0 : 96)
+            .animation(.easeOut(duration: 0.25), value: bottomBarHidden)
             .animation(.easeOut(duration: 0.25), value: heroPicks.isEmpty)
         }
         .scrollIndicators(.hidden)
