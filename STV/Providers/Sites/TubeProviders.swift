@@ -271,7 +271,7 @@ struct XVProvider: SiteProvider {
         }
 
         let flvPatterns = [
-            #"(?:[?&])flv_url=([^&"'\\s<>]+)"#,
+            #"(?:[?&])flv_url=([^&"'\s<>]+)"#,
             #"flv_url\s*[:=]\s*'([^']*)'"#,
             #"flv_url\s*[:=]\s*"([^"]*)""#
         ]
@@ -295,7 +295,7 @@ struct XVProvider: SiteProvider {
         }
 
         let normalizedHTML = h.replacingOccurrences(of: "\\/", with: "/")
-        let rawPattern = #"(?:https?:)?//[^"'\\s<>]+?\.(?:m3u8|mp4)(?:\?[^"'\\s<>]*)?"#
+        let rawPattern = #"(?:https?:)?//[^"'\s<>]+?\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?"#
 
         for match in HTML.all(rawPattern, normalizedHTML) where !match.isEmpty {
             let raw = match[0].hasPrefix("//") ? "https:" + match[0] : match[0]
