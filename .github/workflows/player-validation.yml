@@ -33,18 +33,17 @@ jobs:
             HOMEBREW_NO_AUTO_UPDATE=1 brew install --quiet xcodegen
           fi
           xcodegen --version
-      # Keep Debug test products separate from the Release IPA cache.
-      - name: Cache Swift packages and Debug build products
+      # Cache package downloads only; avoid restoring a multi-GB DerivedData build archive.
+      - name: Cache Swift packages
         uses: actions/cache@v4
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm
             DerivedDataRelease/SourcePackages
-            DerivedDataRelease/Build
-          key: ${{ runner.os }}-xcode-26.3-player-debug-${{ hashFiles('project.yml', 'Packages/**/Package.swift', 'Package.resolved') }}-${{ github.sha }}
+          key: ${{ runner.os }}-xcode-26.3-player-deps-v2-${{ hashFiles('project.yml', 'Packages/**/Package.swift', 'Package.resolved') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-xcode-26.3-player-debug-${{ hashFiles('project.yml', 'Packages/**/Package.swift', 'Package.resolved') }}-
-            ${{ runner.os }}-xcode-26.3-player-debug-
+            ${{ runner.os }}-xcode-26.3-player-deps-v2-${{ hashFiles('project.yml', 'Packages/**/Package.swift', 'Package.resolved') }}-
+            ${{ runner.os }}-xcode-26.3-player-deps-v2-
       - name: Test production player and gesture regressions
         run: |
           xcodegen generate
