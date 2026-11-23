@@ -157,9 +157,14 @@ struct SourceStoreView: View {
 
     private func sourceCard(_ entry: Catalog.Entry) -> some View {
         let installed = store.plugin(entry.id)
-        let isCurrent = installed != nil && (entry.version.map {
-            PluginManifest.compare(installed!.manifest.version, $0) >= 0
-        } ?? true)
+        // If the catalog omits its cached version, still let the user check the
+        // remote manifest; prepare() will validate the actual version before commit.
+        let isCurrent: Bool
+        if let installed, let version = entry.version {
+            isCurrent = PluginManifest.compare(installed.manifest.version, version) >= 0
+        } else {
+            isCurrent = false
+        }
         return HStack(alignment: .top, spacing: 12) {
             RoundedRectangle(cornerRadius: 12)
                 .fill(STVTheme.glass)
