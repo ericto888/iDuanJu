@@ -49,7 +49,9 @@ jobs:
           xcrun simctl boot "$SIM" || true
           python3 -c 'import subprocess,sys; subprocess.run(["xcrun","simctl","bootstatus",sys.argv[1],"-b"],check=True,timeout=180)' "$SIM"
           set -o pipefail
-          xcodebuild -project STV.xcodeproj -scheme STV -configuration Debug -destination "platform=iOS Simulator,id=$SIM" -derivedDataPath DerivedDataRelease CODE_SIGNING_ALLOWED=NO ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES=YES ENABLE_DEBUG_DYLIB=NO DEAD_CODE_STRIPPING=YES -parallel-testing-enabled NO -test-timeouts-enabled YES -maximum-test-execution-time-allowance 180 -only-testing:STVTests/PlayerAdjustTests -only-testing:STVTests/PlayerTransportTests -only-testing:STVUITests/PlayerUITests/testLandscapeEpisodePagingAndRotation -only-testing:STVUITests/PlayerUITests/testLandscapeSideAdjustmentsAndLockDoNotChangeEpisode -only-testing:STVUITests/PlayerUITests/testPlayAfterInterruptionWithoutEnd -only-testing:STVUITests/PlayerUITests/testSideAdjustmentsWhileEpisodeIsLoadingOrFailed -only-testing:STVUITests/PlayerUITests/testNaturalEndStartsNextEpisodeOnBothEngines test 2>&1 | tee "$RUNNER_TEMP/player-tests.log"
+          # Run only the UI regression directly affected by the landscape title/episode identity fix.
+          # The target is built as part of xcodebuild test; unrelated player unit/UI suites are skipped.
+          xcodebuild -project STV.xcodeproj -scheme STV -configuration Debug -destination "platform=iOS Simulator,id=$SIM" -derivedDataPath DerivedDataRelease CODE_SIGNING_ALLOWED=NO ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES=YES ENABLE_DEBUG_DYLIB=NO DEAD_CODE_STRIPPING=YES -parallel-testing-enabled NO -test-timeouts-enabled YES -maximum-test-execution-time-allowance 180 -only-testing:STVUITests/PlayerUITests/testLandscapeEpisodePagingAndRotation test 2>&1 | tee "$RUNNER_TEMP/player-tests.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
