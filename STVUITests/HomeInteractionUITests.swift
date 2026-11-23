@@ -149,10 +149,13 @@ final class HomeInteractionUITests: XCTestCase {
     func testHomeChromeHidesAndRestores() {
         XCTAssertTrue(el("home.card").waitForExistence(timeout: 20), "home feed did not load")
         let home = el("home.page.红果")
+        let initialHeight = home.frame.height
         for _ in 0..<3 { home.swipeUp() }
         XCTAssertTrue(waitHittable(el("home.search"), false), "search/filter header should hide on upward scroll")
         XCTAssertTrue(el("home.channels").isHittable, "top category bar must remain visible while scrolling")
         XCTAssertTrue(waitHittable(el("tab.0"), false), "bottom navigation should hide with the header")
+        let expandedHeight = home.frame.height
+        XCTAssertGreaterThan(expandedHeight, initialHeight + 40, "home feed should expand into the collapsed tab-bar area")
         for _ in 0..<3 { home.swipeDown() }
         XCTAssertTrue(waitHittable(el("home.search"), true), "search header should return on downward scroll")
         XCTAssertTrue(waitHittable(el("tab.0"), true), "bottom navigation should return on downward scroll")
