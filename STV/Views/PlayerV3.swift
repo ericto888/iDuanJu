@@ -116,10 +116,9 @@ struct PlayerMetaRow: View {
                 Button(action: onSkip) {
                     HStack(spacing: 4) { Text("跳过片头"); Image(systemName: "play.fill").font(.system(size: 8)) }
                         .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
-                        .padding(.horizontal, 11).frame(height: 28)
-                        .background(Color(red: 20/255, green: 20/255, blue: 24/255).opacity(0.5), in: Capsule())
-                        .overlay { Capsule().strokeBorder(.white.opacity(0.2), lineWidth: 1) }
-                        .contentShape(Capsule())
+                        .padding(.horizontal, 4).frame(height: 28)
+                        .background(.clear)
+                        .contentShape(Rectangle())
                 }.buttonStyle(PressScale()).accessibilityIdentifier("player.skipIntro")
             }
         }
@@ -227,7 +226,7 @@ struct PlayerRowIcon<Label: View>: View {
         Button(action: action) {
             label.foregroundStyle(.white)
                 .frame(width: 44, height: 44)
-                .background(active ? Color.white.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(.clear)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -258,7 +257,7 @@ struct PlayerActionButton<Icon: View>: View {
             }
             .opacity(dimmed ? 0.45 : 1)
             .frame(maxWidth: .infinity).padding(.top, 7).padding(.bottom, 6)
-            .background(active ? Color.white.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(.clear)
             .contentShape(Rectangle())
             .animation(DS.select, value: active)
         }
@@ -288,12 +287,8 @@ struct PlayerChip: View {
                     .font(.system(size: 13)).lineLimit(1).fixedSize()
             }
             .padding(.horizontal, 13).frame(height: 34)
-            .background {
-                Capsule().fill(.ultraThinMaterial)
-                    .overlay(Capsule().fill(on ? STVTheme.accent.opacity(0.16) : Color(red: 20/255, green: 20/255, blue: 24/255).opacity(0.46)))
-            }
-            .overlay { Capsule().strokeBorder(on ? STVTheme.accentLine : .white.opacity(0.14), lineWidth: 1) }
-            .environment(\.colorScheme, .dark)
+            .background(.clear)
+            .overlay { Capsule().strokeBorder(.clear, lineWidth: 0) }
             .opacity(dimmed ? 0.45 : 1)
             .contentShape(Capsule())
             .animation(DS.select, value: on)
@@ -309,7 +304,7 @@ struct OutlinedTag: View {
     var body: some View {
         Text(text).font(.system(size: 11, weight: .bold)).lineLimit(1).fixedSize()
             .padding(.horizontal, 5).padding(.vertical, 2)
-            .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(.white, lineWidth: 1.2) }
+            .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(.clear, lineWidth: 0) }
     }
 }
 
@@ -320,7 +315,7 @@ struct DanmakuGlyph: View {
             .foregroundStyle(on ? .black : .white)
             .frame(width: 22, height: 22)
             .background(on ? Color.white : .clear, in: RoundedRectangle(cornerRadius: 5))
-            .overlay { if !on { RoundedRectangle(cornerRadius: 5).strokeBorder(.white, lineWidth: 1.2) } }
+            .overlay { EmptyView() }
     }
 }
 
