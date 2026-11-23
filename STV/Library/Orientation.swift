@@ -6,8 +6,6 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
     private static var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     static var mask: UIInterfaceOrientationMask = UIDevice.current.userInterfaceIdiom == .pad ? .all : .portrait
     private static var rotationGeneration = 0
-    /// Explicit fullscreen survives PlayerScreen recreation when the user switches seasons.
-    private static var fullscreenRequested = false
 
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         Self.isPad ? .all : Self.mask
@@ -34,14 +32,12 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
     }
 
     @MainActor static func unlock() {
-        fullscreenRequested = false
         rotationGeneration += 1
         mask = isPad ? .all : .allButUpsideDown
         refresh()
     }
     /// Enter fullscreen and keep the iPhone in landscape until the explicit exit button is pressed.
     @MainActor static func enterLandscape() {
-        fullscreenRequested = true
         rotationGeneration += 1
         let generation = rotationGeneration
         mask = isPad ? .all : .landscape
@@ -55,7 +51,6 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
 
     /// 退出横屏 button.
     @MainActor static func exitLandscape() {
-        fullscreenRequested = false
         rotationGeneration += 1
         let generation = rotationGeneration
         if isPad {
@@ -79,14 +74,10 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
 
     /// Called only when the player route itself is dismissed (not when its series identity changes).
     @MainActor static func endPlayerSession() {
-        fullscreenRequested = false
         lockPortrait()
     }
 
     @MainActor static func lockPortrait() {
-        // A season switch recreates PlayerScreen. Do not let the outgoing screen's
-        // onDisappear or the incoming screen's portrait-video task cancel fullscreen.
-        guard !fullscreenRequested else { return }
         rotationGeneration += 1
         let generation = rotationGeneration
         if isPad {
