@@ -148,16 +148,17 @@ struct PlayerTimelineV3: View {
         } else if onFullscreen != nil {
             let t = co.scrubPreview ?? co.time
             HStack(spacing: 8) {
-                Button { co.seek(by: -10); onInteract() } label: {
-                    Image(systemName: "gobackward.10").font(.system(size: 15, weight: .medium))
-                        .frame(width: 28, height: 32).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).accessibilityLabel("快退10秒").accessibilityIdentifier("player.back10")
+                // Playback toggle is the first control, before the elapsed/remaining time labels.
                 Button { co.togglePause(); onInteract() } label: {
                     Image(systemName: co.paused ? "play.fill" : "pause.fill")
                         .font(.system(size: 15, weight: .semibold)).frame(width: 28, height: 32).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).accessibilityLabel(co.paused ? "播放" : "暂停").accessibilityIdentifier("player.playPause")
+                Button { co.seek(by: -10); onInteract() } label: {
+                    Image(systemName: "gobackward.10").font(.system(size: 15, weight: .medium))
+                        .frame(width: 28, height: 32).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).accessibilityLabel("快退10秒").accessibilityIdentifier("player.back10")
                 Text(Fmt.clock(Int(t))).accessibilityIdentifier("player.time")
                 PlayerProgressBar(co: co, scrubbing: $scrubbing, onInteract: onInteract)
                 Text("−" + Fmt.clock(Int(max(0, co.duration - t)))).accessibilityIdentifier("player.remaining")
