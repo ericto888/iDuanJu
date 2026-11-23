@@ -11,7 +11,7 @@ permissions:
 jobs:
   ios-package:
     name: iOS unsigned IPA (diagnostic)
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 90
     env:
       STV_RUN_TESTS: '0'
