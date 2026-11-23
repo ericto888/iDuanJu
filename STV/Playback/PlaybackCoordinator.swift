@@ -123,6 +123,8 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     }
     /// True once the final episode finished playing with `autoNextDrama` enabled (triggers countdown card).
     @Published private(set) var finaleEnded = false
+    /// Called when auto-next reaches the last episode; the owning player may switch to the next season.
+    var onSeasonEnded: (() -> Bool)?
     func clearFinale() { if finaleEnded { finaleEnded = false } }
     let thumbnails = PlayerThumbnailer()
     /// Time under the finger while the progress bar is dragged (time row follows it).
@@ -652,6 +654,9 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
                     }
                     if self.wantsPlayback, i + 1 < self.episodes.count, self.autoNext {
                         self.select(i + 1, autoAdvance: true)
+                    } else if self.wantsPlayback, i + 1 >= self.episodes.count, self.autoNext,
+                              self.onSeasonEnded?() == true {
+                        // The next season has taken ownership of playback.
                     } else if self.wantsPlayback, i + 1 >= self.episodes.count, self.autoNextDrama, !self.series.source.isLongVideo, self.sourceResolver == nil {
                         self.setPaused(true)
                         self.finaleEnded = true
