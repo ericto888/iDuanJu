@@ -470,12 +470,21 @@ final class PlayerUITests: XCTestCase {
         el("player.rate.2.0").tap()
         XCTAssertTrue(popoverGone("player.popover.rates"))
 
-        // Rotating the device while a popover is open closes it and keeps working.
+        // Fullscreen landscape is locked: rotating the handset upright must not exit it.
+        XCTAssertTrue(el("player.time").waitForExistence(timeout: 4), "landscape time display missing")
+        showChrome("player.playPause")
+        XCTAssertTrue(el("player.playPause").exists, "landscape play/pause control missing")
+        XCTAssertLessThanOrEqual(el("player.title").frame.width, 2, "landscape title must not be visibly rendered")
+        XCTAssertLessThanOrEqual(el("player.episodeInfo").frame.width, 2, "landscape episode details must not be visibly rendered")
         el("player.quality").tap()
         XCTAssertTrue(el("player.popover.quality").waitForExistence(timeout: 3))
         XCUIDevice.shared.orientation = .portrait
-        XCTAssertTrue(waitOrientation(landscape: false), "device rotation back not followed")
-        XCTAssertTrue(popoverGone("player.popover.quality"), "rotation should close the popover")
+        XCTAssertTrue(waitOrientation(landscape: true), "fullscreen must stay landscape when the device rotates upright")
+        XCTAssertTrue(el("player.popover.quality").exists, "popover should remain stable while orientation is locked")
+        el("player.quality").tap()
+        showChrome("player.exitFullscreen")
+        el("player.exitFullscreen").tap()
+        XCTAssertTrue(waitOrientation(landscape: false), "explicit exit button must restore portrait")
         XCTAssertTrue(el("player.progress").waitForExistence(timeout: 4))
         XCTAssertTrue(el("player.fullscreen").waitForExistence(timeout: 4))
     }
