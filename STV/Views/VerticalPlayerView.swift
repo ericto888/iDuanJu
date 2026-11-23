@@ -68,6 +68,8 @@ struct PlayerScreen: View {
     private var landscape: Bool { vClass == .compact || (layoutMetrics.isPad && layoutMetrics.isLandscape) }
     /// Landscape-format clips shown in the upright player keep their full chrome visible.
     private var portraitLandscapeClip: Bool { !landscape && aspect > 1.0 }
+    /// Keep landscape-format video visually above the phone's vertical midpoint.
+    private var videoLift: CGFloat { portraitLandscapeClip ? 44 : 0 }
     private var keepsChromeVisible: Bool { portraitLandscapeClip }
     private var canShowPadSplit: Bool {
         layoutMetrics.isPad && layoutMetrics.isLandscape && layoutMetrics.width >= 840 && aspect < 1.0 && !co.pipActive && !co.episodes.isEmpty
@@ -99,7 +101,7 @@ struct PlayerScreen: View {
         let a = aspect
         var w = area.width, h = w / a
         if h > area.height { h = area.height; w = h * a }
-        return CGRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h)
+        return CGRect(x: area.midX - w / 2, y: area.midY - h / 2 - videoLift, width: w, height: h)
     }
 
     var body: some View {
@@ -115,12 +117,12 @@ struct PlayerScreen: View {
                     // A single in-window layer remains the PiP source across paging, rotation and buffering.
                     PlayerLayerView(coordinator: co, fill: fillScreen, engine: co.engineKind)
                         .accessibilityElement(children: .contain).accessibilityIdentifier(suppliedDetail == nil ? "player.video" : "novel.media.status").accessibilityValue(suppliedDetail == nil ? (fillScreen ? "fill" : "fit") : String(format: "已播放 %.2f 秒", co.time))
-                        .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - pageDrift(co.current ?? 0, page: full.height))
+                        .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - pageDrift(co.current ?? 0, page: full.height) - videoLift)
                         .allowsHitTesting(false)
                     if let held = co.heldFrame {
                         // Previous episode's last frame, riding with the swipe until the next one is on screen.
                         Image(uiImage: held.image).resizable()
-                            .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - pageDrift(held.index, page: full.height))
+                            .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - pageDrift(held.index, page: full.height) - videoLift)
                             .allowsHitTesting(false).accessibilityHidden(true)
                     }
                     Group {
@@ -561,6 +563,7 @@ struct PlayerScreen: View {
                         .resizable()
                         .aspectRatio(contentMode: fillScreen ? .fill : .fit)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .offset(y: (!landscape && frame.size.width > frame.size.height) ? -44 : 0)
                         .clipped()
                         .allowsHitTesting(false)
                 } else if (i == co.heldFrame?.index || i == co.current) && co.errors[i] == nil {
