@@ -267,9 +267,23 @@ final class PluginStore: ObservableObject {
 
     /// Pending updates (newer version at `update.url`).
     func checkUpdates() async -> [PendingInstall] {
+        struct Catalog: Decodable {
+            struct Entry: Decodable { let id: String; let manifest: String }
+            let plugins: [Entry]
+        }
+        var catalogURLs: [String: String] = [:]
+        // Older plugins may not declare update.url; resolve them through the
+        // official catalog so existing installations can still receive updates.
+        if let data = try? await PluginInstaller.download(
+            "https://raw.githubusercontent.com/ericto888/iduanju-sources/main/index.json", limit: 1 << 20
+        ), let catalog = try? JSONDecoder().decode(Catalog.self, from: data) {
+            catalogURLs = Dictionary(catalog.plugins.map { ($0.id, $0.manifest) }, uniquingKeysWith: { first, _ in first })
+        }
+
         var out: [PendingInstall] = []
         for p in plugins {
-            guard let u = p.manifest.update?.url, !u.isEmpty else { continue }
+            let u = p.manifest.update?.url ?? catalogURLs[p.id]
+            guard let u, !u.isEmpty else { continue }
             do {
                 let pending = try await PluginInstaller.prepare(manifestURL: u, origin: p.origin)
                 if PluginManifest.compare(pending.manifest.version, p.manifest.version) > 0 { out.append(pending) }
