@@ -7,6 +7,11 @@ on:
       - feat/ios-player-bottom-controls-gestures
 permissions:
   contents: read
+
+# Keep only the newest regression run for this branch; cancel stale queued/running runs.
+concurrency:
+  group: player-validation-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   ios:
     runs-on: macos-15
