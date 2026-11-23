@@ -680,10 +680,9 @@ struct PlayerScreen: View {
                             Button { skipIntro() } label: {
                                 HStack(spacing: 4) { Text("跳过片头"); Image(systemName: "play.fill").font(.system(size: 8)) }
                                     .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
-                                    .padding(.horizontal, 13).frame(height: 34)
-                                    .background(Color(red: 20/255, green: 20/255, blue: 24/255).opacity(0.5), in: Capsule())
-                                    .overlay { Capsule().strokeBorder(.white.opacity(0.2), lineWidth: 1) }
-                                    .contentShape(Capsule())
+                                    .padding(.horizontal, 4).frame(height: 34)
+                                    .background(.clear)
+                                    .contentShape(Rectangle())
                             }.buttonStyle(PressScale()).accessibilityIdentifier("player.skipIntro")
                         }
                         Spacer(minLength: 8)
