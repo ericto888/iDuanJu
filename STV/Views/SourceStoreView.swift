@@ -155,6 +155,7 @@ struct SourceStoreView: View {
         }.buttonStyle(.plain)
     }
 
+    // Installed entries always expose a live manifest check; catalog version metadata is only advisory.
     private func sourceCard(_ entry: Catalog.Entry) -> some View {
         let installed = store.plugin(entry.id)
         // If the catalog omits its cached version, still let the user check the
