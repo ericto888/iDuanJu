@@ -280,6 +280,9 @@ struct PlayerScreen: View {
         .onDisappear { co.teardown(); adjuster.restoreBrightness(); OrientationGate.lockPortrait() }
         .compatOnChange(of: co.current) { new in
             scrubbing = false
+            if let new, co.episodes.indices.contains(new) {
+                showOSD("第\(co.episodes[new].ep)集")
+            }
             if new != nil {
                 centerSuppressed = true
                 if co.lastAdvanceWasAuto {
@@ -375,9 +378,6 @@ struct PlayerScreen: View {
             .onScrollPhaseChange { _, phase in feedSettled = phase == .idle; releaseHeldIfSettled() }
             .accessibilityIdentifier("player.feed")
             .accessibilityValue(feedSettled ? "idle" : "scrolling")
-            .compatOnChange(of: co.current) { new in
-                if let new, co.episodes.indices.contains(new) { showOSD("第\(co.episodes[new].ep)集") }
-            }
             .scrollDisabled(isScrollDisabled)
         } else {
             GeometryReader { geo in
@@ -415,10 +415,7 @@ struct PlayerScreen: View {
                         }
                 )
                 .compatOnChange(of: co.current) { new in
-                    if let new {
-                        feedScrollY = CGFloat(new) * pageH
-                        if co.episodes.indices.contains(new) { showOSD("第\(co.episodes[new].ep)集") }
-                    }
+                    if let new { feedScrollY = CGFloat(new) * pageH }
                 }
                 .compatOnChange(of: co.readyIndex) { releaseHeldIfSettled() }
                 .compatSelectionFeedback(trigger: co.manualSelectionFeedback)
