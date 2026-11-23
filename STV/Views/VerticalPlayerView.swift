@@ -935,7 +935,8 @@ struct PlayerScreen: View {
     @discardableResult
     private func advanceToNextSeason() -> Bool {
         guard seasons.count > 1 else { return false }
-        let currentNo = Self.seasonNo(series.title)
+        let currentTitle = seasons.first(where: { $0.seriesId == series.seriesId })?.title ?? series.title
+        let currentNo = Self.seasonNo(currentTitle)
         let next = seasons
             .filter { $0.seriesId != series.seriesId && Self.seasonNo($0.title) > currentNo }
             .min { Self.seasonNo($0.title) < Self.seasonNo($1.title) }
