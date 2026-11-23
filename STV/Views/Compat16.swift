@@ -24,6 +24,7 @@ struct CompatScrollMetrics: Equatable {
     let offsetY: CGFloat
     let contentHeight: CGFloat?
     let containerHeight: CGFloat?
+    let isWithinScrollRange: Bool?
 }
 
 extension View {
@@ -107,10 +108,18 @@ extension View {
     func compatOnScrollMetrics(action: @escaping (CompatScrollMetrics) -> Void) -> some View {
         if #available(iOS 18.0, *) {
             self.onScrollGeometryChange(for: CompatScrollMetrics.self) { geometry in
-                CompatScrollMetrics(
+                let minimumOffset = -geometry.contentInsets.top
+                let maximumOffset = max(
+                    minimumOffset,
+                    geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom
+                )
+                let withinRange = geometry.contentOffset.y >= minimumOffset - 0.5
+                    && geometry.contentOffset.y <= maximumOffset + 0.5
+                return CompatScrollMetrics(
                     offsetY: geometry.contentOffset.y + geometry.contentInsets.top,
                     contentHeight: geometry.contentSize.height,
-                    containerHeight: geometry.containerSize.height
+                    containerHeight: geometry.containerSize.height,
+                    isWithinScrollRange: withinRange
                 )
             } action: { _, metrics in
                 action(metrics)
