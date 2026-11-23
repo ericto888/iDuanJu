@@ -15,10 +15,10 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
         mask = isPad ? .all : .allButUpsideDown
         refresh()
     }
-    /// 横屏 button: rotate now; rotation stays unlocked so turning the phone back to portrait exits.
+    /// Enter fullscreen and keep the iPhone in landscape until the explicit exit button is pressed.
     @MainActor static func enterLandscape() {
         rotationGeneration += 1
-        mask = isPad ? .all : .allButUpsideDown
+        mask = isPad ? .all : .landscape
         refresh()
         if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
