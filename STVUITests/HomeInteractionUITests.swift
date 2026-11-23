@@ -131,8 +131,12 @@ final class HomeInteractionUITests: XCTestCase {
         let home = el("home.page.红果")
         for _ in 0..<3 { home.swipeUp() }
         XCTAssertFalse(el("home.hero.page.0").isHittable, "home did not scroll")
+        XCTAssertFalse(el("home.search").isHittable, "search/filter header must hide while scrolling down the feed")
+        XCTAssertFalse(el("tab.0").isHittable, "root tab navigation must hide with the home header")
         for _ in 0..<4 { home.swipeDown() }
         XCTAssertTrue(el("home.search").waitForExistence(timeout: 3))
+        XCTAssertTrue(el("home.search").isHittable, "search header did not return on downward scroll")
+        XCTAssertTrue(el("tab.0").isHittable, "root tab navigation did not return on downward scroll")
     }
 
     func testTabBarAndOtherRootTops() {
