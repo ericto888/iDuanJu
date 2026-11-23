@@ -21,11 +21,11 @@ struct RootTabView: View {
                     .transition(.move(edge: .leading).combined(with: .opacity))
                 }
                 TabView(selection: $tab) {
-                    Stack(path: $paths[0], reserveBottomBar: false) { HomeView() }.tag(0)
-                    Stack(path: $paths[1], reserveBottomBar: showNav && !metrics.useRail) { TVBoxHubView() }.tag(1)
-                    Stack(path: $paths[2], reserveBottomBar: showNav && !metrics.useRail) { CategoryView() }.tag(2)
-                    Stack(path: $paths[3], reserveBottomBar: showNav && !metrics.useRail) { ProfileView() }.tag(3)
-                    Stack(path: $paths[4], reserveBottomBar: showNav && !metrics.useRail) { SearchView() }.tag(4)
+                    Stack(path: $paths[0]) { HomeView() }.tag(0)
+                    Stack(path: $paths[1]) { TVBoxHubView() }.tag(1)
+                    Stack(path: $paths[2]) { CategoryView() }.tag(2)
+                    Stack(path: $paths[3]) { ProfileView() }.tag(3)
+                    Stack(path: $paths[4]) { SearchView() }.tag(4)
                 }
                 .tint(STVTheme.accent)
                 .overlay(alignment: .bottom) {
@@ -71,23 +71,18 @@ struct RootTabView: View {
 
 private struct Stack<V: View>: View {
     @Binding var path: NavigationPath
-    var reserveBottomBar: Bool = true
     @ViewBuilder var content: V
     @Namespace private var ns
     var body: some View {
         NavigationStack(path: $path) {
             content
                 .toolbar(.hidden, for: .tabBar)
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    Color.clear.frame(height: reserveBottomBar ? GlassTabBar.clearance : 0)
-                }
                 .routes()
         }.environment(\.zoomNS, ns)
     }
 }
 
 struct GlassTabBar: View {
-    static let clearance: CGFloat = 72
     @Binding var selection: Int
     let items: [(String, String)]
     var searchTag: Int? = nil
