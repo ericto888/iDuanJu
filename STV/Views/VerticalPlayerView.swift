@@ -302,7 +302,10 @@ struct PlayerScreen: View {
         .task { await screenshotHooks() }
         .task(id: lastInteraction) {
             do { try await Task.sleep(for: .seconds(3)) } catch { return }
-            guard !keepsChromeVisible, !noAutoHide, !co.paused || locked else { return }
+            // Keep the rule explicit: only hide during playback (or while locked), and
+            // never while a panel, scrub gesture, VoiceOver, or persistent clip mode needs chrome.
+            guard !keepsChromeVisible, !noAutoHide, (!co.paused || locked),
+                  panel == nil, !scrubbing, !voiceOver else { return }
             withAnimation(.easeOut(duration: 0.2)) { showChrome = false }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
@@ -354,7 +357,13 @@ struct PlayerScreen: View {
             }
         }
         
-        .compatOnChange(of: landscape) { l in if !l { locked = false }; panel = nil }
+        .compatOnChange(of: landscape) { l in
+            if !l { locked = false }
+            panel = nil
+            // Rotation can rebuild/re-layout the chrome without changing the previous
+            // interaction timestamp. Restart the hide countdown after entering fullscreen.
+            if l { flashChrome() }
+        }
         .sheet(item: $verifyTarget) { t in SiteVerifySheet(target: t) { if let c = co.current { co.activate(c) } } }
         .sheet(isPresented: $danmakuSheet, onDismiss: flashChrome) {
             DanmakuSettingsSheet(available: series.source == .hongguo)
