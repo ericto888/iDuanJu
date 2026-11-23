@@ -75,14 +75,14 @@ struct HomeChromeScrollBehavior {
             return nil
         }
 
-        if offset > -8 {
-            return setHidden(false)
-        }
-
         let previous = previousOffset
         let previousSampleTime = previousTime
         previousOffset = offset
         previousTime = time
+
+        if offset > -8 {
+            return setHidden(false)
+        }
 
         guard let previous, let previousSampleTime else { return nil }
         let delta = offset - previous
