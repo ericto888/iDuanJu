@@ -15,9 +15,6 @@ struct VerticalPlayerView: View {
             PlayerScreen(series: s, startIndex: switched == nil ? startIndex : nil) { next in switched = next }
                 .id(s.id)
         }
-        // Attach to the stable route wrapper, not the keyed PlayerScreen: season switches
-        // recreate the child but must preserve the explicit fullscreen orientation.
-        .onDisappear { OrientationGate.endPlayerSession() }
     }
 }
 
