@@ -3,6 +3,9 @@ name: package
 # Packaging only builds and uploads artifacts. Regression tests live in the separate validation workflows.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - fix/ios-autoplay-silent-transition
 
 permissions:
   contents: read
