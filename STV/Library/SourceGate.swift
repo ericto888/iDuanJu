@@ -40,11 +40,25 @@ final class SourceGate: ObservableObject {
     }
 
     /// Sites currently shown in 首页 / 搜索 / 继续观看.
+    /// Installed JS plugins use their own enabled switch; adult plugins additionally require the source gate.
     var visibleSites: [DramaSource] {
-        Sites.all.filter { s in (s.isDynamic && !s.isAdult) || (unlocked && enabled.contains(s)) }
+        Sites.all.filter { s in
+            if let id = s.pluginID {
+                guard let plugin = PluginStore.snapshot(id), plugin.enabled else { return false }
+                return !plugin.manifest.adult || unlocked
+            }
+            return (s.isDynamic && !s.isAdult) || (unlocked && enabled.contains(s))
+        }
     }
     var enabledCount: Int { enabled.count }
-    func isVisible(_ s: DramaSource) -> Bool { s == .huangguo ? showHuangguo : s.isBuiltin || (unlocked && enabled.contains(s)) }
+    func isVisible(_ s: DramaSource) -> Bool {
+        if s == .huangguo { return showHuangguo }
+        if let id = s.pluginID {
+            guard let plugin = PluginStore.snapshot(id), plugin.enabled else { return false }
+            return !plugin.manifest.adult || unlocked
+        }
+        return s.isBuiltin || (unlocked && enabled.contains(s))
+    }
     /// Series-level check: Telegram videos from adult channels follow the adult-channel switch.
     func isVisible(_ s: HGSeries) -> Bool {
         guard s.source == .telegram else { return isVisible(s.source) }
