@@ -154,19 +154,9 @@ struct PlayerTimelineV3: View {
                         .font(.system(size: 15, weight: .semibold)).frame(width: 28, height: 32).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).accessibilityLabel(co.paused ? "播放" : "暂停").accessibilityIdentifier("player.playPause")
-                Button { co.seek(by: -10); onInteract() } label: {
-                    Image(systemName: "gobackward.10").font(.system(size: 15, weight: .medium))
-                        .frame(width: 28, height: 32).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).accessibilityLabel("快退10秒").accessibilityIdentifier("player.back10")
                 Text(Fmt.clock(Int(t))).accessibilityIdentifier("player.time")
                 PlayerProgressBar(co: co, scrubbing: $scrubbing, onInteract: onInteract)
                 Text("−" + Fmt.clock(Int(max(0, co.duration - t)))).accessibilityIdentifier("player.remaining")
-                Button { co.seek(by: 10); onInteract() } label: {
-                    Image(systemName: "goforward.10").font(.system(size: 15, weight: .medium))
-                        .frame(width: 28, height: 32).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).accessibilityLabel("快进10秒").accessibilityIdentifier("player.fwd10")
                 if let onFullscreen { Button(action: onFullscreen) {
                     Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white).frame(width: 30, height: 30).contentShape(Rectangle())
@@ -185,11 +175,6 @@ struct PlayerTimelineV3: View {
         VStack(spacing: 2) {
             PlayerProgressBar(co: co, scrubbing: $scrubbing, onInteract: onInteract)
             HStack(spacing: 10) {
-                Button { co.seek(by: -10); onInteract() } label: {
-                    Image(systemName: "gobackward.10").font(.system(size: 15, weight: .medium))
-                        .frame(width: 28, height: 32).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).accessibilityLabel("快退10秒").accessibilityIdentifier("player.back10")
                 Button { co.togglePause(); onInteract() } label: {
                     Image(systemName: co.paused ? "play.fill" : "pause.fill")
                         .font(.system(size: 15, weight: .semibold)).frame(width: 28, height: 32).contentShape(Rectangle())
@@ -199,11 +184,6 @@ struct PlayerTimelineV3: View {
                 Text(Fmt.clock(Int(t))).accessibilityIdentifier("player.time")
                 Spacer(minLength: 4)
                 Text("−" + Fmt.clock(Int(max(0, co.duration - t)))).accessibilityIdentifier("player.remaining")
-                Button { co.seek(by: 10); onInteract() } label: {
-                    Image(systemName: "goforward.10").font(.system(size: 15, weight: .medium))
-                        .frame(width: 28, height: 32).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).accessibilityLabel("快进10秒").accessibilityIdentifier("player.fwd10")
             }
             .font(.system(size: 12, weight: .medium).monospacedDigit())
             .foregroundStyle(.white.opacity(0.85))
