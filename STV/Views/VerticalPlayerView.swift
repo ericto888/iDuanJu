@@ -423,6 +423,16 @@ struct PlayerScreen: View {
             .scrollTargetBehavior(.paging)
             .scrollIndicators(.hidden)
             .scrollPosition(id: Binding(get: { co.current }, set: { co.select($0) }), anchor: .center)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 24)
+                    .onEnded { value in
+                        guard !isScrollDisabled,
+                              value.translation.height < -min(90, UIScreen.main.bounds.height * 0.18),
+                              let current = co.current,
+                              current == co.episodes.count - 1 else { return }
+                        _ = advanceToNextSeason()
+                    }
+            )
             .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in feedScrollY = y }
             .compatSelectionFeedback(trigger: co.manualSelectionFeedback)
             .compatOnChange(of: co.readyIndex) { releaseHeldIfSettled() }
@@ -456,6 +466,8 @@ struct PlayerScreen: View {
                                 next = cur + 1
                             } else if val.translation.height > threshold, cur > 0 {
                                 next = cur - 1
+                            } else if val.translation.height < -threshold, cur == co.episodes.count - 1 {
+                                _ = advanceToNextSeason()
                             }
                             if next != cur { co.select(next) }
                             withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
@@ -919,6 +931,20 @@ struct PlayerScreen: View {
 
     // MARK: Caption pieces
 
+    /// Switch to the immediately following numbered season (S1 → S2), keeping the existing player route.
+    @discardableResult
+    private func advanceToNextSeason() -> Bool {
+        guard seasons.count > 1 else { return false }
+        let currentNo = Self.seasonNo(series.title)
+        let next = seasons
+            .filter { $0.seriesId != series.seriesId && Self.seasonNo($0.title) > currentNo }
+            .min { Self.seasonNo($0.title) < Self.seasonNo($1.title) }
+        guard let next else { return false }
+        panel = nil
+        onSwitchSeries(next)
+        return true
+    }
+
     /// Season number: 「第N季」-style titles, else a trailing number (「…为神8」), else 1.
     static func seasonNo(_ title: String) -> Int {
         let i = SeasonParser.parse(title)
@@ -1332,6 +1358,7 @@ struct PlayerScreen: View {
             co.select(start)
             flashChrome()
             if suppliedDetail == nil { seasons = await SeasonStore.seasons(for: d, series: series) }
+            co.onSeasonEnded = { advanceToNextSeason() }
         } catch { if !Task.isCancelled { loadError = error } }
     }
 
