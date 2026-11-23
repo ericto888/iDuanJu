@@ -275,7 +275,7 @@ final class PluginStore: ObservableObject {
         // Older plugins may not declare update.url; resolve them through the
         // official catalog so existing installations can still receive updates.
         if let data = try? await PluginInstaller.download(
-            "https://raw.githubusercontent.com/ericto888/iduanju-sources/main/index.json", limit: 1 << 20
+            "https://raw.githubusercontent.com/ericto888/iduanju-sources/main/index.json?_=" + String(Int(Date().timeIntervalSince1970)), limit: 1 << 20
         ), let catalog = try? JSONDecoder().decode(Catalog.self, from: data) {
             catalogURLs = Dictionary(catalog.plugins.map { ($0.id, $0.manifest) }, uniquingKeysWith: { first, _ in first })
         }
