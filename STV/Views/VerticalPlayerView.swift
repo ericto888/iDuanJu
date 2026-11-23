@@ -729,16 +729,41 @@ struct PlayerScreen: View {
             .padding(.horizontal, side).padding(.top, 16)
             Spacer(minLength: 0)
             if let i = co.current, co.episodes.indices.contains(i) {
-                VStack(spacing: 12) {
-                    PlayerTimelineV3(co: co, scrubbing: $scrubbing, onInteract: flashChrome, landscape: true).id(i)
+                VStack(spacing: 7) {
+                    // Landscape: progress occupies its own row above the transport/tool controls.
+                    PlayerProgressBar(co: co, scrubbing: $scrubbing, onInteract: flashChrome)
+                        .frame(maxWidth: .infinity)
                         .opacity(panel != nil ? 0.35 : 1)
                         .shadow(color: .black.opacity(chrome ? 0 : 0.6), radius: 2)
                         .allowsHitTesting(interactive && co.readyIndex == i)
-                    HStack(spacing: 8) {
+
+                    HStack(spacing: 10) {
+                        HStack(spacing: 7) {
+                            Button { co.togglePause(); flashChrome() } label: {
+                                Image(systemName: co.paused ? "play.fill" : "pause.fill")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .frame(width: 28, height: 34)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(co.paused ? "播放" : "暂停")
+                            .accessibilityIdentifier("player.playPause")
+
+                            let t = co.scrubPreview ?? co.time
+                            Text(Fmt.clock(Int(t)))
+                                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                                .accessibilityIdentifier("player.time")
+                            Text("−" + Fmt.clock(Int(max(0, co.duration - t))))
+                                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                                .accessibilityIdentifier("player.remaining")
+                        }
+                        .foregroundStyle(.white.opacity(0.85))
+                        .opacity(dim).modifier(ChromeFade(on: chrome))
+
                         Spacer(minLength: 8)
                         landChips(i)
+                            .opacity(dim).modifier(ChromeFade(on: chrome))
                     }
-                    .opacity(dim).modifier(ChromeFade(on: chrome))
                 }
                 .padding(.horizontal, side)
                 .padding(.bottom, max(ins.bottom, 8) + 4)
