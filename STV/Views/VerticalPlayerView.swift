@@ -605,21 +605,20 @@ struct PlayerScreen: View {
         ZStack(alignment: .topLeading) {
             if landscape {
                 landscapeControls(full, ins: ins, chrome: chrome, interactive: interactive)
-                    // Keep episode identity available in landscape even when the action chrome fades.
-                    // The landscape layout intentionally hides its expanded title row, but paging,
-                    // VoiceOver and UI automation still need a stable current-episode marker.
-                    .overlay(alignment: .topLeading) {
+                    // Keep episode identity available to VoiceOver and automation without
+                    // rendering a title/episode label over the fullscreen video.
+                    .overlay {
                         if let i = co.current, co.episodes.indices.contains(i) {
-                            VStack(alignment: .leading, spacing: 3) {
+                            VStack(spacing: 0) {
                                 Text(co.detail?.title ?? series.title)
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .lineLimit(1)
                                     .accessibilityIdentifier("player.title")
                                     .accessibilityValue("第\(co.episodes[i].ep)集")
-                                meta(i, skip: false)
+                                Text("第\(co.episodes[i].ep)集")
+                                    .accessibilityIdentifier("player.episodeInfo")
+                                    .accessibilityValue("第\(co.episodes[i].ep)集")
                             }
-                            .padding(.leading, max(ins.leading, ins.trailing, 64) + 2)
-                            .padding(.top, 64)
+                            .frame(width: 1, height: 1)
+                            .opacity(0.001)
                             .allowsHitTesting(false)
                         }
                     }
@@ -731,7 +730,7 @@ struct PlayerScreen: View {
             Spacer(minLength: 0)
             if let i = co.current, co.episodes.indices.contains(i) {
                 VStack(spacing: 12) {
-                    PlayerTimelineV3(co: co, scrubbing: $scrubbing, onInteract: flashChrome, landscape: true, inline: true).id(i)
+                    PlayerTimelineV3(co: co, scrubbing: $scrubbing, onInteract: flashChrome, landscape: true).id(i)
                         .opacity(panel != nil ? 0.35 : 1)
                         .shadow(color: .black.opacity(chrome ? 0 : 0.6), radius: 2)
                         .allowsHitTesting(interactive && co.readyIndex == i)
