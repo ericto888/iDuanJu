@@ -127,10 +127,7 @@ struct HomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !headerHidden {
-                header
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
+            header
             TabView(selection: $source) {
                 ForEach(HomeSource.all) { s in
                     if s == .channels {
@@ -196,23 +193,26 @@ struct HomeView: View {
 
     private var header: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                NavigationLink(value: Route.search) {
-                    DSSearchBarLabel()
-                        .padding(.leading, 16).frame(height: 46).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityIdentifier("home.search")
-                Button { showChannels = true } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
-                        Text("筛选").font(.system(size: 14, weight: .medium))
-                    }
-                    .foregroundStyle(STVTheme.text)
-                    .padding(.horizontal, 16).frame(height: 46).contentShape(Rectangle())
-                }.buttonStyle(PressScale()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
+            if !headerHidden {
+                HStack(spacing: 0) {
+                    NavigationLink(value: Route.search) {
+                        DSSearchBarLabel()
+                            .padding(.leading, 16).frame(height: 46).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityIdentifier("home.search")
+                    Button { showChannels = true } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
+                            Text("筛选").font(.system(size: 14, weight: .medium))
+                        }
+                        .foregroundStyle(STVTheme.text)
+                        .padding(.horizontal, 16).frame(height: 46).contentShape(Rectangle())
+                    }.buttonStyle(PressScale()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
+                }
+                .background(STVTheme.glass, in: Capsule())
+                .overlay { Capsule().strokeBorder(STVTheme.glassBorder, lineWidth: 1) }
+                .padding(.horizontal, 16)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
-            .background(STVTheme.glass, in: Capsule())
-            .overlay { Capsule().strokeBorder(STVTheme.glassBorder, lineWidth: 1) }
-            .padding(.horizontal, 16)
             HomeChannelBar(items: HomeSource.all, selection: $source, label: \.label, ink: headerInk) { showChannels = true }
                 .padding(.leading, 20)
                 .padding(.top, pinned ? 14 : 18)
