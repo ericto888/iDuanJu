@@ -43,7 +43,14 @@ struct RootTabView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
+                // When the home feed hides its floating navigation, reclaim the bottom
+                // safe-area region so the page itself reaches the screen edge. The system
+                // tab-bar backdrop is hidden as well; otherwise iOS leaves its fade/material
+                // visible as a pale strip below the custom bar.
+                .ignoresSafeArea(.container, edges: tab == 0 && homeBottomBarHidden ? .bottom : [])
+                .background(STVTheme.bg.ignoresSafeArea())
             }
+            .background(STVTheme.bg.ignoresSafeArea())
             .environment(\.layoutMetrics, metrics)
             .animation(.spring(response: 0.32, dampingFraction: 0.86), value: paths[tab].isEmpty)
             .animation(.spring(response: 0.32, dampingFraction: 0.86), value: metrics.useRail)
@@ -82,6 +89,7 @@ private struct Stack<V: View>: View {
         NavigationStack(path: $path) {
             content
                 .toolbar(.hidden, for: .tabBar)
+                .toolbarBackground(.hidden, for: .tabBar)
                 .routes()
         }.environment(\.zoomNS, ns)
     }
