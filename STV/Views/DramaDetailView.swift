@@ -274,14 +274,7 @@ struct DramaDetailView: View {
     }
 
     private var heroMeta: String {
-        // Prefer the actual parsed episode array/count over the optional display label.
-        // This keeps the total episode count visible in the detail hero even when a source
-        // returns an empty or generic episodeLabel.
-        let eps = detail.flatMap { d -> String? in
-            let count = max(d.totalEps, d.episodes.count)
-            if count > 0 { return "共\(count)集" }
-            return d.episodeLabel.isEmpty ? nil : DS.spaced(d.episodeLabel)
-        }
+        let eps = detail.map { $0.episodeLabel.isEmpty ? "全 \(max($0.totalEps, $0.episodes.count)) 集" : DS.spaced($0.episodeLabel) }
         return [eps, detail?.author].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
