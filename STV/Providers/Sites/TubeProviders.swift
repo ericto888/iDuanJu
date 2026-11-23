@@ -271,9 +271,9 @@ struct XVProvider: SiteProvider {
         }
 
         let flvPatterns = [
-            "(?:[?&])flv_url=([^&\\"'\\\\s<>]+)",
-            "flv_url\\\\s*[:=]\\\\s*'([^']*)'",
-            "flv_url\\\\s*[:=]\\\\s*\\"([^\\"]*)\\""
+            #"(?:[?&])flv_url=([^&"'\\s<>]+)"#,
+            #"flv_url\s*[:=]\s*'([^']*)'"#,
+            #"flv_url\s*[:=]\s*"([^"]*)""#
         ]
         for pattern in flvPatterns {
             if let match = HTML.groups(pattern, h), match.count > 1 {
@@ -288,17 +288,18 @@ struct XVProvider: SiteProvider {
             ("(?:flv_url|video_url|videoUrl|urlHigh|urlLow|contentUrl)", "直链 · MP4", false)
         ]
         for (keys, quality, isHLS) in fields {
-            let pattern = "[\\\\\\"']?" + keys + "[\\\\\\"']?\\\\s*:\\\\s*[\\\\\\"']([^\\\\\\"']+)[\\\\\\"']"
+            let pattern = #"[\"']?"# + keys + #"[\"']?\s*:\s*[\"']([^\"']+)[\"']"#
             for match in HTML.all(pattern, h) where match.count > 1 {
                 append(match[1], quality: quality, isHLS: isHLS)
             }
         }
 
-        let normalizedHTML = h.replacingOccurrences(of: "\\\\/", with: "/")
-        let rawPattern = "(?:https?:)?//[^\\\\\\"'\\\\s<>]+?\\\\.(?:m3u8|mp4)(?:\\\\?[^\\\\\\"'\\\\s<>]*)?"
+        let normalizedHTML = h.replacingOccurrences(of: "\\/", with: "/")
+        let rawPattern = #"(?:https?:)?//[^"'\\s<>]+?\.(?:m3u8|mp4)(?:\?[^"'\\s<>]*)?"#
+
         for match in HTML.all(rawPattern, normalizedHTML) where !match.isEmpty {
             let raw = match[0].hasPrefix("//") ? "https:" + match[0] : match[0]
-            let isHLS = raw.range(of: "\\\\.m3u8(?:\\\\?|$)", options: .regularExpression) != nil
+            let isHLS = raw.range(of: #"\.m3u8(?:\?|$)"#, options: .regularExpression) != nil
             append(raw, quality: isHLS ? "自动 · HLS" : "直链 · MP4", isHLS: isHLS)
         }
         return out
