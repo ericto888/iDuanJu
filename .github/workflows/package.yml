@@ -3,6 +3,9 @@ name: package
 # iOS-only packaging. Regression tests live in the separate validation workflow.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feat/online-source-store
 
 permissions:
   contents: read
