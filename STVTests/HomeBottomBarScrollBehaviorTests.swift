@@ -22,6 +22,7 @@ final class HomeChromeScrollBehaviorTests: XCTestCase {
         _ = behavior.update(offset: 0, at: 0.9)
         XCTAssertEqual(behavior.update(offset: -100, at: 1.0), true)
         XCTAssertNil(behavior.update(offset: -90, at: 1.1))
+        XCTAssertNil(behavior.update(offset: -80, at: 1.2))
         XCTAssertTrue(behavior.isHidden)
     }
 
