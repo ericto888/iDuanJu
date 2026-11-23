@@ -36,6 +36,8 @@ struct SourceStoreView: View {
     @State private var keyword = ""
     @State private var loading = false
     @State private var preparingID: String?
+    @State private var updateAvailableIDs: Set<String> = []
+    @State private var checkingUpdateIDs: Set<String> = []
     @State private var pending: PendingInstall?
     @State private var message: String?
 
@@ -192,9 +194,14 @@ struct SourceStoreView: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     Text("已安装 v\(installed.manifest.version)")
                         .font(.caption2).foregroundStyle(STVTheme.secondary)
-                    Button(preparingID == entry.id ? "检查中" : "检查更新") {
-                        Task { await prepare(entry) }
-                    }.buttonStyle(.borderedProminent).tint(STVTheme.accent).disabled(preparingID != nil)
+                    if updateAvailableIDs.contains(entry.id) {
+                        Button(preparingID == entry.id ? "处理中" : "更新") {
+                            Task { await prepare(entry) }
+                        }.buttonStyle(.borderedProminent).tint(STVTheme.accent).disabled(preparingID != nil)
+                    } else {
+                        Text(checkingUpdateIDs.contains(entry.id) ? "检查更新中…" : "已是最新")
+                            .font(.caption2).foregroundStyle(STVTheme.secondary)
+                    }
                 }
             } else {
                 Button(preparingID == entry.id ? "处理中" : "安装") {
@@ -246,8 +253,31 @@ struct SourceStoreView: View {
             guard decoded.schema == 1 else { throw PluginError.install("站源目录版本不兼容") }
             catalog = decoded
             message = nil
+            Task { await checkInstalledUpdates(decoded.plugins) }
         } catch {
             message = "站源目录加载失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// Check installed plugins against their live manifests so only real updates show an Update button.
+    @MainActor private func checkInstalledUpdates(_ entries: [Catalog.Entry]) async {
+        let installedEntries = entries.filter { store.plugin($0.id) != nil }
+        checkingUpdateIDs = Set(installedEntries.map(\.id))
+        updateAvailableIDs = []
+        for entry in installedEntries {
+            guard let installed = store.plugin(entry.id) else { continue }
+            do {
+                let freshManifestURL = entry.manifest + (entry.manifest.contains("?") ? "&" : "?") + "_=" + String(Int(Date().timeIntervalSince1970))
+                let candidate = try await PluginInstaller.prepare(manifestURL: freshManifestURL, origin: "iDuanJu 站源商店")
+                if PluginManifest.compare(candidate.manifest.version, installed.manifest.version) > 0 {
+                    updateAvailableIDs.insert(entry.id)
+                } else {
+                    updateAvailableIDs.remove(entry.id)
+                }
+            } catch {
+                // Keep the card in a neutral state; a catalog refresh retries the check.
+            }
+            checkingUpdateIDs.remove(entry.id)
         }
     }
 
