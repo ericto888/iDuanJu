@@ -24,6 +24,15 @@ final class HomeInteractionUITests: XCTestCase {
         return XCTWaiter.wait(for: [condition], timeout: timeout) == .completed
     }
 
+    func waitForHeightIncrease(_ element: XCUIElement, from initial: CGFloat, by amount: CGFloat, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.frame.height > initial + amount { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return element.frame.height > initial + amount
+    }
+
     /// Tap at the element's centre via coordinates: this is what a finger does, so an
     /// invisible layer stacked on top would swallow it (element.tap() alone would too).
     func fingerTap(_ e: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
@@ -154,8 +163,7 @@ final class HomeInteractionUITests: XCTestCase {
         XCTAssertTrue(waitHittable(el("home.search"), false), "search/filter header should hide on upward scroll")
         XCTAssertTrue(el("home.channels").isHittable, "top category bar must remain visible while scrolling")
         XCTAssertTrue(waitHittable(el("tab.0"), false), "bottom navigation should hide with the header")
-        let expandedHeight = home.frame.height
-        XCTAssertGreaterThan(expandedHeight, initialHeight + 40, "home feed should expand into the collapsed tab-bar area")
+        XCTAssertTrue(waitForHeightIncrease(home, from: initialHeight, by: 40), "home feed should expand into the collapsed tab-bar area")
         for _ in 0..<3 { home.swipeDown() }
         XCTAssertTrue(waitHittable(el("home.search"), true), "search header should return on downward scroll")
         XCTAssertTrue(waitHittable(el("tab.0"), true), "bottom navigation should return on downward scroll")
