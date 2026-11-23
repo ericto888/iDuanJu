@@ -20,38 +20,26 @@ struct RootTabView: View {
                     }
                     .transition(.move(edge: .leading).combined(with: .opacity))
                 }
-                VStack(spacing: 0) {
-                    TabView(selection: $tab) {
-                        Stack(path: $paths[0]) { HomeView() }.tag(0)
-                        Stack(path: $paths[1]) { TVBoxHubView() }.tag(1)
-                        Stack(path: $paths[2]) { CategoryView() }.tag(2)
-                        Stack(path: $paths[3]) { ProfileView() }.tag(3)
-                        Stack(path: $paths[4]) { SearchView() }.tag(4)
-                    }
-                    .tint(STVTheme.accent)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                    if showNav && !metrics.useRail {
+                TabView(selection: $tab) {
+                    Stack(path: $paths[0], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { HomeView() }.tag(0)
+                    Stack(path: $paths[1], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { TVBoxHubView() }.tag(1)
+                    Stack(path: $paths[2], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { CategoryView() }.tag(2)
+                    Stack(path: $paths[3], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { ProfileView() }.tag(3)
+                    Stack(path: $paths[4], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { SearchView() }.tag(4)
+                }
+                .tint(STVTheme.accent)
+                .overlay(alignment: .bottom) {
+                    if showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden) {
                         GlassTabBar(selection: $tab, items: Self.items, searchTag: 4) { i in
                             if i == tab { paths[i] = NavigationPath() }
                         }
-                        .frame(height: tab == 0 && homeBottomBarHidden ? 0 : GlassTabBar.clearance)
-                        .clipped()
-                        .opacity(tab == 0 && homeBottomBarHidden ? 0 : 1)
-                        .accessibilityHidden(tab == 0 && homeBottomBarHidden)
-                        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: homeBottomBarHidden)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
-                // When the home feed hides its floating navigation, reclaim the bottom
-                // safe-area region so the page itself reaches the screen edge. The system
-                // tab-bar backdrop is hidden as well; otherwise iOS leaves its fade/material
-                // visible as a pale strip below the custom bar.
-                .ignoresSafeArea(.container, edges: tab == 0 && homeBottomBarHidden ? .bottom : [])
-                .background(STVTheme.bg.ignoresSafeArea())
             }
             .background(STVTheme.bg.ignoresSafeArea())
             .environment(\.layoutMetrics, metrics)
+            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: homeBottomBarHidden)
             .animation(.spring(response: 0.32, dampingFraction: 0.86), value: paths[tab].isEmpty)
             .animation(.spring(response: 0.32, dampingFraction: 0.86), value: metrics.useRail)
         }
@@ -83,13 +71,16 @@ struct RootTabView: View {
 
 private struct Stack<V: View>: View {
     @Binding var path: NavigationPath
+    var reserveBottomBar: Bool = true
     @ViewBuilder var content: V
     @Namespace private var ns
     var body: some View {
         NavigationStack(path: $path) {
             content
                 .toolbar(.hidden, for: .tabBar)
-                .toolbarBackground(.hidden, for: .tabBar)
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    Color.clear.frame(height: reserveBottomBar ? GlassTabBar.clearance : 0)
+                }
                 .routes()
         }.environment(\.zoomNS, ns)
     }
