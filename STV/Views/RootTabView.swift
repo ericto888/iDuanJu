@@ -6,6 +6,7 @@ struct RootTabView: View {
     @State private var tab = Int(ProcessInfo.processInfo.environment["STV_TAB"] ?? "") ?? 0
     @State private var paths = [NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath()]
     @State private var homeChromeHidden = false
+    @State private var homeBottomBarHidden = false
     static let items: [(String, String)] = [("首页", "house.fill"), ("TVBox", "tv.fill"),
                                             ("找剧", "square.grid.2x2.fill"), ("我的", "person.crop.circle.fill")]
     var body: some View {
@@ -19,19 +20,26 @@ struct RootTabView: View {
                     }
                     .transition(.move(edge: .leading).combined(with: .opacity))
                 }
-                TabView(selection: $tab) {
-                    Stack(path: $paths[0], reserveBottomBar: !metrics.useRail && !homeChromeHidden) { HomeView() }.tag(0)
-                    Stack(path: $paths[1], reserveBottomBar: !metrics.useRail) { TVBoxHubView() }.tag(1)
-                    Stack(path: $paths[2], reserveBottomBar: !metrics.useRail) { CategoryView() }.tag(2)
-                    Stack(path: $paths[3], reserveBottomBar: !metrics.useRail) { ProfileView() }.tag(3)
-                    Stack(path: $paths[4], reserveBottomBar: !metrics.useRail) { SearchView() }.tag(4)
-                }
-                .tint(STVTheme.accent)
-                .overlay(alignment: .bottom) {
-                    if showNav && !metrics.useRail && !(tab == 0 && homeChromeHidden) {
+                VStack(spacing: 0) {
+                    TabView(selection: $tab) {
+                        Stack(path: $paths[0]) { HomeView() }.tag(0)
+                        Stack(path: $paths[1]) { TVBoxHubView() }.tag(1)
+                        Stack(path: $paths[2]) { CategoryView() }.tag(2)
+                        Stack(path: $paths[3]) { ProfileView() }.tag(3)
+                        Stack(path: $paths[4]) { SearchView() }.tag(4)
+                    }
+                    .tint(STVTheme.accent)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    if showNav && !metrics.useRail {
                         GlassTabBar(selection: $tab, items: Self.items, searchTag: 4) { i in
                             if i == tab { paths[i] = NavigationPath() }
                         }
+                        .frame(height: tab == 0 && homeBottomBarHidden ? 0 : GlassTabBar.clearance)
+                        .clipped()
+                        .opacity(tab == 0 && homeBottomBarHidden ? 0 : 1)
+                        .accessibilityHidden(tab == 0 && homeBottomBarHidden)
+                        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: homeBottomBarHidden)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
@@ -50,9 +58,14 @@ struct RootTabView: View {
             guard tab == 0, let hidden = note.object as? Bool else { return }
             withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { homeChromeHidden = hidden }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .homeBottomBarVisibilityChanged)) { note in
+            guard tab == 0, let hidden = note.object as? Bool else { return }
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { homeBottomBarHidden = hidden }
+        }
         .compatOnChange(of: tab) { selected in
             if selected != 0 {
                 homeChromeHidden = false
+                homeBottomBarHidden = false
                 NotificationCenter.default.post(name: .homeChromeResetRequested, object: nil)
             }
         }
@@ -63,25 +76,13 @@ struct RootTabView: View {
 
 private struct Stack<V: View>: View {
     @Binding var path: NavigationPath
-    var reserveBottomBar: Bool = true
     @ViewBuilder var content: V
     @Namespace private var ns
     var body: some View {
         NavigationStack(path: $path) {
-            Group {
-                if reserveBottomBar {
-                    content
-                } else {
-                    // Hidden home chrome means true edge-to-edge content: extend the root page
-                    // through the bottom container safe area instead of only removing the 72pt bar clearance.
-                    content.ignoresSafeArea(.container, edges: .bottom)
-                }
-            }
-            .toolbar(.hidden, for: .tabBar)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                Color.clear.frame(height: reserveBottomBar ? GlassTabBar.clearance : 0)
-            }
-            .routes()
+            content
+                .toolbar(.hidden, for: .tabBar)
+                .routes()
         }.environment(\.zoomNS, ns)
     }
 }
@@ -206,5 +207,6 @@ struct GlassNavigationRail: View {
 
 extension Notification.Name {
     static let homeChromeVisibilityChanged = Notification.Name("STV.homeChromeVisibilityChanged")
+    static let homeBottomBarVisibilityChanged = Notification.Name("STV.homeBottomBarVisibilityChanged")
     static let homeChromeResetRequested = Notification.Name("STV.homeChromeResetRequested")
 }
