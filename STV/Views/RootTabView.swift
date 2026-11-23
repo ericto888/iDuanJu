@@ -68,10 +68,20 @@ private struct Stack<V: View>: View {
     @Namespace private var ns
     var body: some View {
         NavigationStack(path: $path) {
-            content
-                .toolbar(.hidden, for: .tabBar)
-                .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: reserveBottomBar ? GlassTabBar.clearance : 0) }
-                .routes()
+            Group {
+                if reserveBottomBar {
+                    content
+                } else {
+                    // Hidden home chrome means true edge-to-edge content: extend the root page
+                    // through the bottom container safe area instead of only removing the 72pt bar clearance.
+                    content.ignoresSafeArea(.container, edges: .bottom)
+                }
+            }
+            .toolbar(.hidden, for: .tabBar)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Color.clear.frame(height: reserveBottomBar ? GlassTabBar.clearance : 0)
+            }
+            .routes()
         }.environment(\.zoomNS, ns)
     }
 }
