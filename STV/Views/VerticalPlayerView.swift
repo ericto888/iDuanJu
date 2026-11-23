@@ -1489,6 +1489,7 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         c.onSpeedEnded = onSpeedEnded
         c.landscape = landscape
         c.speedMode = speedMode
+        c.locked = locked
         c.onAdjustBegan = onAdjustBegan
         c.onAdjustChanged = onAdjustChanged
         c.onAdjustEnded = onAdjustEnded
@@ -1520,6 +1521,7 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         var onSpeedEnded: () -> Void = {}
         var landscape = false
         var speedMode = false
+        var locked = false
         var onAdjustBegan: (AdjustSide) -> Void = { _ in }
         var onAdjustChanged: (AdjustSide, Double) -> Void = { _, _ in }
         var onAdjustEnded: () -> Void = {}
