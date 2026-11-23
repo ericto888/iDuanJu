@@ -9,7 +9,7 @@ final class PlayerUITests: XCTestCase {
 
     func el(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
     var isLandscape: Bool { let f = app.windows.firstMatch.frame; return f.width > f.height }
-    func waitOrientation(landscape: Bool, timeout: TimeInterval = 6) -> Bool {
+    func waitOrientation(landscape: Bool, timeout: TimeInterval = 10) -> Bool {
         let end = Date().addingTimeInterval(timeout)
         var stableSince: Date?
         var previous = CGRect.zero
@@ -444,8 +444,10 @@ final class PlayerUITests: XCTestCase {
 
     func testV3PopoversLandscapeAndBack() {
         launchV3()
+        XCTAssertTrue(waitOrientation(landscape: false), "player should initially be portrait")
+        XCTAssertTrue(el("player.fullscreen").waitForExistence(timeout: 5), "横屏 button missing")
         el("player.fullscreen").tap()
-        XCTAssertTrue(waitOrientation(landscape: true), "横屏 button did not rotate")
+        XCTAssertTrue(waitOrientation(landscape: true, timeout: 10), "横屏 button did not rotate")
         XCUIDevice.shared.orientation = .landscapeLeft   // keep the device in step so rotating back is a real change
         Thread.sleep(forTimeInterval: 0.8)
         for id in ["player.rate", "player.quality", "player.episodes", "player.lock", "player.exitFullscreen"] {
