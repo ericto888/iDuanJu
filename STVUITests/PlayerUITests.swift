@@ -495,17 +495,12 @@ final class PlayerUITests: XCTestCase {
         XCTAssertTrue(el("player.fullscreen").waitForExistence(timeout: 4))
     }
 
-    func testV3CenterControlsSkip() {
+    func testV3TimelineHasNoTenSecondSkipButtons() {
         launch(["STV_FX_EPISODES": "4", "STV_KEEP_CHROME": "1", "STV_SEEK": "10", "STV_PAUSE": "1"])
         XCTAssertTrue(el("player.progress").waitForExistence(timeout: 20))
         Thread.sleep(forTimeInterval: 2)
         XCTAssertTrue(el("player.playPause").waitForExistence(timeout: 6))
-        XCTAssertTrue(el("player.back10").exists && el("player.fwd10").exists)
-        let before = seconds(el("player.progress").value as? String ?? "")
-        el("player.fwd10").tap()
-        let after = seconds(el("player.progress").value as? String ?? "")
-        XCTAssertGreaterThanOrEqual(after - before, 8, "⟳10 failed: \(before) → \(after)")
-        el("player.back10").tap()
-        XCTAssertLessThanOrEqual(seconds(el("player.progress").value as? String ?? ""), after - 7, "⟲10 failed")
+        XCTAssertFalse(el("player.back10").exists, "10-second rewind button should be removed")
+        XCTAssertFalse(el("player.fwd10").exists, "10-second forward button should be removed")
     }
 }
