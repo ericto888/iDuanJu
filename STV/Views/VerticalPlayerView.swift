@@ -13,6 +13,8 @@ struct VerticalPlayerView: View {
         let s = switched ?? series
         PlayerScreen(series: s, startIndex: switched == nil ? startIndex : nil) { next in switched = next }
             .id(s.id)
+            // This wrapper survives season switches; its disappearance means the player route was popped.
+            .onDisappear { OrientationGate.endPlayerSession() }
     }
 }
 
