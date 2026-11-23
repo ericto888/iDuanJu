@@ -5,6 +5,7 @@ import SwiftUI
 struct RootTabView: View {
     @State private var tab = Int(ProcessInfo.processInfo.environment["STV_TAB"] ?? "") ?? 0
     @State private var paths = [NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath()]
+    @State private var homeChromeHidden = false
     static let items: [(String, String)] = [("首页", "house.fill"), ("TVBox", "tv.fill"),
                                             ("找剧", "square.grid.2x2.fill"), ("我的", "person.crop.circle.fill")]
     var body: some View {
@@ -12,14 +13,14 @@ struct RootTabView: View {
             let metrics = LayoutMetrics(width: geo.size.width, height: geo.size.height)
             let showNav = paths[tab].isEmpty
             HStack(spacing: 0) {
-                if showNav && metrics.useRail {
+                if showNav && metrics.useRail && !(tab == 0 && homeChromeHidden) {
                     GlassNavigationRail(selection: $tab, items: Self.items, searchTag: 4) { i in
                         if i == tab { paths[i] = NavigationPath() }
                     }
                     .transition(.move(edge: .leading).combined(with: .opacity))
                 }
                 TabView(selection: $tab) {
-                    Stack(path: $paths[0], reserveBottomBar: !metrics.useRail) { HomeView() }.tag(0)
+                    Stack(path: $paths[0], reserveBottomBar: !metrics.useRail && !homeChromeHidden) { HomeView() }.tag(0)
                     Stack(path: $paths[1], reserveBottomBar: !metrics.useRail) { TVBoxHubView() }.tag(1)
                     Stack(path: $paths[2], reserveBottomBar: !metrics.useRail) { CategoryView() }.tag(2)
                     Stack(path: $paths[3], reserveBottomBar: !metrics.useRail) { ProfileView() }.tag(3)
@@ -27,7 +28,7 @@ struct RootTabView: View {
                 }
                 .tint(STVTheme.accent)
                 .overlay(alignment: .bottom) {
-                    if showNav && !metrics.useRail {
+                    if showNav && !metrics.useRail && !(tab == 0 && homeChromeHidden) {
                         GlassTabBar(selection: $tab, items: Self.items, searchTag: 4) { i in
                             if i == tab { paths[i] = NavigationPath() }
                         }
@@ -44,6 +45,16 @@ struct RootTabView: View {
             #if DEBUG
             if ProcessInfo.processInfo.environment["STV_TD_OPEN"] == "1" { Router.push(.tdlib) }
             #endif
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .homeChromeVisibilityChanged)) { note in
+            guard tab == 0, let hidden = note.object as? Bool else { return }
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { homeChromeHidden = hidden }
+        }
+        .compatOnChange(of: tab) { selected in
+            if selected != 0 {
+                homeChromeHidden = false
+                NotificationCenter.default.post(name: .homeChromeResetRequested, object: nil)
+            }
         }
         // Cold start: restore a saved TDLib login (no network login, nothing is sent).
         .task { await TDLibService.shared.bootstrap() }
@@ -180,4 +191,10 @@ struct GlassNavigationRail: View {
         .padding(.vertical, 16)
         .padding(.leading, 8)
     }
+}
+
+
+extension Notification.Name {
+    static let homeChromeVisibilityChanged = Notification.Name("STV.homeChromeVisibilityChanged")
+    static let homeChromeResetRequested = Notification.Name("STV.homeChromeResetRequested")
 }
