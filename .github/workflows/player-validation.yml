@@ -2,7 +2,9 @@ name: player regression
 on:
   workflow_dispatch:
   push:
-    branches: [codex/player-pip-recovery]
+    branches:
+      - codex/player-pip-recovery
+      - feat/ios-player-bottom-controls-gestures
 permissions:
   contents: read
 jobs:
