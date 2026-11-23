@@ -3,16 +3,6 @@ name: package
 # iOS-only packaging. Regression tests live in the separate validation workflow.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - feat/ios-player-bottom-controls-gestures
-    paths:
-      - '.github/workflows/package.yml'
-      - 'STV/**'
-      - 'Scripts/**'
-      - 'scripts/**'
-      - 'project.yml'
-      - 'Packages/**'
 
 permissions:
   contents: read
