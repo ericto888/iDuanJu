@@ -62,7 +62,7 @@ struct MangaHomeView: View {
                     Color.clear.frame(height: 30).onAppear { Task { await load(more: true) } }
                 }
                 Text("来源：\(source.note)").font(.caption2).foregroundStyle(STVTheme.secondary).padding(.horizontal, 16)
-            }.padding(.bottom, 24)
+            }.padding(.bottom, 96)
         }
         .scrollIndicators(.hidden)
         .refreshable { await load(more: false) }
