@@ -596,8 +596,29 @@ struct PlayerScreen: View {
     /// `interactive`: the expanded scrubber accepts scrubbing; compact progress never intercepts gestures.
     @ViewBuilder private func controls(_ full: CGSize, ins: EdgeInsets, chrome: Bool, interactive: Bool) -> some View {
         ZStack(alignment: .topLeading) {
-            if landscape { landscapeControls(full, ins: ins, chrome: chrome, interactive: interactive) }
-            else { portraitControls(full, ins: ins, chrome: chrome, interactive: interactive) }
+            if landscape {
+                landscapeControls(full, ins: ins, chrome: chrome, interactive: interactive)
+                    // Keep episode identity available in landscape even when the action chrome fades.
+                    // The landscape layout intentionally hides its expanded title row, but paging,
+                    // VoiceOver and UI automation still need a stable current-episode marker.
+                    .overlay(alignment: .topLeading) {
+                        if let i = co.current, co.episodes.indices.contains(i) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(co.detail?.title ?? series.title)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .lineLimit(1)
+                                    .accessibilityIdentifier("player.title")
+                                    .accessibilityValue("第\(co.episodes[i].ep)集")
+                                meta(i, skip: false)
+                            }
+                            .padding(.leading, max(ins.leading, ins.trailing, 64) + 2)
+                            .padding(.top, 64)
+                            .allowsHitTesting(false)
+                        }
+                    }
+            } else {
+                portraitControls(full, ins: ins, chrome: chrome, interactive: interactive)
+            }
             if !chrome { compactChrome(full, ins: ins) }
         }
     }
