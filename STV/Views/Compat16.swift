@@ -18,6 +18,11 @@ private struct CompatSizeKey: PreferenceKey {
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }
 
+struct TabBarScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 /// Scroll geometry used by the home chrome state machine. Optional dimensions are nil on
 /// pre-iOS 18 fallback paths, where only the active drag gate is available.
 struct CompatScrollMetrics: Equatable {
