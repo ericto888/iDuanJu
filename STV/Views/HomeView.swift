@@ -88,6 +88,11 @@ final class BoardCache: ObservableObject {
     }
 }
 
+private struct HomeFeedScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 /// 发现页：玻璃搜索栏/筛选 → 来源分类条（红果 / 黄果 / AI剧 / 已开启的长视频站）→ 下方按来源横滑翻页，
 /// 分类条联动（选中项自动滚到居中、指示条跟随）。每页：二级榜单选择 → 竖海报 hero → 真实榜单分段。
 /// 横滑冲突：hero 轮播区域内的横滑归轮播；其它区域横滑翻来源页；首页是根页面，没有系统侧滑返回。
@@ -99,6 +104,8 @@ struct HomeView: View {
     /// scrolls it pins with a blurred 80 % page-colour ground and a hairline.
     private var headerInk: Color { STVTheme.text }
     @State private var scrolled: [HomeSource: Bool] = [:]
+    @State private var headerHidden = false
+    @State private var lastFeedOffset: CGFloat?
     private var pinned: Bool { scrolled[source] ?? false }
     @State private var showChannels = false
 
@@ -120,7 +127,10 @@ struct HomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            if !headerHidden {
+                header
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             TabView(selection: $source) {
                 ForEach(HomeSource.all) { s in
                     if s == .channels {
@@ -133,7 +143,8 @@ struct HomeView: View {
                         HomeFeedPage(source: s,
                                      tab: Binding(get: { subs[s] ?? s.subs[0] }, set: { subs[s] = $0 }),
                                      onHero: { heroCovers[s] = $0 },
-                                     onScrolled: { v in if scrolled[s] != v { scrolled[s] = v } })
+                                     onScrolled: { v in if scrolled[s] != v { scrolled[s] = v } },
+                                     onScrollOffset: handleFeedOffset)
                             .tag(s)
                     }
                 }
@@ -141,9 +152,26 @@ struct HomeView: View {
             .tabViewStyle(.page(indexDisplayMode: .never))
         }
         .dsAmbient(visible: !pinned)
+        .animation(.easeInOut(duration: 0.22), value: headerHidden)
+        .compatOnChange(of: source) { _ in
+            lastFeedOffset = nil
+            withAnimation(.easeInOut(duration: 0.22)) { headerHidden = false }
+        }
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showChannels) { channelPanel }
         .compatOnChange(of: SourceGate.shared.visibleSites) { if !HomeSource.all.contains(source) { source = .hongguo } }
+    }
+
+    private func handleFeedOffset(_ offset: CGFloat) {
+        defer { lastFeedOffset = offset }
+        guard let previous = lastFeedOffset else { return }
+        let delta = offset - previous
+        guard abs(delta) > 1.5 else { return }
+        if offset > -8 || delta > 0 {
+            if headerHidden { headerHidden = false }
+        } else if delta < 0, offset < -18, !headerHidden {
+            headerHidden = true
+        }
     }
 
     // MARK: Header (search + filter, source bar)
@@ -237,6 +265,7 @@ private struct HomeFeedPage: View {
     @Binding var tab: HomeTab
     var onHero: (String) -> Void
     var onScrolled: (Bool) -> Void = { _ in }
+    var onScrollOffset: (CGFloat) -> Void = { _ in }
     @State private var legacyChannels: [HuangguoChannel] = []
     @State private var legacyError: Error?
     @State private var heroIndex = 0
@@ -253,7 +282,7 @@ private struct HomeFeedPage: View {
 
     var body: some View {
         if case .site(let source) = tab, source.cmsKey != nil || source.pluginID != nil {
-            DynamicSiteFeed(source: source, onHero: onHero)
+            DynamicSiteFeed(source: source, onHero: onHero, onScrollOffset: onScrollOffset)
         } else {
             rankFeed
         }
@@ -262,6 +291,10 @@ private struct HomeFeedPage: View {
     private var rankFeed: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                GeometryReader { proxy in
+                    Color.clear.preference(key: HomeFeedScrollOffsetKey.self, value: proxy.frame(in: .named("home.feed.scroll")).minY)
+                }
+                .frame(height: 0)
                 if source.subs.count > 1 { subChips } else if case .site = source { boardChips }
                 if tab == .actorRank {
                     ActorRankList().padding(.vertical, 8)
@@ -281,6 +314,8 @@ private struct HomeFeedPage: View {
             .animation(.easeOut(duration: 0.25), value: heroPicks.isEmpty)
         }
         .scrollIndicators(.hidden)
+        .coordinateSpace(name: "home.feed.scroll")
+        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { onScrollOffset($0) }
         .compatDefaultScrollAnchor(Self.debugAnchor)
         .compatOnScrolled(threshold: 4) { onScrolled($0) }
         .accessibilityIdentifier("home.page.\(source.label)")
@@ -389,6 +424,7 @@ private struct HomeFeedPage: View {
 private struct DynamicSiteFeed: View {
     let source: DramaSource
     var onHero: (String) -> Void
+    var onScrollOffset: (CGFloat) -> Void = { _ in }
     @State private var categories: [SiteCategory] = []
     @State private var selected = ""
     @StateObject private var pager = Pager()
@@ -397,6 +433,10 @@ private struct DynamicSiteFeed: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                GeometryReader { proxy in
+                    Color.clear.preference(key: HomeFeedScrollOffsetKey.self, value: proxy.frame(in: .named("home.feed.scroll")).minY)
+                }
+                .frame(height: 0)
                 if categories.count > 1 { chips }
                 if let e = pager.error, pager.items.isEmpty {
                     ErrorStateView(error: e) { reload(selected) }
@@ -411,6 +451,8 @@ private struct DynamicSiteFeed: View {
             .padding(.vertical, 8)
         }
         .scrollIndicators(.hidden)
+        .coordinateSpace(name: "home.feed.scroll")
+        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { onScrollOffset($0) }
         .accessibilityIdentifier("home.page.\(source.label)")
         .refreshable { await refresh() }
         .task { await refresh() }
