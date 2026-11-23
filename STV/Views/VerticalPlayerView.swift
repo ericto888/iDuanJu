@@ -350,13 +350,13 @@ struct PlayerScreen: View {
             .scrollIndicators(.hidden)
             .scrollPosition(id: Binding(get: { co.current }, set: { co.select($0) }), anchor: .center)
             .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in feedScrollY = y }
-            .compatSelectionFeedback(trigger: co.current)
+            .compatSelectionFeedback(trigger: co.manualSelectionFeedback)
             .compatOnChange(of: co.readyIndex) { releaseHeldIfSettled() }
             .onScrollPhaseChange { _, phase in feedSettled = phase == .idle; releaseHeldIfSettled() }
             .accessibilityIdentifier("player.feed")
             .accessibilityValue(feedSettled ? "idle" : "scrolling")
             .compatOnChange(of: co.current) { new in
-                if let new, co.episodes.indices.contains(new) { showOSD("第\(co.episodes[new].ep)集") }
+                if !co.lastAdvanceWasAuto, let new, co.episodes.indices.contains(new) { showOSD("第\(co.episodes[new].ep)集") }
             }
             .scrollDisabled(isScrollDisabled)
         } else {
@@ -397,11 +397,11 @@ struct PlayerScreen: View {
                 .compatOnChange(of: co.current) { new in
                     if let new {
                         feedScrollY = CGFloat(new) * pageH
-                        if co.episodes.indices.contains(new) { showOSD("第\(co.episodes[new].ep)集") }
+                        if !co.lastAdvanceWasAuto, co.episodes.indices.contains(new) { showOSD("第\(co.episodes[new].ep)集") }
                     }
                 }
                 .compatOnChange(of: co.readyIndex) { releaseHeldIfSettled() }
-                .compatSelectionFeedback(trigger: co.current)
+                .compatSelectionFeedback(trigger: co.manualSelectionFeedback)
                 .accessibilityIdentifier("player.feed")
                 .accessibilityValue(feedSettled ? "idle" : "scrolling")
             }
