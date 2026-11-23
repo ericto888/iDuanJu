@@ -256,7 +256,8 @@ struct SourceStoreView: View {
         preparingID = entry.id
         defer { preparingID = nil }
         do {
-            let candidate = try await PluginInstaller.prepare(manifestURL: entry.manifest, origin: "iDuanJu 站源商店")
+            let freshManifestURL = entry.manifest + (entry.manifest.contains("?") ? "&" : "?") + "_=" + String(Int(Date().timeIntervalSince1970))
+            let candidate = try await PluginInstaller.prepare(manifestURL: freshManifestURL, origin: "iDuanJu 站源商店")
             if let installed = store.plugin(entry.id) {
                 let comparison = PluginManifest.compare(candidate.manifest.version, installed.manifest.version)
                 if comparison > 0 {
