@@ -34,7 +34,14 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
     }
 
     @MainActor static func unlock() {
-        fullscreenRequested = false
+        // A newly-created PlayerScreen may run its aspect task while a season switch is
+        // still carrying an explicit fullscreen request. Sensor-unlocking that transient
+        // screen must never cancel the user's fullscreen orientation; only exitLandscape()
+        // is allowed to clear fullscreenRequested.
+        guard !fullscreenRequested else {
+            NSLog("[OrientationGate] ignoring sensor unlock while explicit fullscreen is active")
+            return
+        }
         rotationGeneration += 1
         mask = isPad ? .all : .allButUpsideDown
         refresh()
