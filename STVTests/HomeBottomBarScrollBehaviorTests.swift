@@ -29,8 +29,11 @@ final class HomeChromeScrollBehaviorTests: XCTestCase {
         var behavior = HomeChromeScrollBehavior()
         behavior.setInteracting(true)
         _ = behavior.update(offset: 0, at: 0.9)
-        _ = behavior.update(offset: -100, at: 1.0)
-        XCTAssertEqual(behavior.update(offset: -40, at: 1.1), false)
+        XCTAssertEqual(behavior.update(offset: -100, at: 1.0), true)
+        behavior.setInteracting(false)
+        behavior.setInteracting(true)
+        _ = behavior.update(offset: -100, at: 2.0)
+        XCTAssertEqual(behavior.update(offset: -40, at: 2.1), false)
         XCTAssertFalse(behavior.isHidden)
     }
 
@@ -52,6 +55,16 @@ final class HomeChromeScrollBehaviorTests: XCTestCase {
         XCTAssertTrue(behavior.isHidden)
         XCTAssertNil(behavior.update(offset: -80, contentHeight: 2_000, viewportHeight: 750, at: 1.1))
         XCTAssertNil(behavior.update(offset: -75, contentHeight: 2_000, viewportHeight: 750, at: 1.2))
+        XCTAssertTrue(behavior.isHidden)
+    }
+
+    func testBottomBounceCannotRevealChrome() {
+        var behavior = HomeChromeScrollBehavior()
+        behavior.setInteracting(true)
+        _ = behavior.update(offset: 0, at: 0.9)
+        XCTAssertEqual(behavior.update(offset: -100, at: 1.0), true)
+        XCTAssertNil(behavior.update(offset: -80, isWithinScrollRange: false, at: 1.1))
+        XCTAssertNil(behavior.update(offset: -30, isWithinScrollRange: false, at: 1.2))
         XCTAssertTrue(behavior.isHidden)
     }
 
