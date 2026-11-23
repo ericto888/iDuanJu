@@ -612,7 +612,7 @@ struct PlayerScreen: View {
             if let i = co.current, co.episodes.indices.contains(i) {
                 VStack(alignment: .leading, spacing: 0) {
                     Group {
-                        meta(i, skip: true).padding(.bottom, 8).opacity(scrubbing ? 0 : 1).modifier(ChromeFade(on: chrome, keepAccessible: true))
+                        meta(i, skip: false).padding(.bottom, 8).opacity(scrubbing ? 0 : 1).modifier(ChromeFade(on: chrome, keepAccessible: true))
                         Text(co.detail?.title ?? series.title)
                             .font(.system(size: 21, weight: .bold)).lineLimit(1)
                             .shadow(color: .black.opacity(chrome ? 0 : 0.7), radius: 3)
