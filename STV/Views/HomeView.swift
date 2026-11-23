@@ -305,7 +305,13 @@ struct HomeView: View {
     /// iOS 16-17 preference-key fallback; only accepted while a vertical user drag is active.
     private func handleFeedOffset(_ offset: CGFloat, for feedSource: HomeSource) {
         handleFeedMetrics(
-            CompatScrollMetrics(offsetY: -offset, contentHeight: nil, containerHeight: nil),
+            CompatScrollMetrics(
+                offsetY: -offset,
+                contentHeight: nil,
+                containerHeight: nil,
+                containerWidth: nil,
+                isWithinScrollRange: nil
+            ),
             for: feedSource
         )
     }
