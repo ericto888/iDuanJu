@@ -114,7 +114,7 @@ final class SiteParsingTests: XCTestCase {
         XCTAssertEqual(s[0].headers["Referer"], "https://www.xvideos.com/video.olukc/slug")
 
         // Current and legacy player layouts: double quotes, escaped slashes, config fields and flv_url.
-        let modern = #"html5player.setVideoHLS("https:\\/\\/hls.example.com\\/master.m3u8?x=1\\u0026y=2");"#
+        let modern = #"html5player.setVideoHLS("https:\/\/hls.example.com\/master.m3u8?x=1\u0026y=2");"#
         let modernStreams = XVProvider.streams(modern, page: "https://www.xvideos.com/video.test/slug")
         XCTAssertEqual(modernStreams.first?.url, "https://hls.example.com/master.m3u8?x=1&y=2")
         XCTAssertEqual(modernStreams.first?.kind, .hls)
