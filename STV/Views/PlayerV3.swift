@@ -142,7 +142,10 @@ struct PlayerTimelineV3: View {
     var inline = false
 
     var body: some View {
-        if inline || onFullscreen != nil {
+        if inline {
+            PlayerProgressBar(co: co, scrubbing: $scrubbing, onInteract: onInteract)
+                .frame(maxWidth: .infinity)
+        } else if onFullscreen != nil {
             let t = co.scrubPreview ?? co.time
             HStack(spacing: 8) {
                 Button { co.seek(by: -10); onInteract() } label: {
