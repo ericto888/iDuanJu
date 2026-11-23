@@ -23,11 +23,17 @@ struct CategoryView: View {
     @State private var panelGeneration = 0
     @State private var collapsed = false
     @State private var scrolled = false
+    @State private var bottomBarHidden = false
+    @State private var chromeScrollBehavior = HomeChromeScrollBehavior()
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: TabBarScrollOffsetKey.self, value: proxy.frame(in: .named("category.scroll")).minY)
+                    }
+                    .frame(height: 0)
                     UnderlineTabs(items: Mode.allCases, selection: $mode, label: \.rawValue, idPrefix: "category.mode")
                         .padding(.horizontal, 20).padding(.top, 8)
                         .id("category.top")
@@ -36,9 +42,15 @@ struct CategoryView: View {
                     }
                     .transition(.opacity)
                 }
-                .padding(.bottom, 24)
+                .padding(.bottom, bottomBarHidden ? 0 : 96)
             }
             .scrollIndicators(.hidden)
+            .coordinateSpace(name: "category.scroll")
+            .onPreferenceChange(TabBarScrollOffsetKey.self) { offset in
+                if #unavailable(iOS 18.0) { handleScrollOffset(offset) }
+            }
+            .compatOnScrollInteraction { chromeScrollBehavior.setInteracting($0) }
+            .compatOnScrollMetrics { handleScrollMetrics($0) }
             .compatOnScrolled(threshold: 6) { v in
                 withAnimation(.easeOut(duration: 0.2)) { scrolled = v }
             }
@@ -52,6 +64,13 @@ struct CategoryView: View {
             .animation(DS.panel, value: collapsed)
         }
         .coordinateSpace(name: "category")
+        .onReceive(NotificationCenter.default.publisher(for: .categoryBottomBarVisibilityChanged)) { note in
+            if let hidden = note.object as? Bool { bottomBarHidden = hidden }
+        }
+        .onDisappear {
+            chromeScrollBehavior.reset()
+            setBottomBarHidden(false)
+        }
         .dsAmbient(visible: !scrolled)
         .toolbar(.hidden, for: .navigationBar)
         .task {
@@ -64,6 +83,28 @@ struct CategoryView: View {
         }
         .compatOnChange(of: genre) { if !genre.subs.contains(sub) { sub = genre.subs[0] }; reload() }
         .compatOnChange(of: sub) { reload() }
+    }
+
+    private func handleScrollMetrics(_ metrics: CompatScrollMetrics) {
+        if let hidden = chromeScrollBehavior.update(
+            offset: -metrics.offsetY,
+            contentHeight: metrics.contentHeight,
+            viewportHeight: metrics.containerHeight,
+            viewportWidth: metrics.containerWidth,
+            isWithinScrollRange: metrics.isWithinScrollRange,
+            at: ProcessInfo.processInfo.systemUptime
+        ) { setBottomBarHidden(hidden) }
+    }
+
+    private func handleScrollOffset(_ offset: CGFloat) {
+        handleScrollMetrics(CompatScrollMetrics(offsetY: -offset, contentHeight: nil,
+            containerHeight: nil, containerWidth: nil, isWithinScrollRange: nil))
+    }
+
+    private func setBottomBarHidden(_ hidden: Bool) {
+        guard bottomBarHidden != hidden else { return }
+        bottomBarHidden = hidden
+        NotificationCenter.default.post(name: .categoryBottomBarVisibilityChanged, object: hidden)
     }
 
     /// `.topfade`: page colour under the status bar, fading out over the content once it scrolls.
