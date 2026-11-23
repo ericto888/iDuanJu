@@ -566,14 +566,6 @@ struct PlayerScreen: View {
     /// Unobtrusive always-on chrome. Pure overlay: no inset, spacer or video-area subtraction.
     private func compactChrome(_ full: CGSize, ins: EdgeInsets) -> some View {
         VStack(spacing: 0) {
-            Text(co.detail?.title ?? series.title)
-                .font(.system(size: 12, weight: .medium)).lineLimit(1)
-                .foregroundStyle(.white.opacity(0.85))
-                .shadow(color: .black.opacity(0.7), radius: 2, y: 1)
-                .padding(.horizontal, landscape ? max(24, ins.leading) : 16)
-                .padding(.top, landscape ? 12 : max(8, ins.top))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("player.compactTitle")
             Spacer(minLength: 0)
             GeometryReader { g in
                 ZStack(alignment: .leading) {
