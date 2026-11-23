@@ -240,7 +240,8 @@ struct SourceStoreView: View {
         loading = true
         defer { loading = false }
         do {
-            let data = try await PluginInstaller.download(Self.catalogURL, limit: 1 << 20)
+            let freshCatalogURL = Self.catalogURL + "?_=" + String(Int(Date().timeIntervalSince1970))
+            let data = try await PluginInstaller.download(freshCatalogURL, limit: 1 << 20)
             let decoded = try JSONDecoder().decode(Catalog.self, from: data)
             guard decoded.schema == 1 else { throw PluginError.install("站源目录版本不兼容") }
             catalog = decoded
