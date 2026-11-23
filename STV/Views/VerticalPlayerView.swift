@@ -591,7 +591,7 @@ struct PlayerScreen: View {
     private func portraitControls(_ full: CGSize, ins: EdgeInsets, chrome: Bool, interactive: Bool) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                PlayerIconButton(symbol: "chevron.left", label: "返回") { dismiss() }
+                PlayerIconButton(symbol: "chevron.left", label: "返回", transparent: true) { dismiss() }
                 Spacer()
                 PlayerIconButton(symbol: "pip.enter", label: "画中画") { co.togglePiP() }
                     .disabled(!co.pipPossible).opacity(co.pipPossible ? 1 : 0.55)
@@ -650,21 +650,7 @@ struct PlayerScreen: View {
             HStack(spacing: 10) {
                 PlayerIconButton(symbol: "chevron.left", label: "返回") { dismiss() }
                     .opacity(dim).modifier(ChromeFade(on: chrome))
-                if let i = co.current, co.episodes.indices.contains(i) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(co.detail?.title ?? series.title)
-                            .font(.system(size: 16, weight: .bold)).lineLimit(1)
-                            .accessibilityIdentifier("player.title")
-                            .accessibilityValue("第\(co.episodes[i].ep)集")
-                        Text(landSubline(i)).font(.system(size: 12)).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
-                            .accessibilityIdentifier("player.episodeInfo")
-                            .accessibilityValue("第\(co.episodes[i].ep)集")
-                    }
-                    .shadow(color: .black.opacity(chrome ? 0 : 0.7), radius: 3)
-                    .opacity(scrubbing ? 0.28 : 1)
-                    .padding(.leading, 4)
-                    .layoutPriority(1)
-                }
+
                 Spacer(minLength: 12)
                 Group {
                     if showTech, let t = co.tech { PlayerTechStrip(tech: t, landscape: true).padding(.trailing, 4) }
@@ -672,9 +658,9 @@ struct PlayerScreen: View {
                                title: "连播", value: co.autoNext ? "开" : "关", on: co.autoNext) {
                         co.autoNext.toggle(); showOSD(co.autoNext ? "连播：开" : "连播：关"); flashChrome()
                     }
-                    PlayerIconButton(symbol: "lock.open", label: "锁屏") { locked = true; panel = nil; flashChrome() }
+                    PlayerIconButton(symbol: "lock.open", label: "锁屏", transparent: true) { locked = true; panel = nil; flashChrome() }
                         .accessibilityIdentifier("player.lock")
-                    PlayerIconButton(symbol: "arrow.down.right.and.arrow.up.left", label: "退出横屏") {
+                    PlayerIconButton(symbol: "arrow.down.right.and.arrow.up.left", label: "退出横屏", transparent: true) {
                         OrientationGate.exitLandscape(); flashChrome()
                     }
                     .accessibilityIdentifier("player.exitFullscreen")
@@ -691,15 +677,6 @@ struct PlayerScreen: View {
                         .shadow(color: .black.opacity(chrome ? 0 : 0.6), radius: 2)
                         .allowsHitTesting(interactive && co.readyIndex == i)
                     HStack(spacing: 8) {
-                        if showSkip {
-                            Button { skipIntro() } label: {
-                                HStack(spacing: 4) { Text("跳过片头"); Image(systemName: "play.fill").font(.system(size: 8)) }
-                                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
-                                    .padding(.horizontal, 4).frame(height: 34)
-                                    .background(.clear)
-                                    .contentShape(Rectangle())
-                            }.buttonStyle(PressScale()).accessibilityIdentifier("player.skipIntro")
-                        }
                         Spacer(minLength: 8)
                         landChips(i)
                     }
@@ -727,24 +704,6 @@ struct PlayerScreen: View {
         let dmOK = series.source == .hongguo
         let rate = co.playbackRate == 1 ? "1.0×" : SpeedPopover.label(co.playbackRate)
         return HStack(spacing: 8) {
-            Button { co.togglePause(); flashChrome() } label: {
-                Image(systemName: co.paused ? "play.fill" : "pause.fill")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 34)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(PressScale())
-            .accessibilityLabel(co.paused ? "播放" : "暂停")
-            .accessibilityIdentifier("player.landscapePlayPause")
-
-            Text("\(Fmt.clock(Int(co.time))) / \(Fmt.clock(Int(co.duration)))")
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
-                .foregroundStyle(.white.opacity(0.88))
-                .lineLimit(1)
-                .fixedSize()
-                .accessibilityIdentifier("player.landscapeTime")
-
             Button { if let current = co.current { co.select(current - 1) }; flashChrome() } label: {
                 Image(systemName: "backward.end.fill")
                     .font(.system(size: 14, weight: .medium))
