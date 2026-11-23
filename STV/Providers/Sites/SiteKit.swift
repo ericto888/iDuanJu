@@ -6,7 +6,15 @@ import Foundation
 
 extension DramaSource {
     /// Long-form single-video sites: no episodes, landscape player, "播放源" instead of "选集".
-    var isLongVideo: Bool { self != .hongguo && self != .huangguo }
+    var isLongVideo: Bool {
+        if self == .hongguo || self == .huangguo { return false }
+        // Dynamic plugin type is authoritative: shortdrama plugins use the episode grid;
+        // video plugins keep the long-video source selector. CMS and unknown sources retain legacy behavior.
+        if let id = pluginID, let manifest = PluginStore.snapshot(id)?.manifest {
+            return manifest.type != .shortdrama
+        }
+        return true
+    }
     /// Hidden until enabled in 片源管理 (and optionally behind Face ID).
     /// Telegram channel videos play in the long-video player but are not a 片源管理 site
     /// (adult channels are gated per channel by `SourceGate.showAdultChannels`).
