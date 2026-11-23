@@ -43,7 +43,7 @@ struct ChannelFeedView: View {
                         .accessibilityIdentifier("tg.loadMore")
                 }
             }
-            .padding(.bottom, 24)
+            .padding(.bottom, 96)
         }
         .scrollIndicators(.hidden)
         .refreshable { await store.refresh(only) }
