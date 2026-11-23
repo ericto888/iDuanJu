@@ -3,6 +3,8 @@ import SwiftUI
 struct ProfileView: View {
     @State private var message: String?
     @State private var showHongguoLogin = false
+    @State private var bottomBarHidden = false
+    @State private var chromeScrollBehavior = HomeChromeScrollBehavior()
     @ObservedObject private var library = LibraryStore.shared
     @ObservedObject private var gate = SourceGate.shared
     @ObservedObject private var hgAccount = HongguoWebAccount.shared
@@ -10,6 +12,10 @@ struct ProfileView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                GeometryReader { proxy in
+                    Color.clear.preference(key: TabBarScrollOffsetKey.self, value: proxy.frame(in: .named("profile.scroll")).minY)
+                }
+                .frame(height: 0)
                 Text("我的").font(.largeTitle.weight(.heavy)).foregroundStyle(STVTheme.text).padding(.horizontal, 16)
                 hongguoAccountCard
                 if !library.continueWatching.isEmpty { ContinueRow(items: library.continueWatching) }
@@ -55,9 +61,23 @@ struct ProfileView: View {
                 .padding(.horizontal, 16)
                 Text(message ?? "所有数据由本机直连上游，观看记录和收藏只保存在本机。\n\(Self.versionText)")
                     .font(.caption).foregroundStyle(STVTheme.secondary).padding(.horizontal, 16)
-            }.padding(.vertical, 12)
+            }.padding(.top, 12).padding(.bottom, bottomBarHidden ? 0 : 96)
         }
+        .scrollIndicators(.hidden)
+        .coordinateSpace(name: "profile.scroll")
+        .onPreferenceChange(TabBarScrollOffsetKey.self) { offset in
+            if #unavailable(iOS 18.0) { handleScrollOffset(offset) }
+        }
+        .compatOnScrollInteraction { chromeScrollBehavior.setInteracting($0) }
+        .compatOnScrollMetrics { handleScrollMetrics($0) }
         .background(STVTheme.bg.ignoresSafeArea())
+        .onReceive(NotificationCenter.default.publisher(for: .profileBottomBarVisibilityChanged)) { note in
+            if let hidden = note.object as? Bool { bottomBarHidden = hidden }
+        }
+        .onDisappear {
+            chromeScrollBehavior.reset()
+            setBottomBarHidden(false)
+        }
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showHongguoLogin) {
             HongguoLoginView()
@@ -65,6 +85,28 @@ struct ProfileView: View {
         .task {
             if hgAccount.isLoggedIn { _ = await hgAccount.refreshProfile() }
         }
+    }
+
+    private func handleScrollMetrics(_ metrics: CompatScrollMetrics) {
+        if let hidden = chromeScrollBehavior.update(
+            offset: -metrics.offsetY,
+            contentHeight: metrics.contentHeight,
+            viewportHeight: metrics.containerHeight,
+            viewportWidth: metrics.containerWidth,
+            isWithinScrollRange: metrics.isWithinScrollRange,
+            at: ProcessInfo.processInfo.systemUptime
+        ) { setBottomBarHidden(hidden) }
+    }
+
+    private func handleScrollOffset(_ offset: CGFloat) {
+        handleScrollMetrics(CompatScrollMetrics(offsetY: -offset, contentHeight: nil,
+            containerHeight: nil, containerWidth: nil, isWithinScrollRange: nil))
+    }
+
+    private func setBottomBarHidden(_ hidden: Bool) {
+        guard bottomBarHidden != hidden else { return }
+        bottomBarHidden = hidden
+        NotificationCenter.default.post(name: .profileBottomBarVisibilityChanged, object: hidden)
     }
 
     @ViewBuilder
