@@ -151,6 +151,7 @@ final class HomeInteractionUITests: XCTestCase {
         let home = el("home.page.红果")
         for _ in 0..<3 { home.swipeUp() }
         XCTAssertTrue(waitHittable(el("home.search"), false), "search/filter header should hide on upward scroll")
+        XCTAssertTrue(el("home.channels").isHittable, "top category bar must remain visible while scrolling")
         XCTAssertTrue(waitHittable(el("tab.0"), false), "bottom navigation should hide with the header")
         for _ in 0..<3 { home.swipeDown() }
         XCTAssertTrue(waitHittable(el("home.search"), true), "search header should return on downward scroll")
