@@ -77,6 +77,12 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
         }
     }
 
+    /// Called only when the player route itself is dismissed (not when its series identity changes).
+    @MainActor static func endPlayerSession() {
+        fullscreenRequested = false
+        lockPortrait()
+    }
+
     @MainActor static func lockPortrait() {
         // A season switch recreates PlayerScreen. Do not let the outgoing screen's
         // onDisappear or the incoming screen's portrait-video task cancel fullscreen.
