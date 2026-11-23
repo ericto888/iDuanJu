@@ -188,10 +188,10 @@ struct SourceStoreView: View {
             }
             Spacer(minLength: 4)
             if let installed {
-                if isCurrent {
-                    Text("已安装").font(.caption.weight(.medium)).foregroundStyle(STVTheme.secondary)
-                } else {
-                    Button(preparingID == entry.id ? "处理中" : "更新") {
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("已安装 v\(installed.manifest.version)")
+                        .font(.caption2).foregroundStyle(STVTheme.secondary)
+                    Button(preparingID == entry.id ? "检查中" : "检查更新") {
                         Task { await prepare(entry) }
                     }.buttonStyle(.borderedProminent).tint(STVTheme.accent).disabled(preparingID != nil)
                 }
@@ -254,9 +254,21 @@ struct SourceStoreView: View {
         preparingID = entry.id
         defer { preparingID = nil }
         do {
-            pending = try await PluginInstaller.prepare(manifestURL: entry.manifest, origin: "iDuanJu 站源商店")
+            let candidate = try await PluginInstaller.prepare(manifestURL: entry.manifest, origin: "iDuanJu 站源商店")
+            if let installed = store.plugin(entry.id) {
+                let comparison = PluginManifest.compare(candidate.manifest.version, installed.manifest.version)
+                if comparison > 0 {
+                    pending = candidate
+                } else if comparison == 0 {
+                    message = "\(entry.name) 已是最新版本 v\(installed.manifest.version)"
+                } else {
+                    message = "远程版本 v\(candidate.manifest.version) 低于已安装版本 v\(installed.manifest.version)，为避免降级已取消"
+                }
+            } else {
+                pending = candidate
+            }
         } catch {
-            message = "准备站源失败：\(error.localizedDescription)"
+            message = "检查/准备站源更新失败：\(error.localizedDescription)"
         }
     }
 }
