@@ -196,8 +196,29 @@ struct XVProvider: SiteProvider {
         let p = ep?.page ?? s.page ?? (source == .xnxx ? "\(base)/video-\(s.seriesId)/" : "\(base)/video.\(s.seriesId)/")
         return try await get(p, ttl: 300)
     }
+    /// Decode a quoted value copied from an inline JavaScript player config.
+    private static func playerString(_ raw: String) -> String {
+        var value = HTML.unescape(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        value = value.replacingOccurrences(of: "\\/", with: "/")
+        value = value.replacingOccurrences(of: "\\u0026", with: "&", options: .caseInsensitive)
+        value = value.replacingOccurrences(of: "\\x26", with: "&", options: .caseInsensitive)
+        value = value.replacingOccurrences(of: "\\'", with: "'")
+        value = value.replacingOccurrences(of: "\\\"", with: "\"")
+        value = value.replacingOccurrences(of: "\\\\", with: "\\")
+        return value
+    }
+
     static func call(_ fn: String, _ h: String) -> String {
-        HTML.groups("html5player\\.\(fn)\\('([^']*)'\\)", h).map { TubeFmt.jsString(HTML.unescape($0[1])) } ?? ""
+        let name = NSRegularExpression.escapedPattern(for: fn)
+        let prefix = "html5player\\s*\\.\\s*" + name + "\\s*\\(\\s*"
+        let patterns = [
+            prefix + "'((?:\\\\.|[^'\\\\])*)'\\s*\\)",
+            prefix + "\"((?:\\\\.|[^\"\\\\])*)\"\\s*\\)"
+        ]
+        for pattern in patterns {
+            if let match = HTML.groups(pattern, h), match.count > 1 { return playerString(match[1]) }
+        }
+        return ""
     }
     func detail(_ s: HGSeries) async throws -> HGSeriesDetail {
         let r = try await watch(s)
@@ -219,16 +240,66 @@ struct XVProvider: SiteProvider {
                               episodes: SiteParse.singleEpisode(s, page: url, duration: dur),
                               tags: Array(tags.prefix(16)), episodeLabel: dur > 0 ? Fmt.clock(dur) : "长视频")
     }
+    private static func mediaURL(_ raw: String, page: String) -> String {
+        var value = playerString(raw)
+        if value.hasPrefix("//") { value = "https:" + value }
+        guard let baseURL = URL(string: page),
+              let url = URL(string: value, relativeTo: baseURL)?.absoluteURL,
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return "" }
+        return url.absoluteString
+    }
+
+    /// XVideos has used several player layouts over time. Keep the native parser tolerant:
+    /// html5player calls, legacy flv_url, JSON config fields, then explicit media URLs.
     static func streams(_ h: String, page: String) -> [HGStream] {
         let hdr = ["Referer": page, "User-Agent": TubeFmt.desktopUA]
         var out: [HGStream] = []
+        var seen = Set<String>()
+
+        func append(_ raw: String, quality: String, isHLS: Bool) {
+            let url = mediaURL(raw, page: page)
+            guard !url.isEmpty, seen.insert(url).inserted else { return }
+            out.append(HGStream(streamId: "xv-\(out.count)", quality: quality, url: url,
+                                key: "", kind: isHLS ? .hls : .mp4Clear, headers: hdr))
+        }
+
         let hls = call("setVideoHLS", h)
-        if hls.hasPrefix("https://") { out.append(HGStream(streamId: "xv-hls", quality: "自动 · HLS", url: hls, key: "", kind: .hls, headers: hdr)) }
-        for (fn, q) in [("setVideoUrlHigh", "高清 MP4"), ("setVideoUrlLow", "标清 MP4")] {
-            let u = call(fn, h)
-            if u.hasPrefix("https://"), !out.contains(where: { $0.url == u }) {
-                out.append(HGStream(streamId: "xv-\(fn)", quality: q, url: u, key: "", kind: .mp4Clear, headers: hdr))
+        if !hls.isEmpty { append(hls, quality: "自动 · HLS", isHLS: true) }
+        for (fn, quality) in [("setVideoUrlHigh", "高清 MP4"), ("setVideoUrlLow", "标清 MP4")] {
+            let value = call(fn, h)
+            if !value.isEmpty { append(value, quality: quality, isHLS: false) }
+        }
+
+        let flvPatterns = [
+            "(?:[?&])flv_url=([^&\\"'\\\\s<>]+)",
+            "flv_url\\\\s*[:=]\\\\s*'([^']*)'",
+            "flv_url\\\\s*[:=]\\\\s*\\"([^\\"]*)\\""
+        ]
+        for pattern in flvPatterns {
+            if let match = HTML.groups(pattern, h), match.count > 1 {
+                let encoded = match[1].replacingOccurrences(of: "+", with: "%20")
+                append(encoded.removingPercentEncoding ?? encoded, quality: "原画 · 直链", isHLS: false)
+                if !out.isEmpty { break }
             }
+        }
+
+        let fields: [(String, String, Bool)] = [
+            ("(?:hls|video_hls|hls_url|hlsUrl)", "自动 · HLS", true),
+            ("(?:flv_url|video_url|videoUrl|urlHigh|urlLow|contentUrl)", "直链 · MP4", false)
+        ]
+        for (keys, quality, isHLS) in fields {
+            let pattern = "[\\\\\\"']?" + keys + "[\\\\\\"']?\\\\s*:\\\\s*[\\\\\\"']([^\\\\\\"']+)[\\\\\\"']"
+            for match in HTML.all(pattern, h) where match.count > 1 {
+                append(match[1], quality: quality, isHLS: isHLS)
+            }
+        }
+
+        let normalizedHTML = h.replacingOccurrences(of: "\\\\/", with: "/")
+        let rawPattern = "(?:https?:)?//[^\\\\\\"'\\\\s<>]+?\\\\.(?:m3u8|mp4)(?:\\\\?[^\\\\\\"'\\\\s<>]*)?"
+        for match in HTML.all(rawPattern, normalizedHTML) where !match.isEmpty {
+            let raw = match[0].hasPrefix("//") ? "https:" + match[0] : match[0]
+            let isHLS = raw.range(of: "\\\\.m3u8(?:\\\\?|$)", options: .regularExpression) != nil
+            append(raw, quality: isHLS ? "自动 · HLS" : "直链 · MP4", isHLS: isHLS)
         }
         return out
     }
