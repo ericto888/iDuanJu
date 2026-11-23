@@ -18,6 +18,14 @@ private struct CompatSizeKey: PreferenceKey {
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }
 
+/// Scroll geometry used by the home chrome state machine. Optional dimensions are nil on
+/// pre-iOS 18 fallback paths, where only the active drag gate is available.
+struct CompatScrollMetrics: Equatable {
+    let offsetY: CGFloat
+    let contentHeight: CGFloat?
+    let containerHeight: CGFloat?
+}
+
 extension View {
     /// Cross-version `.onChange(of:)` supporting iOS 16+ without deprecation warnings or iOS 17-only closures.
     @ViewBuilder
@@ -90,6 +98,46 @@ extension View {
             } action: { _, y in action(y) }
         } else {
             self
+        }
+    }
+
+    /// Reports native scroll geometry on iOS 18+, including content and viewport dimensions.
+    /// Those dimensions let callers ignore offset jumps caused by asynchronous content/layout changes.
+    @ViewBuilder
+    func compatOnScrollMetrics(action: @escaping (CompatScrollMetrics) -> Void) -> some View {
+        if #available(iOS 18.0, *) {
+            self.onScrollGeometryChange(for: CompatScrollMetrics.self) { geometry in
+                CompatScrollMetrics(
+                    offsetY: geometry.contentOffset.y + geometry.contentInsets.top,
+                    contentHeight: geometry.contentSize.height,
+                    containerHeight: geometry.containerSize.height
+                )
+            } action: { _, metrics in
+                action(metrics)
+            }
+        } else {
+            self
+        }
+    }
+
+    /// Reports genuine vertical interaction. iOS 18 uses ScrollPhase; older systems use a
+    /// simultaneous drag observer so programmatic scrolling and momentum cannot drive chrome.
+    @ViewBuilder
+    func compatOnScrollInteraction(action: @escaping (Bool) -> Void) -> some View {
+        if #available(iOS 18.0, *) {
+            self.onScrollPhaseChange { _, phase in
+                action(phase == .interacting)
+            }
+        } else {
+            self.simultaneousGesture(
+                DragGesture(minimumDistance: 2)
+                    .onChanged { value in
+                        if abs(value.translation.height) > abs(value.translation.width) {
+                            action(true)
+                        }
+                    }
+                    .onEnded { _ in action(false) }
+            )
         }
     }
 
