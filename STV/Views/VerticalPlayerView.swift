@@ -724,6 +724,50 @@ struct PlayerScreen: View {
         let dmOK = series.source == .hongguo
         let rate = co.playbackRate == 1 ? "1.0×" : SpeedPopover.label(co.playbackRate)
         return HStack(spacing: 8) {
+            Button { co.togglePause(); flashChrome() } label: {
+                Image(systemName: co.paused ? "play.fill" : "pause.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScale())
+            .accessibilityLabel(co.paused ? "播放" : "暂停")
+            .accessibilityIdentifier("player.landscapePlayPause")
+
+            Text("\(Fmt.clock(Int(co.time))) / \(Fmt.clock(Int(co.duration)))")
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.88))
+                .lineLimit(1)
+                .fixedSize()
+                .accessibilityIdentifier("player.landscapeTime")
+
+            Button { if let current = co.current { co.select(current - 1) }; flashChrome() } label: {
+                Image(systemName: "backward.end.fill")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScale())
+            .disabled((co.current ?? 0) <= 0)
+            .opacity((co.current ?? 0) > 0 ? 1 : 0.35)
+            .accessibilityLabel("上一集")
+            .accessibilityIdentifier("player.previousEpisode")
+
+            Button { if let current = co.current { co.select(current + 1) }; flashChrome() } label: {
+                Image(systemName: "forward.end.fill")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScale())
+            .disabled((co.current ?? 0) >= co.episodes.count - 1)
+            .opacity((co.current ?? 0) < co.episodes.count - 1 ? 1 : 0.35)
+            .accessibilityLabel("下一集")
+            .accessibilityIdentifier("player.nextEpisode")
+
             PlayerChip(id: "player.episodes", a11y: "选集", symbol: "square.grid.2x2", title: "选集", on: panel == .episodes) { toggle(.episodes) }
             PlayerChip(id: "player.rate", a11y: "播放倍速 " + rate, symbol: "gauge.with.dots.needle.33percent", title: "倍速", value: rate,
                        on: panel == .rates || co.playbackRate != 1) { toggle(.rates) }
