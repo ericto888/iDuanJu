@@ -484,8 +484,20 @@ struct PlayerScreen: View {
     private func stage(_ i: Int) -> some View {
         ZStack {
             if co.readyIndex != i {
-                if (i == co.heldFrame?.index || i == co.current) && co.errors[i] == nil {
+                if let frame = co.firstFrames[i], co.errors[i] == nil {
+                    // Douyin-style: show the pre-decoded first video frame of episode `i` while swiping in
+                    // and during the ~30 ms engine handoff, so switching never flashes a poster cover or black.
+                    Color.black
+                    Image(uiImage: frame)
+                        .resizable()
+                        .aspectRatio(contentMode: fillScreen ? .fill : .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                        .allowsHitTesting(false)
+                } else if (i == co.heldFrame?.index || i == co.current) && co.errors[i] == nil {
                     Color.clear
+                } else if !series.source.isLongVideo {
+                    Color.black.allowsHitTesting(false)
                 } else {
                     PosterBackdrop(url: series.cover).allowsHitTesting(false)
                 }
@@ -748,6 +760,19 @@ struct PlayerScreen: View {
                 }
             } label: {
                 Label("画质增强", systemImage: "sparkles")
+            }
+            if co.tech?.hdr == true {
+                Button {} label: {
+                    Label("SDR 转 HDR（当前已是原生 HDR）", systemImage: "sun.max.fill")
+                }
+                .disabled(true)
+            } else {
+                Toggle(isOn: Binding(get: { co.sdrToHdr }, set: {
+                    co.sdrToHdr = $0
+                    showOSD($0 ? "SDR 转 HDR：已开启" : "SDR 转 HDR：已关闭")
+                })) {
+                    Label("SDR 转 HDR", systemImage: "sun.max.fill")
+                }
             }
             Menu {
                 ForEach([(0, "关闭"), (-1, "播完本集"), (15, "15 分钟"), (30, "30 分钟"), (60, "60 分钟")], id: \.0) { mode, label in

@@ -102,8 +102,11 @@ struct MediaTrack: Identifiable, Hashable, Sendable {
     var routeLabel: String { get }
     /// Real-time GPU sharpening level (0 = off, 1 = standard, 2 = strong).
     func setSharpen(_ level: Int)
+    /// Real-time SDR-to-HDR inverse tone mapping on SDR content.
+    func setSdrToHdr(_ enabled: Bool)
 }
 
 extension PlayerEngine {
     func setSharpen(_ level: Int) {}
+    func setSdrToHdr(_ enabled: Bool) {}
 }

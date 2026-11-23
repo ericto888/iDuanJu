@@ -569,6 +569,17 @@ final class MPVMetalView: UIView {
         _ = mpv_set_property(handle, "sharpen", MPV_FORMAT_DOUBLE, &amount)
     }
 
+    func setSdrToHdr(_ enabled: Bool) {
+        guard let handle = mpv else { return }
+        _ = mpv_set_property_string(handle, "inverse-tone-mapping", enabled ? "yes" : "no")
+        var contrast: Int64 = enabled ? 5 : 0
+        var saturation: Int64 = enabled ? 7 : 0
+        var gamma: Int64 = enabled ? 3 : 0
+        _ = mpv_set_property(handle, "contrast", MPV_FORMAT_INT64, &contrast)
+        _ = mpv_set_property(handle, "saturation", MPV_FORMAT_INT64, &saturation)
+        _ = mpv_set_property(handle, "gamma", MPV_FORMAT_INT64, &gamma)
+    }
+
     // MARK: Tracks
 
     private func getStringProperty(_ name: String) -> String? {

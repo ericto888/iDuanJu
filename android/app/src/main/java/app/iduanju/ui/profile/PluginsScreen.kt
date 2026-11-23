@@ -81,11 +81,25 @@ fun PluginsScreen(onBack: () -> Unit) {
             "TVBox API 站点：验证后添加 $added/${r.config.sites.size}${if (failed > 0) "，验证失败 $failed" else ""}${if (r.config.skipped > 0) "，跳过 ${r.config.skipped} 个脚本/重复/不兼容项" else ""}"
         }
     }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) run {
-            val text = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: error("读取文件失败")
-            val name = ctx.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
-            describe(store.interpret(text, "file", name?.substringBeforeLast('.')))
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) run {
+            if (uris.size == 1) {
+                val uri = uris.first()
+                val text = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: error("读取文件失败")
+                val name = ctx.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+                describe(store.interpret(text, "file", name?.substringBeforeLast('.')))
+            } else {
+                var ok = 0
+                var failed = 0
+                for (uri in uris) {
+                    runCatching {
+                        val text = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: error("读取文件失败")
+                        val name = ctx.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+                        describe(store.interpret(text, "file", name?.substringBeforeLast('.')))
+                    }.onSuccess { ok++ }.onFailure { failed++ }
+                }
+                "批量导入完成：成功 $ok 个" + if (failed > 0) "，失败 $failed 个" else ""
+            }
         }
     }
 
@@ -112,7 +126,7 @@ fun PluginsScreen(onBack: () -> Unit) {
         Group("添加插件", footer = "插件运行在 QuickJS 沙箱里，只能访问 manifest 声明的域名；未成年相关内容一律过滤。") {
             LinkRow("从网址添加", ProfileIcons.link) { dialog = "url" }
             RowDivider()
-            LinkRow("从文件导入（插件 / M3U / TVBox JSON）", ProfileIcons.file) { picker.launch(arrayOf("*/*")) }
+            LinkRow("从文件导入（支持多选 · 插件 / M3U / TVBox JSON）", ProfileIcons.file) { picker.launch(arrayOf("*/*")) }
             RowDivider()
             LinkRow("粘贴插件内容", ProfileIcons.paste) { dialog = "paste" }
             RowDivider()

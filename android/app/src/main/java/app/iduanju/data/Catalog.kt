@@ -12,6 +12,28 @@ import app.iduanju.core.tg.TGVideo
 
 /** Routes a namespaced series id to its provider (红果 by default, "cms:<key>:<id>" → MacCMS, "plugin:<id>:…" → idj1 plugin). */
 object Catalog {
+    private val previewHints = java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
+
+    fun rememberPreview(sid: String, title: String, cover: String) {
+        if (sid.isNotEmpty() && (title.isNotEmpty() || cover.isNotEmpty())) {
+            previewHints[sid] = title to cover
+        }
+    }
+
+    fun peekCover(sid: String): String {
+        previewHints[sid]?.second?.takeIf { it.isNotEmpty() }?.let { return it }
+        IdjApp.instance.library.progress(sid)?.cover?.takeIf { it.isNotEmpty() }?.let { return it }
+        IdjApp.instance.library.favorites[sid]?.second?.takeIf { it.isNotEmpty() }?.let { return it }
+        return ""
+    }
+
+    fun peekTitle(sid: String): String {
+        previewHints[sid]?.first?.takeIf { it.isNotEmpty() }?.let { return it }
+        IdjApp.instance.library.progress(sid)?.title?.takeIf { it.isNotEmpty() }?.let { return it }
+        IdjApp.instance.library.favorites[sid]?.first?.takeIf { it.isNotEmpty() }?.let { return it }
+        return ""
+    }
+
     fun isCMS(sid: String) = sid.startsWith("cms:")
 
     private fun cmsSite(sid: String) = MacCMS.parseSid(sid)?.first?.let { IdjApp.instance.cms.site(it) }
@@ -28,7 +50,7 @@ object Catalog {
         app.iduanju.core.huangguo.HuangguoClient.isHuangguo(sid) -> IdjApp.instance.huangguo.detail(sid)
         TGVideo.isTG(sid) -> IdjApp.instance.tg.let { TGVideo.detail(it.client, sid, it.channel(sid.removePrefix("tg:").substringBefore(':'))) }
         else -> IdjApp.instance.hongguo.detail(sid, web)
-    }
+    }.also { rememberPreview(sid, it.title, it.cover) }
 
     fun resolve(ep: HGEpisode): HGResolvedVideo = when {
         isCMS(ep.vid) -> MacCMS.resolve(cmsSite(ep.vid), ep)

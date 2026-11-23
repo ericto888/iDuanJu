@@ -94,6 +94,13 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
             engine.setSharpen(enhanceLevel)
         }
     }
+    /// SDR-to-HDR inverse tone mapping, persisted across sessions (auto-bypassed for native HDR/DV).
+    @Published var sdrToHdr: Bool = UserDefaults.standard.bool(forKey: "stv.player.sdrToHdr") {
+        didSet {
+            UserDefaults.standard.set(sdrToHdr, forKey: "stv.player.sdrToHdr")
+            engine.setSdrToHdr(sdrToHdr && tech?.hdr != true)
+        }
+    }
     @Published private(set) var pipPossible = false
     /// Design v3 chrome: rendered video size, tech strip, audio / subtitle options, auto-advance.
     @Published private(set) var videoSize: CGSize = .zero
@@ -320,6 +327,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         tasks.removeAll()
         prefetchTokens.values.forEach { LocalHLSProxy.shared.release($0) }
         prefetchTokens.removeAll()
+        firstFrames.removeAll()
         prebuffer = nil
         if audioSessionActive {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -552,6 +560,9 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     /// Last frame of the episode being left, shown over the (cleared) video surface until the next one is
     /// ready, so switching never flashes black.
     @Published private(set) var heldFrame: (image: UIImage, index: Int)?
+    /// Pre-decoded opening video frame (frame 0) of nearby episodes so swiping reveals real video frames
+    /// (Douyin-style) instead of a drama poster cover, and bridges the ~30 ms local-file open with zero flash.
+    @Published private(set) var firstFrames: [Int: UIImage] = [:]
     /// The feed calls this once the swipe has settled on a ready episode.
     func releaseHeldFrame() { if heldFrame != nil { heldFrame = nil } }
 
@@ -581,6 +592,9 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
             prepared[k] = nil
             streams[k] = nil
             chosen[k] = nil
+        }
+        for k in firstFrames.keys where abs(k - i) > 2 {
+            firstFrames[k] = nil
         }
         errors[i] = nil
         verifyTargets[i] = nil
@@ -679,12 +693,26 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
                             LocalHLSProxy.shared.release(oldTok)
                         }
                         self.prepared[target] = .file(local)
+                        if self.firstFrames[target] == nil, let frame = await Self.extractFirstFrame(from: local) {
+                            guard !Task.isCancelled, self.activation == token else { return }
+                            self.firstFrames[target] = frame
+                        }
                     }
                 }
             } else if self.episodes.indices.contains(i + 1) {
                 _ = try? await self.prepare(i + 1)
             }
         }
+    }
+
+    private nonisolated static func extractFirstFrame(from url: URL) async -> UIImage? {
+        let asset = AVURLAsset(url: url)
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.requestedTimeToleranceBefore = .zero
+        gen.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
+        guard let cg = try? await gen.image(at: .zero).image else { return nil }
+        return UIImage(cgImage: cg)
     }
 
     /// MPVKit unless the user chose the system player, the source needs AVPlayer (resource-loader AES,
@@ -705,6 +733,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         }
         engine.fill = fill
         engine.setSharpen(enhanceLevel)
+        engine.setSdrToHdr(sdrToHdr && tech?.hdr != true)
         bindTransportRequests(engine)
         if engineKind != next.kind { engineKind = next.kind }
     }
@@ -1047,7 +1076,10 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
             Task { [weak self] in
                 let t = await eng.tech(stream: stream)
                 guard let self, self.engine === eng else { return }
-                if t != self.tech { self.tech = t }
+                if t != self.tech {
+                    self.tech = t
+                    self.engine.setSdrToHdr(self.sdrToHdr && !t.hdr)
+                }
                 self.refreshMediaOptions()
                 self.refreshPiP()
                 self.publishNowPlaying()
@@ -1072,5 +1104,16 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
             if rec.episodeCount == 0 { rec.episodeCount = max(d.totalEps, d.episodes.count) }
         }
         LibraryStore.shared.record(rec, index: i, ep: episodes[i].ep, seconds: seconds, duration: duration)
+        if series.source == .hongguo {
+            let posMs = Int64((seconds * 1000).rounded())
+            HongguoWebAccount.shared.reportProgressAsync(
+                seriesId: series.seriesId,
+                vid: episodes[i].vid,
+                episodeNumber: episodes[i].ep,
+                positionMs: posMs,
+                accumulatedMs: max(1500, posMs),
+                force: force
+            )
+        }
     }
 }

@@ -274,7 +274,10 @@ private fun StickyStrip(names: List<String>, onExpand: () -> Unit) {
 @Composable
 internal fun PosterCell(s: HGSeries, rank: Int?, subtitle: String? = null, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
     val c = IdjThemeColors
-    Column(modifier.pressClick(0.97f, label = s.title) { onOpen(s.seriesId) }) {
+    Column(modifier.pressClick(0.97f, label = s.title) {
+        app.iduanju.data.Catalog.rememberPreview(s.seriesId, s.title, s.cover)
+        onOpen(s.seriesId)
+    }) {
         PosterArt(s.cover, Modifier.fillMaxWidth().aspectRatio(3f / 4f), rank = rank, badge = HomeFmt.progress(s)?.let { DS.spaced(it) })
         Text(s.title, color = c.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 7.dp))
         val sub = subtitle ?: if (s.playCount > 0) DS.count(s.playCount) + "热度" else HomeFmt.meta(s)
