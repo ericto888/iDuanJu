@@ -35,6 +35,7 @@ struct HomeChromeScrollBehavior {
     private var previousTime: TimeInterval?
     private var previousContentHeight: CGFloat?
     private var previousViewportHeight: CGFloat?
+    private var previousViewportWidth: CGFloat?
     let revealVelocity: CGFloat
 
     init(revealVelocity: CGFloat = 400) {
@@ -51,6 +52,7 @@ struct HomeChromeScrollBehavior {
         offset: CGFloat,
         contentHeight: CGFloat? = nil,
         viewportHeight: CGFloat? = nil,
+        viewportWidth: CGFloat? = nil,
         isWithinScrollRange: Bool? = nil,
         at time: TimeInterval
     ) -> Bool? {
@@ -65,11 +67,13 @@ struct HomeChromeScrollBehavior {
 
         let contentChanged = dimensionChanged(contentHeight, from: previousContentHeight)
         let viewportChanged = dimensionChanged(viewportHeight, from: previousViewportHeight)
+        let widthChanged = dimensionChanged(viewportWidth, from: previousViewportWidth)
         previousContentHeight = contentHeight
         previousViewportHeight = viewportHeight
+        previousViewportWidth = viewportWidth
 
         // Loading cards or collapsing the search header changes geometry, not user intent.
-        if contentChanged || viewportChanged {
+        if contentChanged || viewportChanged || widthChanged {
             previousOffset = offset
             previousTime = time
             return nil
@@ -102,6 +106,7 @@ struct HomeChromeScrollBehavior {
         isInteracting = false
         previousContentHeight = nil
         previousViewportHeight = nil
+        previousViewportWidth = nil
         resetSamples()
     }
 
@@ -289,6 +294,7 @@ struct HomeView: View {
             offset: -metrics.offsetY,
             contentHeight: metrics.contentHeight,
             viewportHeight: metrics.containerHeight,
+            viewportWidth: metrics.containerWidth,
             isWithinScrollRange: metrics.isWithinScrollRange,
             at: ProcessInfo.processInfo.systemUptime
         ) {
