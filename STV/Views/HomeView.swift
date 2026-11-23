@@ -26,30 +26,63 @@ enum HomeTab: Hashable {
     }
 }
 
-/// Pure scroll-state reducer for the home tab bar. Kept independent of SwiftUI so its
-/// direction, velocity and top-reset rules can be verified with deterministic unit tests.
-struct HomeBottomBarScrollBehavior {
+/// One interaction-gated state machine drives both the home search header and root tab bar.
+/// Geometry changes caused by loading or viewport resizing reset the sample instead of changing chrome.
+struct HomeChromeScrollBehavior {
     private(set) var isHidden = false
+    private var isInteracting = false
     private var previousOffset: CGFloat?
     private var previousTime: TimeInterval?
+    private var previousContentHeight: CGFloat?
+    private var previousViewportHeight: CGFloat?
     let revealVelocity: CGFloat
 
     init(revealVelocity: CGFloat = 400) {
         self.revealVelocity = revealVelocity
     }
 
-    mutating func update(offset: CGFloat, at time: TimeInterval) -> Bool? {
+    mutating func setInteracting(_ active: Bool) {
+        guard isInteracting != active else { return }
+        isInteracting = active
+        resetSamples()
+    }
+
+    mutating func update(
+        offset: CGFloat,
+        contentHeight: CGFloat? = nil,
+        viewportHeight: CGFloat? = nil,
+        at time: TimeInterval
+    ) -> Bool? {
+        guard isInteracting else {
+            resetSamples()
+            return nil
+        }
+
+        let contentChanged = dimensionChanged(contentHeight, from: previousContentHeight)
+        let viewportChanged = dimensionChanged(viewportHeight, from: previousViewportHeight)
+        previousContentHeight = contentHeight
+        previousViewportHeight = viewportHeight
+
+        // Loading cards or collapsing the search header changes geometry, not user intent.
+        if contentChanged || viewportChanged {
+            previousOffset = offset
+            previousTime = time
+            return nil
+        }
+
+        if offset > -8 {
+            return setHidden(false)
+        }
+
         let previous = previousOffset
         let previousSampleTime = previousTime
         previousOffset = offset
         previousTime = time
 
-        if offset > -8 {
-            return setHidden(false)
-        }
         guard let previous, let previousSampleTime else { return nil }
         let delta = offset - previous
         guard abs(delta) > 1.5 else { return nil }
+
         if delta < 0 {
             return setHidden(true)
         }
@@ -61,6 +94,18 @@ struct HomeBottomBarScrollBehavior {
 
     mutating func reset() {
         isHidden = false
+        isInteracting = false
+        previousContentHeight = nil
+        previousViewportHeight = nil
+        resetSamples()
+    }
+
+    private func dimensionChanged(_ value: CGFloat?, from previous: CGFloat?) -> Bool {
+        guard let value, let previous else { return false }
+        return abs(value - previous) > 0.5
+    }
+
+    private mutating func resetSamples() {
         previousOffset = nil
         previousTime = nil
     }
@@ -68,6 +113,7 @@ struct HomeBottomBarScrollBehavior {
     private mutating func setHidden(_ hidden: Bool) -> Bool? {
         guard isHidden != hidden else { return nil }
         isHidden = hidden
+        resetSamples()
         return hidden
     }
 }
@@ -151,8 +197,7 @@ struct HomeView: View {
     private var headerInk: Color { STVTheme.text }
     @State private var scrolled: [HomeSource: Bool] = [:]
     @State private var headerHidden = false
-    @State private var lastFeedOffset: [HomeSource: CGFloat] = [:]
-    @State private var bottomBarBehavior = HomeBottomBarScrollBehavior()
+    @State private var chromeScrollBehavior = HomeChromeScrollBehavior()
     private var pinned: Bool { scrolled[source] ?? false }
     @State private var showChannels = false
 
@@ -188,7 +233,9 @@ struct HomeView: View {
                                      tab: Binding(get: { subs[s] ?? s.subs[0] }, set: { subs[s] = $0 }),
                                      onHero: { heroCovers[s] = $0 },
                                      onScrolled: { v in if scrolled[s] != v { scrolled[s] = v } },
-                                     onScrollOffset: { offset in handleFeedOffset(offset, for: s) })
+                                     onScrollOffset: { offset in handleFeedOffset(offset, for: s) },
+                                     onScrollInteraction: { active in handleFeedInteraction(active, for: s) },
+                                     onScrollMetrics: { metrics in handleFeedMetrics(metrics, for: s) })
                             .tag(s)
                     }
                 }
@@ -198,20 +245,16 @@ struct HomeView: View {
         .dsAmbient(visible: !pinned)
         .animation(.easeInOut(duration: 0.22), value: headerHidden)
         .compatOnChange(of: source) { _ in
-            lastFeedOffset.removeAll()
-            bottomBarBehavior.reset()
-            setHeaderHidden(false)
-            setBottomBarHidden(false)
+            chromeScrollBehavior.reset()
+            setChromeHidden(false)
         }
         .onAppear {
             NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: false)
             NotificationCenter.default.post(name: .homeBottomBarVisibilityChanged, object: false)
         }
         .onReceive(NotificationCenter.default.publisher(for: .homeChromeResetRequested)) { _ in
-            lastFeedOffset.removeAll()
-            bottomBarBehavior.reset()
-            setHeaderHidden(false)
-            setBottomBarHidden(false)
+            chromeScrollBehavior.reset()
+            setChromeHidden(false)
         }
         .onDisappear {
             NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: false)
@@ -222,42 +265,37 @@ struct HomeView: View {
         .compatOnChange(of: SourceGate.shared.visibleSites) { if !HomeSource.all.contains(source) { source = .hongguo } }
     }
 
-    private func setHeaderHidden(_ hidden: Bool) {
-        guard headerHidden != hidden else { return }
-        withAnimation(.easeInOut(duration: 0.22)) { headerHidden = hidden }
+    private func setChromeHidden(_ hidden: Bool) {
+        if headerHidden != hidden {
+            withAnimation(.easeInOut(duration: 0.22)) { headerHidden = hidden }
+        }
         NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: hidden)
-    }
-
-    private func setBottomBarHidden(_ hidden: Bool) {
         NotificationCenter.default.post(name: .homeBottomBarVisibilityChanged, object: hidden)
     }
 
-    /// Mirrors guoapp-next: hide on any deliberate upward movement; reveal only on a fast downward flick.
-    /// Reaching the top always restores the bar. Header visibility remains governed by its existing rule.
-    private func handleBottomBarOffset(_ offset: CGFloat, for feedSource: HomeSource) {
+    private func handleFeedInteraction(_ active: Bool, for feedSource: HomeSource) {
         guard feedSource == source else { return }
-        if let hidden = bottomBarBehavior.update(offset: offset, at: ProcessInfo.processInfo.systemUptime) {
-            setBottomBarHidden(hidden)
+        chromeScrollBehavior.setInteracting(active)
+    }
+
+    private func handleFeedMetrics(_ metrics: CompatScrollMetrics, for feedSource: HomeSource) {
+        guard feedSource == source else { return }
+        if let hidden = chromeScrollBehavior.update(
+            offset: -metrics.offsetY,
+            contentHeight: metrics.contentHeight,
+            viewportHeight: metrics.containerHeight,
+            at: ProcessInfo.processInfo.systemUptime
+        ) {
+            setChromeHidden(hidden)
         }
     }
 
+    /// iOS 16-17 preference-key fallback; only accepted while a vertical user drag is active.
     private func handleFeedOffset(_ offset: CGFloat, for feedSource: HomeSource) {
-        // TabView keeps adjacent pages alive; only the selected source may drive global chrome.
-        guard feedSource == source else { return }
-        handleBottomBarOffset(offset, for: feedSource)
-        let previous = lastFeedOffset[feedSource]
-        lastFeedOffset[feedSource] = offset
-        guard let previous else {
-            if offset < -18 { setHeaderHidden(true) }
-            return
-        }
-        let delta = offset - previous
-        guard abs(delta) > 1.5 else { return }
-        if offset > -8 || delta > 1.5 {
-            setHeaderHidden(false)
-        } else if delta < -1.5, offset < -18 {
-            setHeaderHidden(true)
-        }
+        handleFeedMetrics(
+            CompatScrollMetrics(offsetY: -offset, contentHeight: nil, containerHeight: nil),
+            for: feedSource
+        )
     }
 
     // MARK: Header (search + filter, source bar)
@@ -355,6 +393,8 @@ private struct HomeFeedPage: View {
     var onHero: (String) -> Void
     var onScrolled: (Bool) -> Void = { _ in }
     var onScrollOffset: (CGFloat) -> Void = { _ in }
+    var onScrollInteraction: (Bool) -> Void = { _ in }
+    var onScrollMetrics: (CompatScrollMetrics) -> Void = { _ in }
     @State private var legacyChannels: [HuangguoChannel] = []
     @State private var legacyError: Error?
     @State private var heroIndex = 0
@@ -371,7 +411,7 @@ private struct HomeFeedPage: View {
 
     var body: some View {
         if case .site(let source) = tab, source.cmsKey != nil || source.pluginID != nil {
-            DynamicSiteFeed(source: source, onHero: onHero, onScrollOffset: onScrollOffset)
+            DynamicSiteFeed(source: source, onHero: onHero, onScrollOffset: onScrollOffset, onScrollInteraction: onScrollInteraction, onScrollMetrics: onScrollMetrics)
         } else {
             rankFeed
         }
@@ -399,7 +439,9 @@ private struct HomeFeedPage: View {
                     sections
                 }
             }
-            .padding(.bottom, 24)
+            // Fixed scroll tail keeps the last card reachable above the floating tab bar.
+            // It does not alter the viewport when the bar is shown or hidden.
+            .padding(.bottom, 96)
             .animation(.easeOut(duration: 0.25), value: heroPicks.isEmpty)
         }
         .scrollIndicators(.hidden)
@@ -407,7 +449,8 @@ private struct HomeFeedPage: View {
         .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
             if #unavailable(iOS 18.0) { onScrollOffset(offset) }
         }
-        .compatOnScrollY { onScrollOffset(-$0) }
+        .compatOnScrollInteraction { onScrollInteraction($0) }
+        .compatOnScrollMetrics { onScrollMetrics($0) }
         .compatDefaultScrollAnchor(Self.debugAnchor)
         .compatOnScrolled(threshold: 4) { onScrolled($0) }
         .accessibilityIdentifier("home.page.\(source.label)")
@@ -517,6 +560,8 @@ private struct DynamicSiteFeed: View {
     let source: DramaSource
     var onHero: (String) -> Void
     var onScrollOffset: (CGFloat) -> Void = { _ in }
+    var onScrollInteraction: (Bool) -> Void = { _ in }
+    var onScrollMetrics: (CompatScrollMetrics) -> Void = { _ in }
     @State private var categories: [SiteCategory] = []
     @State private var selected = ""
     @StateObject private var pager = Pager()
@@ -540,14 +585,17 @@ private struct DynamicSiteFeed: View {
                     NumberedGrid(items: pager.items, numbered: false, hasMore: pager.hasMore, loading: pager.isLoading) { pager.loadMore() }
                 }
             }
-            .padding(.vertical, 8)
+            // Fixed tail lets the last grid row scroll clear of the floating navigation.
+            .padding(.top, 8)
+            .padding(.bottom, 96)
         }
         .scrollIndicators(.hidden)
         .coordinateSpace(name: "home.feed.scroll")
         .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
             if #unavailable(iOS 18.0) { onScrollOffset(offset) }
         }
-        .compatOnScrollY { onScrollOffset(-$0) }
+        .compatOnScrollInteraction { onScrollInteraction($0) }
+        .compatOnScrollMetrics { onScrollMetrics($0) }
         .accessibilityIdentifier("home.page.\(source.label)")
         .refreshable { await refresh() }
         .task { await refresh() }
