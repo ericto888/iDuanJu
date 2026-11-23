@@ -29,11 +29,17 @@ struct RootTabView: View {
                 }
                 .tint(STVTheme.accent)
                 .overlay(alignment: .bottom) {
-                    if showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden) {
+                    if showNav && !metrics.useRail {
+                        let hideHomeBar = tab == 0 && homeBottomBarHidden
                         GlassTabBar(selection: $tab, items: Self.items, searchTag: 4) { i in
                             if i == tab { paths[i] = NavigationPath() }
                         }
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        // Keep the bar mounted while hiding it. A full-height downward
+                        // offset prevents the glass material from peeking into the home feed.
+                        .offset(y: hideHomeBar ? 180 : 0)
+                        .opacity(hideHomeBar ? 0 : 1)
+                        .allowsHitTesting(!hideHomeBar)
+                        .accessibilityHidden(hideHomeBar)
                     }
                 }
             }
