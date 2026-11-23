@@ -53,6 +53,7 @@ struct PlayerScreen: View {
     @State private var speedBaseIndex = 0
     @State private var lastStepOffset = 0
     @State private var padDrawerOpen = true
+    @State private var nextDramaPick: NextDramaPick?
     /// Feed content offset (pt): the shared video layer rides along with the page in either orientation.
     @State private var feedScrollY: CGFloat = 0
     /// Running double-tap seek (+10/+20/… s) and which side it is on; drives the side bubble.
@@ -156,6 +157,29 @@ struct PlayerScreen: View {
                             .contentShape(Rectangle()).onTapGesture { closePanel() }
                             .accessibilityIdentifier("player.scrim")
                     }
+                    if co.finaleEnded, let pick = nextDramaPick, !co.pipActive {
+                        NextDramaOverlayCard(
+                            pick: pick,
+                            paused: panel != nil,
+                            onPlayNow: {
+                                co.clearFinale()
+                                onSwitchSeries(pick.series)
+                            },
+                            onShuffle: {
+                                Task {
+                                    await NextDramaRecommender.shared.skip(pick.series.seriesId)
+                                    let watched = Set(library.continueWatching.map(\.series.seriesId))
+                                    if let d = co.detail {
+                                        nextDramaPick = await NextDramaRecommender.shared.pickNextDrama(current: d, seasons: seasons, watched: watched)
+                                    }
+                                    if nextDramaPick == nil { co.clearFinale() }
+                                }
+                            },
+                            onCancel: { co.clearFinale() }
+                        )
+                        .position(x: full.width / 2, y: full.height / 2)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    }
                     if co.pipActive {
                         Button { co.togglePiP() } label: {
                             Label("返回播放器", systemImage: "pip.exit")
@@ -254,6 +278,13 @@ struct PlayerScreen: View {
         .environment(\.colorScheme, .dark)
         .persistentSystemOverlays(.hidden)
         .animation(.easeOut(duration: 0.18), value: panel)
+        .task(id: co.current) {
+            guard !series.source.isLongVideo, suppliedDetail == nil, co.autoNextDrama,
+                  let cur = co.current, let d = co.detail, !co.episodes.isEmpty,
+                  cur >= co.episodes.count - 2, nextDramaPick == nil else { return }
+            let watched = Set(library.continueWatching.map(\.series.seriesId))
+            nextDramaPick = await NextDramaRecommender.shared.pickNextDrama(current: d, seasons: seasons, watched: watched)
+        }
         .task {
             // Portrait by default for everything (landscape videos play centred). Rotating the phone (when
             // the system rotation lock is off) or the 横屏 button switches to landscape.
@@ -284,18 +315,25 @@ struct PlayerScreen: View {
                 centerSuppressed = true
                 if co.lastAdvanceWasAuto {
                     withAnimation(.easeOut(duration: 0.2)) { showChrome = false }
-                } else {
-                    flashChrome()
+                } else if showChrome {
+                    rearmAutoHide()
                 }
-            } else {
-                flashChrome()
             }
         }
         .compatOnChange(of: co.readyIndex) { index in
             guard index != nil else { return }
             showLoadingSpinner = false
-            if co.lastAdvanceWasAuto { return }
-            if centerSuppressed { showChrome = true; rearmAutoHide() } else { flashChrome() }
+            if showChrome && !co.lastAdvanceWasAuto { rearmAutoHide() }
+        }
+        .task(id: co.readyIndex) {
+            guard let idx = co.readyIndex else {
+                revealedIndex = nil
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(90))
+            guard !Task.isCancelled, co.readyIndex == idx else { return }
+            revealedIndex = idx
+            releaseHeldIfSettled()
         }
         .task(id: "\(co.current ?? -1)|\(co.readyIndex ?? -1)|\(co.current.flatMap { co.errors[$0] } != nil)") {
             guard let cur = co.current, co.readyIndex != cur, co.errors[cur] == nil else {
@@ -468,13 +506,16 @@ struct PlayerScreen: View {
         .overlay(alignment: .leading) { Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1) }
     }
 
-    /// Drop the previous episode's still once the new one is playing and the page has stopped moving.
+    /// Drop the previous episode's still once the new one has rendered frame 0 and the page has stopped moving.
     private func releaseHeldIfSettled() {
-        guard co.heldFrame != nil, let r = co.readyIndex, r == co.current, feedSettled else { return }
+        guard co.heldFrame != nil, let r = revealedIndex, r == co.current, feedSettled else { return }
         co.releaseHeldFrame()
     }
     @State private var feedSettled = true
     @State private var showLoadingSpinner = false
+    /// Trails `co.readyIndex` by ~90 ms so MPVMetalLayer / AVPlayerLayer presents frame 0 before
+    /// the pre-decoded `firstFrames[i]` cover lifts, preventing any 1-frame black flash.
+    @State private var revealedIndex: Int?
 
     /// Offset of page `index` from rest, capped at one page either way.
     private func pageDrift(_ index: Int, page: CGFloat) -> CGFloat {
@@ -484,10 +525,10 @@ struct PlayerScreen: View {
 
     private func stage(_ i: Int) -> some View {
         ZStack {
-            if co.readyIndex != i {
+            if revealedIndex != i {
                 if let frame = co.firstFrames[i], co.errors[i] == nil {
                     // Douyin-style: show the pre-decoded first video frame of episode `i` while swiping in
-                    // and during the ~30 ms engine handoff, so switching never flashes a poster cover or black.
+                    // and during the ~90 ms render handoff, so switching never flashes a poster cover or black.
                     Color.black
                     Image(uiImage: frame)
                         .resizable()
@@ -745,6 +786,12 @@ struct PlayerScreen: View {
         Menu {
             Toggle(isOn: $showTech) { Label("技术信息", systemImage: "info.circle") }
             Toggle(isOn: Binding(get: { co.autoNext }, set: { co.autoNext = $0 })) { Label("自动连播", systemImage: "repeat") }
+            if !series.source.isLongVideo && suppliedDetail == nil {
+                Toggle(isOn: Binding(get: { co.autoNextDrama }, set: {
+                    co.autoNextDrama = $0
+                    showOSD($0 ? "播完连刷推荐：已开启" : "播完连刷推荐：已关闭")
+                })) { Label("播完连刷推荐", systemImage: "sparkles.tv") }
+            }
             Menu {
                 ForEach([(0, "关闭"), (1, "标准"), (2, "强效")], id: \.0) { lvl, label in
                     Button {

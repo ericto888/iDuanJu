@@ -7,27 +7,43 @@ import WebKit
 /// and polls `HongguoWebAccount.shared.refreshProfile()` until login succeeds.
 struct HongguoLoginView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var account = HongguoWebAccount.shared
     @State private var qrImage: UIImage?
     @State private var qrStatus: String = "loading"
     @State private var refreshNonce = 0
+    @State private var checkNonce = 0
     @State private var saveNotice: String?
     @State private var loggedInName: String?
 
     var body: some View {
         NavigationStack {
             ZStack {
-                STVTheme.bg.ignoresSafeArea()
-                // Hidden desktop WKWebView that opens the Hongguo login modal and streams QR updates.
-                HongguoQRWebView(refreshNonce: refreshNonce) { dataURL, status in
-                    qrStatus = status
-                    if let img = Self.decodeDataURL(dataURL) {
-                        qrImage = img
+                // Keep WKWebView at full opacity (covered by opaque STVTheme.bg) so iOS WebKit does not
+                // freeze or throttle its QR-polling timers when returning from the Hongguo app.
+                HongguoQRWebView(
+                    refreshNonce: refreshNonce,
+                    checkNonce: checkNonce,
+                    onQrUpdate: { dataURL, status in
+                        qrStatus = status
+                        if let img = Self.decodeDataURL(dataURL) {
+                            qrImage = img
+                        }
+                    },
+                    onLoggedIn: { nickname, avatarUrl in
+                        guard loggedInName == nil else { return }
+                        loggedInName = nickname
+                        Task {
+                            await account.acceptWebViewLogin(nickname: nickname, avatarUrl: avatarUrl)
+                            try? await Task.sleep(for: .milliseconds(600))
+                            dismiss()
+                        }
                     }
-                }
+                )
                 .frame(width: 1280, height: 900)
-                .opacity(0.001)
                 .allowsHitTesting(false)
+
+                STVTheme.bg.ignoresSafeArea()
 
                 ScrollView {
                     VStack(spacing: 20) {
@@ -138,6 +154,26 @@ struct HongguoLoginView: View {
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 24)
                         }
+
+                        if loggedInName == nil && qrImage != nil {
+                            Button {
+                                checkNonce += 1
+                                Task {
+                                    if let p = await account.refreshProfile() {
+                                        loggedInName = p.nickname
+                                        try? await Task.sleep(for: .milliseconds(600))
+                                        dismiss()
+                                    } else {
+                                        saveNotice = "正在同步登录状态，若刚在红果确认请稍等 1-2 秒再点一次"
+                                    }
+                                }
+                            } label: {
+                                Text("我已扫码确认，立即检查登录状态")
+                                    .font(.footnote.weight(.medium))
+                                    .foregroundStyle(STVTheme.accent)
+                                    .padding(.vertical, 6)
+                            }
+                        }
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 32)
@@ -149,10 +185,25 @@ struct HongguoLoginView: View {
                     Button("关闭") { dismiss() }
                 }
             }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active, loggedInName == nil {
+                    checkNonce += 1
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(600))
+                        guard !Task.isCancelled, loggedInName == nil else { return }
+                        if let p = await account.refreshProfile() {
+                            loggedInName = p.nickname
+                            try? await Task.sleep(for: .milliseconds(600))
+                            dismiss()
+                        }
+                    }
+                }
+            }
             .task {
                 while !Task.isCancelled && loggedInName == nil {
                     try? await Task.sleep(for: .milliseconds(2500))
                     guard !Task.isCancelled else { break }
+                    checkNonce += 1
                     if let p = await account.refreshProfile() {
                         loggedInName = p.nickname
                         try? await Task.sleep(for: .milliseconds(700))
@@ -184,9 +235,11 @@ struct HongguoLoginView: View {
 
 private struct HongguoQRWebView: UIViewRepresentable {
     let refreshNonce: Int
+    let checkNonce: Int
     let onQrUpdate: (String, String) -> Void
+    let onLoggedIn: (String, String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onQrUpdate: onQrUpdate) }
+    func makeCoordinator() -> Coordinator { Coordinator(onQrUpdate: onQrUpdate, onLoggedIn: onLoggedIn) }
 
     func makeUIView(context: Context) -> WKWebView {
         let ucc = WKUserContentController()
@@ -211,6 +264,10 @@ private struct HongguoQRWebView: UIViewRepresentable {
             context.coordinator.lastNonce = refreshNonce
             uiView.evaluateJavaScript("window.__idjActions && window.__idjActions.refreshQr();", completionHandler: nil)
         }
+        if context.coordinator.lastCheckNonce != checkNonce {
+            context.coordinator.lastCheckNonce = checkNonce
+            uiView.evaluateJavaScript("window.__idjActions && window.__idjActions.checkLogin();", completionHandler: nil)
+        }
     }
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
@@ -220,16 +277,29 @@ private struct HongguoQRWebView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let onQrUpdate: (String, String) -> Void
+        let onLoggedIn: (String, String) -> Void
         weak var webView: WKWebView?
         var lastNonce = 0
+        var lastCheckNonce = 0
 
-        init(onQrUpdate: @escaping (String, String) -> Void) {
+        init(onQrUpdate: @escaping (String, String) -> Void, onLoggedIn: @escaping (String, String) -> Void) {
             self.onQrUpdate = onQrUpdate
+            self.onLoggedIn = onLoggedIn
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "idjLogin",
                   let dict = message.body as? [String: Any] else { return }
+            if (dict["loggedIn"] as? Bool) == true {
+                let nickname = dict["nickname"] as? String ?? ""
+                let avatarUrl = dict["avatarUrl"] as? String ?? ""
+                if !nickname.isEmpty {
+                    DispatchQueue.main.async { [onLoggedIn] in
+                        onLoggedIn(nickname, avatarUrl)
+                    }
+                }
+                return
+            }
             let src = dict["qrSrc"] as? String ?? ""
             let status = dict["qrStatus"] as? String ?? "loading"
             DispatchQueue.main.async { [onQrUpdate] in
@@ -254,6 +324,26 @@ private struct HongguoQRWebView: UIViewRepresentable {
         function findDialog() {
           return document.querySelector('[role="dialog"], [class*="pc-login-dialog"]');
         }
+        function checkProfileInWebView() {
+          if (window.__idjLoggedInNotified) return;
+          fetch('/api/pc/profile', { credentials: 'include', headers: { 'Accept': 'application/json' } })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(j) {
+              var p = j && j.profile;
+              var nick = p && (p.nickname || p.name || '').trim();
+              if (nick) {
+                window.__idjLoggedInNotified = true;
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.idjLogin) {
+                  window.webkit.messageHandlers.idjLogin.postMessage({
+                    loggedIn: true,
+                    nickname: nick,
+                    avatarUrl: (p.avatarUrl || p.avatar_url || '').trim()
+                  });
+                }
+              }
+            })
+            .catch(function() {});
+        }
         window.__idjActions = {
           refreshQr: function() {
             var dlg = findDialog();
@@ -268,6 +358,9 @@ private struct HongguoQRWebView: UIViewRepresentable {
             }
             location.reload();
             return 'reloaded';
+          },
+          checkLogin: function() {
+            checkProfileInWebView();
           }
         };
         if (window.__idjLoginOpenTimer) clearInterval(window.__idjLoginOpenTimer);
@@ -342,8 +435,15 @@ private struct HongguoQRWebView: UIViewRepresentable {
                 window.webkit.messageHandlers.idjLogin.postMessage({ qrSrc: qrSrc, qrStatus: qrStatus });
               }
             }
+            checkProfileInWebView();
           } catch (e) {}
         }, 1200);
+        if (!window.__idjVisBound) {
+          window.__idjVisBound = true;
+          document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) checkProfileInWebView();
+          });
+        }
       } catch (e) {}
     })();
     """

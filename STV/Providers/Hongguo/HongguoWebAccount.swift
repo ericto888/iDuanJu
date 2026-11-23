@@ -71,6 +71,17 @@ final class HongguoWebAccount: ObservableObject {
         }
     }
 
+    /// Called when the in-app WKWebView directly observes a logged-in `/api/pc/profile` response.
+    /// Snapshots cookies immediately (and retries briefly for WebKit's cookie store flush) and persists the profile.
+    func acceptWebViewLogin(nickname: String, avatarUrl: String) async {
+        let trimmed = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        saveProfile(Profile(nickname: trimmed, avatarUrl: avatarUrl.trimmingCharacters(in: .whitespacesAndNewlines)))
+        _ = await syncCookiesFromWebView()
+        try? await Task.sleep(for: .milliseconds(400))
+        _ = await syncCookiesFromWebView()
+    }
+
     @discardableResult
     func refreshProfile() async -> Profile? {
         syncing = true

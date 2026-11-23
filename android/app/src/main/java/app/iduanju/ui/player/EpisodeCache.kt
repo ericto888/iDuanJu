@@ -7,6 +7,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineStart
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -72,7 +73,10 @@ object EpisodeCache {
             val task = scope.async(start = CoroutineStart.LAZY) {
                 load(ep, onStatus).also { p ->
                     ready[ep.vid] = p
-                    if (p.uri.startsWith("/") && !p.hls) cacheFirstFrame(ep.vid, p.uri)
+                    // Extract frame 0 asynchronously so it NEVER delays or blocks playback start.
+                    if (p.uri.startsWith("/") && !p.hls) {
+                        scope.launch { cacheFirstFrame(ep.vid, p.uri) }
+                    }
                 }
             }
             inflight[ep.vid] = task

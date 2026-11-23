@@ -199,47 +199,28 @@ fun PlayerScreen(seriesId: String, startEp: Int, onBack: () -> Unit, queue: Vide
             androidx.media3.exoplayer.source.DefaultMediaSourceFactory(androidx.media3.datasource.DefaultDataSource.Factory(ctx, httpFactory))
         ).build().also { it.playWhenReady = true }
     }
-    // Douyin-style standby player: pre-decodes the next episode's first frame onto a dedicated TextureView
-    // so swiping up reveals the actual next video frame (never a poster cover) and hands off with zero flash.
-    val standbyHttpFactory = remember { androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(EpisodeCache.http).setUserAgent(app.iduanju.core.cms.MacCMS.UA) }
-    val standbyPlayer = remember(queue, fixture) {
-        if (queue == null && !fixture) {
-            ExoPlayer.Builder(ctx, DecoderCaps.renderers(ctx)).setMediaSourceFactory(
-                androidx.media3.exoplayer.source.DefaultMediaSourceFactory(androidx.media3.datasource.DefaultDataSource.Factory(ctx, standbyHttpFactory))
-            ).build().apply { playWhenReady = false; volume = 0f }
-        } else null
-    }
-    var standbyLoadedVid by remember { mutableStateOf<String?>(null) }
-    var standbyReadyVid by remember { mutableStateOf<String?>(null) }
-    var handoffVid by remember { mutableStateOf<String?>(null) }
-    DisposableEffect(standbyPlayer) {
-        val sp = standbyPlayer ?: return@DisposableEffect onDispose {}
-        val sl = object : Player.Listener {
-            override fun onRenderedFirstFrame() {
-                standbyReadyVid = standbyLoadedVid
-            }
-        }
-        sp.addListener(sl)
-        onDispose { sp.removeListener(sl); sp.release() }
-    }
-    LaunchedEffect(handoffVid, error) {
+    // Lightweight first-frame bitmap handoff during swipe/auto-next commit (no second ExoPlayer/MediaCodec).
+    var handoffBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(handoffBitmap, error) {
         if (error != null) {
-            handoffVid = null
-        } else if (handoffVid != null) {
-            delay(2_500)
-            handoffVid = null
+            handoffBitmap = null
+        } else if (handoffBitmap != null) {
+            delay(2_000)
+            handoffBitmap = null
         }
     }
-    // One persistent GlEffect; level / sdrToHdr are @Volatile and picked up on the next frame.
+    // One persistent GlEffect; only installed when GPU sharpen or SDR->HDR is actually enabled so default
+    // playback stays on the direct hardware surface (avoids VideoFrameProcessor black screens on some SoCs).
     val enhanceEffect = remember(player) { VideoEnhanceEffect(enhanceLevel, sdrToHdr && !isNativeHdr) }
     var enhanceFailed by remember(player) { mutableStateOf(false) }
+    val needVideoEffect = !enhanceFailed && (enhanceLevel > 0 || (sdrToHdr && !isNativeHdr))
     fun syncEnhance() {
         enhanceEffect.level = if (enhanceFailed) 0 else enhanceLevel
         enhanceEffect.sdrToHdr = !enhanceFailed && sdrToHdr && !isNativeHdr
         syncWindowAndFallback(activity, textureView, enhanceEffect, isNativeHdr)
     }
-    LaunchedEffect(player, enhanceFailed) {
-        installVideoEnhance(player, if (enhanceFailed) null else enhanceEffect)
+    LaunchedEffect(player, needVideoEffect) {
+        installVideoEnhance(player, if (needVideoEffect) enhanceEffect else null)
     }
     LaunchedEffect(enhanceLevel, sdrToHdr, isNativeHdr, enhanceFailed, textureView) { syncEnhance() }
     DisposableEffect(textureView) {
@@ -272,10 +253,10 @@ fun PlayerScreen(seriesId: String, startEp: Int, onBack: () -> Unit, queue: Vide
     var firstFrameRendered by remember { mutableStateOf(false) }
     var showBufferingSpinner by remember { mutableStateOf(false) }
     LaunchedEffect(epIndex, seriesId) {
-        if (handoffVid == null) firstFrameRendered = false
+        if (handoffBitmap == null) firstFrameRendered = false
     }
-    LaunchedEffect(buffering, firstFrameRendered, status, error, handoffVid) {
-        val waiting = error == null && status.isEmpty() && handoffVid == null && (buffering || !firstFrameRendered)
+    LaunchedEffect(buffering, firstFrameRendered, status, error, handoffBitmap) {
+        val waiting = error == null && status.isEmpty() && handoffBitmap == null && (buffering || !firstFrameRendered)
         if (!waiting) {
             showBufferingSpinner = false
         } else {
@@ -300,7 +281,7 @@ fun PlayerScreen(seriesId: String, startEp: Int, onBack: () -> Unit, queue: Vide
                     if (epIndex + 1 < n) {
                         if (autoNext) {
                             val nextVid = detail?.episodes?.getOrNull(epIndex + 1)?.vid
-                            if (nextVid != null && standbyReadyVid == nextVid) handoffVid = nextVid
+                            if (nextVid != null) handoffBitmap = EpisodeCache.peekFirstFrame(nextVid)
                             epIndex += 1
                         }
                     // Final episode finished: 播完连刷推荐 countdown (shown as soon as a pick is ready).
@@ -346,7 +327,7 @@ fun PlayerScreen(seriesId: String, startEp: Int, onBack: () -> Unit, queue: Vide
             }
             // videoFormat/audioFormat are populated once the renderers start, after onTracksChanged
             override fun onRenderedFirstFrame() {
-                handoffVid = null
+                handoffBitmap = null
                 firstFrameRendered = true
                 buffering = false
                 tags = TechTags.from(player, quality)
@@ -485,7 +466,7 @@ fun PlayerScreen(seriesId: String, startEp: Int, onBack: () -> Unit, queue: Vide
             player.setMediaItem(MediaItem.fromUri(android.net.Uri.fromFile(local)))
             seekExtractor.setSource(local.absolutePath)
             syncEnhance()
-            installVideoEnhance(player, if (enhanceFailed) null else enhanceEffect)
+            installVideoEnhance(player, if (needVideoEffect) enhanceEffect else null)
             status="";player.prepare();player.play()
             return@LaunchedEffect
         }
@@ -508,40 +489,19 @@ fun PlayerScreen(seriesId: String, startEp: Int, onBack: () -> Unit, queue: Vide
             p.note?.let { android.util.Log.i("IDJ", "hls: $it") }
             player.setPlaybackSpeed(speed)
             syncEnhance()
-            installVideoEnhance(player, if (enhanceFailed) null else enhanceEffect)
+            installVideoEnhance(player, if (needVideoEffect) enhanceEffect else null)
             val resume = lib.progress(seriesId)
             if (resume != null && resume.episodeIndex == epIndex && resume.seconds > 3 && resume.fraction < 0.95f) player.seekTo((resume.seconds * 1000).toLong())
             player.prepare(); player.play()
-            // Precache next 2 episodes onto disk shortly after playback starts AND pre-decode next episode's
-            // first frame on the standby player for Douyin-style zero-cover, zero-flash switching.
+            // Precache next 2 episodes onto disk (+ async first-frame bitmap) without a second ExoPlayer
+            // so hardware decoders and audio focus stay dedicated to the active playback.
             if (IdjApp.instance.settings.prefetchEnabled) {
                 d.episodes.getOrNull(epIndex + 1)?.let { next1 ->
-                    delay(350)
-                    runCatching {
-                        val nextPlayable = EpisodeCache.peek(next1.vid) ?: EpisodeCache.get(next1).await()
-                        val sp = standbyPlayer
-                        if (sp != null && standbyLoadedVid != next1.vid) {
-                            // Wait briefly if standbyPlayer is still finishing a handoff for the current episode.
-                            var waited = 0
-                            while (handoffVid != null && waited < 40) { delay(50); waited++ }
-                            standbyHttpFactory.setUserAgent(nextPlayable.headers.entries.firstOrNull { it.key.equals("user-agent", true) }?.value ?: app.iduanju.core.cms.MacCMS.UA)
-                            standbyHttpFactory.setDefaultRequestProperties(nextPlayable.headers.filterKeys { !it.equals("user-agent", true) })
-                            standbyReadyVid = null
-                            standbyLoadedVid = next1.vid
-                            sp.setMediaItem(
-                                MediaItem.Builder()
-                                    .setUri(if (nextPlayable.uri.startsWith("/")) android.net.Uri.fromFile(java.io.File(nextPlayable.uri)) else android.net.Uri.parse(nextPlayable.uri))
-                                    .apply { if (nextPlayable.hls) setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8) }
-                                    .build()
-                            )
-                            sp.playWhenReady = false
-                            sp.volume = 0f
-                            sp.prepare()
-                        }
-                    }
+                    delay(2_000)
+                    EpisodeCache.preload(next1)
                 }
                 d.episodes.getOrNull(epIndex + 2)?.let { next2 ->
-                    delay(800)
+                    delay(2_500)
                     EpisodeCache.preload(next2)
                 }
             }
@@ -864,47 +824,22 @@ fun PlayerScreen(seriesId: String, startEp: Int, onBack: () -> Unit, queue: Vide
             modifier = Modifier.fillMaxSize().clipToBounds().graphicsLayer { scaleX = videoScale; scaleY = videoScale },
         )
         }
-        // Douyin-style adjacent-episode stage:
-        // 1) Standby PlayerView stays mounted off-screen so ExoPlayer pre-decodes next episode's frame 0 on GPU.
-        //    While dragging up, it slides in directly from the bottom (real video frame, never a poster cover),
-        //    and during commit handoff it stays pinned at y = 0 until the main player renders frame 0.
-        val nextEp = detail?.episodes?.getOrNull(epIndex + 1)
-        val epDragDir by remember { derivedStateOf { if (episodeDragY < -0.5f) 1 else if (episodeDragY > 0.5f) -1 else 0 } }
-        val previewEp = if (epDragDir != 0) detail?.episodes?.getOrNull(epIndex + epDragDir) else null
-        val showStandbyOnScreen = handoffVid != null || (epDragDir > 0 && nextEp != null && standbyReadyVid == nextEp.vid)
-        if (standbyPlayer != null) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-                    .graphicsLayer {
-                        translationY = when {
-                            handoffVid != null -> 0f
-                            epDragDir > 0 && nextEp != null && standbyReadyVid == nextEp.vid -> episodeDragY + containerH
-                            else -> containerH
-                        }
-                        alpha = if (showStandbyOnScreen) 1f else 0.001f
-                    },
-            ) {
-                AndroidView(
-                    factory = {
-                        (android.view.LayoutInflater.from(it).inflate(app.iduanju.R.layout.player_texture_view, null) as PlayerView).apply {
-                            useController = false
-                            setBackgroundColor(android.graphics.Color.BLACK)
-                            setShutterBackgroundColor(android.graphics.Color.BLACK)
-                            setKeepContentOnPlayerReset(true)
-                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                            this.player = standbyPlayer
-                        }
-                    },
+        // Seamless first-frame bitmap handoff during swipe/auto-next commit until the single ExoPlayer
+        // renders frame 0 of the new episode (zero second ExoPlayer / MediaCodec conflict).
+        handoffBitmap?.let { bmp ->
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                androidx.compose.foundation.Image(
+                    bitmap = bmp.asImageBitmap(),
+                    contentDescription = null,
                     modifier = Modifier.fillMaxSize().clipToBounds().graphicsLayer { scaleX = videoScale; scaleY = videoScale },
+                    contentScale = if (fillMode) androidx.compose.ui.layout.ContentScale.Crop else androidx.compose.ui.layout.ContentScale.Fit,
                 )
             }
         }
-        // Fallback adjacent-episode frame (previous episode or when next episode hasn't finished pre-decoding yet):
-        // shows cached first video frame if available, otherwise clean black + subtle episode number (never a poster cover).
-        if (previewEp != null && !(epDragDir > 0 && standbyReadyVid == previewEp.vid)) {
+        // Adjacent-episode drag preview: renders the cached first video frame (or clean black) instead of a poster cover.
+        val epDragDir by remember { derivedStateOf { if (episodeDragY < -0.5f) 1 else if (episodeDragY > 0.5f) -1 else 0 } }
+        val previewEp = if (epDragDir != 0) detail?.episodes?.getOrNull(epIndex + epDragDir) else null
+        if (previewEp != null) {
             EpisodeFramePreview(
                 ep = previewEp,
                 fillMode = fillMode,
@@ -997,8 +932,8 @@ fun PlayerScreen(seriesId: String, startEp: Int, onBack: () -> Unit, queue: Vide
                                         androidx.compose.animation.core.animate(off, if (off < 0f) -h else h,
                                             animationSpec = androidx.compose.animation.core.tween(200)) { v, _ -> episodeDragY = v }
                                         val targetVid = detail?.episodes?.getOrNull(target)?.vid
-                                        if (off < 0f && targetVid != null && standbyReadyVid == targetVid) {
-                                            handoffVid = targetVid
+                                        if (targetVid != null) {
+                                            handoffBitmap = EpisodeCache.peekFirstFrame(targetVid)
                                         }
                                         selectEpisode(target)
                                     } finally { episodeDragY = 0f; committing = false }

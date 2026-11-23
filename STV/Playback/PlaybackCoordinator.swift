@@ -117,6 +117,13 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     @Published var autoNext: Bool = UserDefaults.standard.object(forKey: "stv.player.autoNext") as? Bool ?? true {
         didSet { UserDefaults.standard.set(autoNext, forKey: "stv.player.autoNext") }
     }
+    /// 播完连刷推荐: auto-recommend and continue into the next drama after the finale ends.
+    @Published var autoNextDrama: Bool = UserDefaults.standard.object(forKey: "stv.player.autoNextDrama") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(autoNextDrama, forKey: "stv.player.autoNextDrama") }
+    }
+    /// True once the final episode finished playing with `autoNextDrama` enabled (triggers countdown card).
+    @Published private(set) var finaleEnded = false
+    func clearFinale() { if finaleEnded { finaleEnded = false } }
     let thumbnails = PlayerThumbnailer()
     /// Time under the finger while the progress bar is dragged (time row follows it).
     @Published var scrubPreview: Double?
@@ -319,6 +326,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         mpv?.stop()
         readyIndex = nil
         current = nil
+        finaleEnded = false
         backgrounded = false
         interrupted = false
         recoverInterruptedTransport = false
@@ -573,6 +581,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         activation = token
         if let r = readyIndex, heldFrame == nil, let img = Self.snapshot(engine.surface) { heldFrame = (img, r) }
         readyIndex = nil
+        finaleEnded = false
         if pipActive { continuePiP = true }
         // A source/renderer reload can deactivate the shared session independently of this flag.
         // The next play must acquire it again rather than trust the previous episode's value.
@@ -613,7 +622,17 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
                 guard activation == token else { return }
                 let next = chooseEngine(i, src)
                 switchEngine(to: next)
-                tech = nil; videoSize = .zero; audioOptions = []; subtitleOptions = []; audioSelected = nil; subtitleSelected = nil; subtitleText = nil
+                audioOptions = []; subtitleOptions = []; audioSelected = nil; subtitleSelected = nil; subtitleText = nil
+                if case .file(let localURL) = src, firstFrames[i] == nil {
+                    Task { [weak self] in
+                        if let frame = await Self.extractFirstFrame(from: localURL) {
+                            await MainActor.run {
+                                guard let self, self.activation == token else { return }
+                                self.firstFrames[i] = frame
+                            }
+                        }
+                    }
+                }
                 thumbnails.attach(Self.thumbnailAsset(src, stream: chosen[i]))
                 var start: Double?
                 if let p = LibraryStore.shared.progress(for: series), p.episodeIndex == i, p.seconds > 3,
@@ -631,7 +650,14 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
                         self.onSleepTriggered?("本集已播完，定时暂停")
                         return
                     }
-                    if self.wantsPlayback, i + 1 < self.episodes.count, self.autoNext { self.select(i + 1, autoAdvance: true) } else { self.setPaused(true) }
+                    if self.wantsPlayback, i + 1 < self.episodes.count, self.autoNext {
+                        self.select(i + 1, autoAdvance: true)
+                    } else if self.wantsPlayback, i + 1 >= self.episodes.count, self.autoNextDrama, !self.series.source.isLongVideo, self.sourceResolver == nil {
+                        self.setPaused(true)
+                        self.finaleEnded = true
+                    } else {
+                        self.setPaused(true)
+                    }
                 }
                 do {
                     try await next.load(src, stream: chosen[i], start: start, title: title)
