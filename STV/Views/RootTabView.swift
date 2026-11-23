@@ -7,6 +7,8 @@ struct RootTabView: View {
     @State private var paths = [NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath()]
     @State private var homeChromeHidden = false
     @State private var homeBottomBarHidden = false
+    @State private var categoryBottomBarHidden = false
+    @State private var profileBottomBarHidden = false
     static let items: [(String, String)] = [("首页", "house.fill"), ("TVBox", "tv.fill"),
                                             ("找剧", "square.grid.2x2.fill"), ("我的", "person.crop.circle.fill")]
     var body: some View {
@@ -30,22 +32,26 @@ struct RootTabView: View {
                 .tint(STVTheme.accent)
                 .overlay(alignment: .bottom) {
                     if showNav && !metrics.useRail {
-                        let hideHomeBar = tab == 0 && homeBottomBarHidden
+                        let hideActiveBar = (tab == 0 && homeBottomBarHidden)
+                            || (tab == 2 && categoryBottomBarHidden)
+                            || (tab == 3 && profileBottomBarHidden)
                         GlassTabBar(selection: $tab, items: Self.items, searchTag: 4) { i in
                             if i == tab { paths[i] = NavigationPath() }
                         }
                         // Keep the bar mounted while hiding it. A full-height downward
                         // offset prevents the glass material from peeking into the home feed.
-                        .offset(y: hideHomeBar ? 180 : 0)
-                        .opacity(hideHomeBar ? 0 : 1)
-                        .allowsHitTesting(!hideHomeBar)
-                        .accessibilityHidden(hideHomeBar)
+                        .offset(y: hideActiveBar ? 180 : 0)
+                        .opacity(hideActiveBar ? 0 : 1)
+                        .allowsHitTesting(!hideActiveBar)
+                        .accessibilityHidden(hideActiveBar)
                     }
                 }
             }
             .background(STVTheme.bg.ignoresSafeArea())
             .environment(\.layoutMetrics, metrics)
             .animation(.spring(response: 0.32, dampingFraction: 0.86), value: homeBottomBarHidden)
+            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: categoryBottomBarHidden)
+            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: profileBottomBarHidden)
             .animation(.spring(response: 0.32, dampingFraction: 0.86), value: paths[tab].isEmpty)
             .animation(.spring(response: 0.32, dampingFraction: 0.86), value: metrics.useRail)
         }
@@ -63,11 +69,23 @@ struct RootTabView: View {
             guard tab == 0, let hidden = note.object as? Bool else { return }
             withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { homeBottomBarHidden = hidden }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .categoryBottomBarVisibilityChanged)) { note in
+            guard tab == 2, let hidden = note.object as? Bool else { return }
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { categoryBottomBarHidden = hidden }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .profileBottomBarVisibilityChanged)) { note in
+            guard tab == 3, let hidden = note.object as? Bool else { return }
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { profileBottomBarHidden = hidden }
+        }
         .compatOnChange(of: tab) { selected in
             if selected != 0 {
                 homeChromeHidden = false
                 homeBottomBarHidden = false
+                categoryBottomBarHidden = false
+                profileBottomBarHidden = false
                 NotificationCenter.default.post(name: .homeChromeResetRequested, object: nil)
+                NotificationCenter.default.post(name: .categoryBottomBarVisibilityChanged, object: false)
+                NotificationCenter.default.post(name: .profileBottomBarVisibilityChanged, object: false)
             }
         }
         // Cold start: restore a saved TDLib login (no network login, nothing is sent).
@@ -209,4 +227,6 @@ extension Notification.Name {
     static let homeChromeVisibilityChanged = Notification.Name("STV.homeChromeVisibilityChanged")
     static let homeBottomBarVisibilityChanged = Notification.Name("STV.homeBottomBarVisibilityChanged")
     static let homeChromeResetRequested = Notification.Name("STV.homeChromeResetRequested")
+    static let categoryBottomBarVisibilityChanged = Notification.Name("STV.categoryBottomBarVisibilityChanged")
+    static let profileBottomBarVisibilityChanged = Notification.Name("STV.profileBottomBarVisibilityChanged")
 }
