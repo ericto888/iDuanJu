@@ -471,7 +471,13 @@ final class PlayerUITests: XCTestCase {
         XCTAssertTrue(popoverGone("player.popover.rates"))
 
         // Fullscreen landscape is locked: rotating the handset upright must not exit it.
-        XCTAssertTrue(el("player.time").waitForExistence(timeout: 4), "landscape time display missing")
+        let playPause = el("player.playPause")
+        let elapsed = el("player.time")
+        let remaining = el("player.remaining")
+        XCTAssertTrue(playPause.waitForExistence(timeout: 4), "landscape play/pause control missing")
+        XCTAssertTrue(elapsed.exists && remaining.exists, "landscape elapsed/remaining time labels missing")
+        XCTAssertLessThan(playPause.frame.minX, elapsed.frame.minX, "play/pause must be left of elapsed time")
+        XCTAssertLessThan(playPause.frame.minX, remaining.frame.minX, "play/pause must be left of remaining time")
         showChrome("player.playPause")
         XCTAssertTrue(el("player.playPause").exists, "landscape play/pause control missing")
         XCTAssertLessThanOrEqual(el("player.title").frame.width, 2, "landscape title must not be visibly rendered")
