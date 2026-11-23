@@ -22,10 +22,10 @@ struct RootTabView: View {
                 }
                 TabView(selection: $tab) {
                     Stack(path: $paths[0], reserveBottomBar: false) { HomeView() }.tag(0)
-                    Stack(path: $paths[1], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { TVBoxHubView() }.tag(1)
-                    Stack(path: $paths[2], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { CategoryView() }.tag(2)
-                    Stack(path: $paths[3], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { ProfileView() }.tag(3)
-                    Stack(path: $paths[4], reserveBottomBar: showNav && !metrics.useRail && !(tab == 0 && homeBottomBarHidden)) { SearchView() }.tag(4)
+                    Stack(path: $paths[1], reserveBottomBar: showNav && !metrics.useRail) { TVBoxHubView() }.tag(1)
+                    Stack(path: $paths[2], reserveBottomBar: showNav && !metrics.useRail) { CategoryView() }.tag(2)
+                    Stack(path: $paths[3], reserveBottomBar: showNav && !metrics.useRail) { ProfileView() }.tag(3)
+                    Stack(path: $paths[4], reserveBottomBar: showNav && !metrics.useRail) { SearchView() }.tag(4)
                 }
                 .tint(STVTheme.accent)
                 .overlay(alignment: .bottom) {
