@@ -86,6 +86,8 @@ struct PlayerScreen: View {
         if co.videoSize.width > 0, co.videoSize.height > 0 { return co.videoSize.width / co.videoSize.height }
         return series.orientation == "portrait" || (!series.source.isLongVideo && series.orientation != "landscape") ? 9.0 / 16 : 16.0 / 9
     }
+    /// True for native portrait-format video, independent of the device's current orientation.
+    private var isPortraitVideo: Bool { aspect < 1.0 }
 
     /// Immutable render viewport. Expanded/compact controls are independent overlays, never an inset.
     private func videoArea(_ full: CGSize) -> CGRect {
@@ -286,11 +288,16 @@ struct PlayerScreen: View {
             nextDramaPick = await NextDramaRecommender.shared.pickNextDrama(current: d, seasons: seasons, watched: watched)
         }
         .task {
-            // Portrait by default for everything (landscape videos play centred). Rotating the phone (when
-            // the system rotation lock is off) or the 横屏 button switches to landscape.
-            OrientationGate.unlock()
             co.start()
             if co.current == nil { await load() }
+        }
+        // Portrait-format videos are a fixed vertical experience: device rotation and the
+        // landscape fullscreen affordance must not rotate the player. Landscape clips remain
+        // sensor-rotatable as before. Keying on the resolved aspect also handles metadata arriving
+        // after the player first appears.
+        .task(id: isPortraitVideo) {
+            if isPortraitVideo { OrientationGate.lockPortrait() }
+            else { OrientationGate.unlock() }
         }
         .task { await screenshotHooks() }
         .task(id: lastInteraction) {
@@ -965,7 +972,7 @@ struct PlayerScreen: View {
             slot { PlayerRowIcon(id: "player.episodes", a11y: "选集", active: panel == .episodes, action: { toggle(.episodes) }) {
                 Image(systemName: "square.grid.2x2").font(.system(size: 19))
             } }
-            if !landscape {
+            if !landscape && !isPortraitVideo {
                 slot { PlayerRowIcon(id: "player.fullscreen", a11y: "横屏全屏", action: { OrientationGate.enterLandscape(); flashChrome() }) {
                     Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 18))
                 } }
