@@ -448,6 +448,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
             audioSessionActive = false
             interrupted = true
             recoverInterruptedTransport = false
+            updateIdleTimer()
             save(force: true)
         } else {
             interrupted = false
@@ -942,7 +943,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     /// The player screen has a single coordinator, so this centralizes ownership across engine swaps.
     private func updateIdleTimer() {
         let hasFailed = current.map { errors[$0] != nil } ?? false
-        UIApplication.shared.isIdleTimerDisabled = current != nil && wantsPlayback && !interrupted && !hasFailed
+        UIApplication.shared.isIdleTimerDisabled = current != nil && wantsPlayback && !transportPaused && !interrupted && !hasFailed
     }
 
     private func bindTransportRequests(_ target: PlayerEngine) {
@@ -1027,7 +1028,10 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         time = t
         let waiting = engine.isWaiting
         let stopped = engine.isPaused && !waiting
-        if stopped != transportPaused { transportPaused = stopped }
+        if stopped != transportPaused {
+            transportPaused = stopped
+            updateIdleTimer()
+        }
         if waiting != waitingForMedia { waitingForMedia = waiting }
         let d = engine.duration
         if d.isFinite, d > 0, abs(d - duration) > 0.01 { duration = d }
