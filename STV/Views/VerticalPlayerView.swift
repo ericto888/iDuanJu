@@ -376,7 +376,7 @@ struct PlayerScreen: View {
             .accessibilityIdentifier("player.feed")
             .accessibilityValue(feedSettled ? "idle" : "scrolling")
             .compatOnChange(of: co.current) { new in
-                if !co.lastAdvanceWasAuto, let new, co.episodes.indices.contains(new) { showOSD("第\(co.episodes[new].ep)集") }
+                if let new, co.episodes.indices.contains(new) { showOSD("第\(co.episodes[new].ep)集") }
             }
             .scrollDisabled(isScrollDisabled)
         } else {
@@ -417,7 +417,7 @@ struct PlayerScreen: View {
                 .compatOnChange(of: co.current) { new in
                     if let new {
                         feedScrollY = CGFloat(new) * pageH
-                        if !co.lastAdvanceWasAuto, co.episodes.indices.contains(new) { showOSD("第\(co.episodes[new].ep)集") }
+                        if co.episodes.indices.contains(new) { showOSD("第\(co.episodes[new].ep)集") }
                     }
                 }
                 .compatOnChange(of: co.readyIndex) { releaseHeldIfSettled() }
