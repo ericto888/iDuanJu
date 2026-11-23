@@ -24,8 +24,8 @@ struct CompatScrollMetrics: Equatable {
     let offsetY: CGFloat
     let contentHeight: CGFloat?
     let containerHeight: CGFloat?
-    let containerWidth: CGFloat? = nil
-    let isWithinScrollRange: Bool? = nil
+    let containerWidth: CGFloat?
+    let isWithinScrollRange: Bool?
 }
 
 extension View {
