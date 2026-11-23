@@ -17,6 +17,12 @@ final class HomeInteractionUITests: XCTestCase {
     }
 
     func el(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
+    @discardableResult
+    func waitHittable(_ element: XCUIElement, _ expected: Bool, timeout: TimeInterval = 5) -> Bool {
+        let predicate = NSPredicate(format: "hittable == %@", NSNumber(value: expected))
+        let condition = expectation(for: predicate, evaluatedWith: element)
+        return XCTWaiter.wait(for: [condition], timeout: timeout) == .completed
+    }
 
     /// Tap at the element's centre via coordinates: this is what a finger does, so an
     /// invisible layer stacked on top would swallow it (element.tap() alone would too).
@@ -144,11 +150,11 @@ final class HomeInteractionUITests: XCTestCase {
         XCTAssertTrue(el("home.card").waitForExistence(timeout: 20), "home feed did not load")
         let home = el("home.page.红果")
         for _ in 0..<3 { home.swipeUp() }
-        XCTAssertFalse(el("home.search").isHittable, "search/filter header should hide on upward scroll")
-        XCTAssertFalse(el("tab.0").isHittable, "bottom navigation should hide with the header")
+        XCTAssertTrue(waitHittable(el("home.search"), false), "search/filter header should hide on upward scroll")
+        XCTAssertTrue(waitHittable(el("tab.0"), false), "bottom navigation should hide with the header")
         for _ in 0..<3 { home.swipeDown() }
-        XCTAssertTrue(el("home.search").isHittable, "search/filter header should return on downward scroll")
-        XCTAssertTrue(el("tab.0").isHittable, "bottom navigation should return on downward scroll")
+        XCTAssertTrue(waitHittable(el("home.search"), true), "search header should return on downward scroll")
+        XCTAssertTrue(waitHittable(el("tab.0"), true), "bottom navigation should return on downward scroll")
     }
 
     func testTabBarAndOtherRootTops() {
