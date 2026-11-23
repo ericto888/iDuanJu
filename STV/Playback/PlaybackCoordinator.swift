@@ -278,6 +278,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         sleepMode = 0
         onSleepTriggered = nil
         save(force: true)
+        UIApplication.shared.isIdleTimerDisabled = false
         pip?.delegate = nil
         pipObservation = nil
         statusObservation = nil
@@ -533,13 +534,17 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
 
     /// True when the latest episode change came from automatic next-episode advance (keeps playback chrome hidden).
     private(set) var lastAdvanceWasAuto = false
+    /// Changes only for user-initiated episode selection; automatic advance stays silent.
+    @Published private(set) var manualSelectionFeedback = 0
 
     func select(_ index: Int?, autoAdvance: Bool = false) {
         guard let index, index != current, episodes.indices.contains(index) else { return }
         lastAdvanceWasAuto = autoAdvance
+        if !autoAdvance { manualSelectionFeedback &+= 1 }
         current = index
         wantsPlayback = true
         transportPaused = false
+        updateIdleTimer()
         activate(index)
     }
 
@@ -643,6 +648,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
                 guard activation == token else { return }
                 errors[i] = error.localizedDescription
                 verifyTargets[i] = error.verifyTarget
+                updateIdleTimer()
                 cancelPiPHandover()
             }
         }
@@ -907,6 +913,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         } else { recoverInterruptedTransport = false }
         wantsPlayback = !value
         transportPaused = value
+        updateIdleTimer()
         if value { continuePiP = false }
         if value {
             engine.pause()
@@ -923,11 +930,19 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     }
 
     private func play() {
+        updateIdleTimer()
         activateAudioSession()
         let rate = min(playbackRate, engine.maxRate)
         let recover = recoverInterruptedTransport
         recoverInterruptedTransport = false
         engine.play(rate: rate)
+    }
+
+    /// Keep the display awake while playback is intended, including episode loading/buffering.
+    /// The player screen has a single coordinator, so this centralizes ownership across engine swaps.
+    private func updateIdleTimer() {
+        let hasFailed = current.map { errors[$0] != nil } ?? false
+        UIApplication.shared.isIdleTimerDisabled = current != nil && wantsPlayback && !interrupted && !hasFailed
     }
 
     private func bindTransportRequests(_ target: PlayerEngine) {
