@@ -51,9 +51,14 @@ struct HomeChromeScrollBehavior {
         offset: CGFloat,
         contentHeight: CGFloat? = nil,
         viewportHeight: CGFloat? = nil,
+        isWithinScrollRange: Bool? = nil,
         at time: TimeInterval
     ) -> Bool? {
         guard isInteracting else {
+            resetSamples()
+            return nil
+        }
+        if isWithinScrollRange == false {
             resetSamples()
             return nil
         }
@@ -249,16 +254,16 @@ struct HomeView: View {
             setChromeHidden(false)
         }
         .onAppear {
-            NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: false)
-            NotificationCenter.default.post(name: .homeBottomBarVisibilityChanged, object: false)
+            chromeScrollBehavior.reset()
+            setChromeHidden(false)
         }
         .onReceive(NotificationCenter.default.publisher(for: .homeChromeResetRequested)) { _ in
             chromeScrollBehavior.reset()
             setChromeHidden(false)
         }
         .onDisappear {
-            NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: false)
-            NotificationCenter.default.post(name: .homeBottomBarVisibilityChanged, object: false)
+            chromeScrollBehavior.reset()
+            setChromeHidden(false)
         }
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showChannels) { channelPanel }
@@ -284,6 +289,7 @@ struct HomeView: View {
             offset: -metrics.offsetY,
             contentHeight: metrics.contentHeight,
             viewportHeight: metrics.containerHeight,
+            isWithinScrollRange: metrics.isWithinScrollRange,
             at: ProcessInfo.processInfo.systemUptime
         ) {
             setChromeHidden(hidden)
