@@ -105,7 +105,7 @@ struct HomeView: View {
     private var headerInk: Color { STVTheme.text }
     @State private var scrolled: [HomeSource: Bool] = [:]
     @State private var headerHidden = false
-    @State private var lastFeedOffset: CGFloat?
+    @State private var lastFeedOffset: [HomeSource: CGFloat] = [:]
     private var pinned: Bool { scrolled[source] ?? false }
     @State private var showChannels = false
 
@@ -144,7 +144,7 @@ struct HomeView: View {
                                      tab: Binding(get: { subs[s] ?? s.subs[0] }, set: { subs[s] = $0 }),
                                      onHero: { heroCovers[s] = $0 },
                                      onScrolled: { v in if scrolled[s] != v { scrolled[s] = v } },
-                                     onScrollOffset: handleFeedOffset)
+                                     onScrollOffset: { offset in handleFeedOffset(offset, for: s) })
                             .tag(s)
                     }
                 }
@@ -154,23 +154,41 @@ struct HomeView: View {
         .dsAmbient(visible: !pinned)
         .animation(.easeInOut(duration: 0.22), value: headerHidden)
         .compatOnChange(of: source) { _ in
-            lastFeedOffset = nil
-            withAnimation(.easeInOut(duration: 0.22)) { headerHidden = false }
+            lastFeedOffset.removeAll()
+            setHeaderHidden(false)
         }
+        .onAppear { NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: false) }
+        .onReceive(NotificationCenter.default.publisher(for: .homeChromeResetRequested)) { _ in
+            lastFeedOffset.removeAll()
+            setHeaderHidden(false)
+        }
+        .onDisappear { NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: false) }
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showChannels) { channelPanel }
         .compatOnChange(of: SourceGate.shared.visibleSites) { if !HomeSource.all.contains(source) { source = .hongguo } }
     }
 
-    private func handleFeedOffset(_ offset: CGFloat) {
-        defer { lastFeedOffset = offset }
-        guard let previous = lastFeedOffset else { return }
+    private func setHeaderHidden(_ hidden: Bool) {
+        guard headerHidden != hidden else { return }
+        withAnimation(.easeInOut(duration: 0.22)) { headerHidden = hidden }
+        NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: hidden)
+    }
+
+    private func handleFeedOffset(_ offset: CGFloat, for feedSource: HomeSource) {
+        // TabView keeps adjacent pages alive; only the selected source may drive global chrome.
+        guard feedSource == source else { return }
+        let previous = lastFeedOffset[feedSource]
+        lastFeedOffset[feedSource] = offset
+        guard let previous else {
+            if offset < -18 { setHeaderHidden(true) }
+            return
+        }
         let delta = offset - previous
         guard abs(delta) > 1.5 else { return }
-        if offset > -8 || delta > 0 {
-            if headerHidden { headerHidden = false }
-        } else if delta < 0, offset < -18, !headerHidden {
-            headerHidden = true
+        if offset > -8 || delta > 1.5 {
+            setHeaderHidden(false)
+        } else if delta < -1.5, offset < -18 {
+            setHeaderHidden(true)
         }
     }
 
