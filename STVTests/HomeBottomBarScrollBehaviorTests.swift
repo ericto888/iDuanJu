@@ -17,6 +17,7 @@ final class HomeBottomBarScrollBehaviorTests: XCTestCase {
 
     func testSlowDownwardScrollDoesNotReveal() {
         var behavior = HomeBottomBarScrollBehavior()
+        _ = behavior.update(offset: 0, at: 0.9)
         _ = behavior.update(offset: -100, at: 1.0)
         XCTAssertNil(behavior.update(offset: -90, at: 1.1))
         XCTAssertTrue(behavior.isHidden)
@@ -24,6 +25,7 @@ final class HomeBottomBarScrollBehaviorTests: XCTestCase {
 
     func testFastDownwardFlickReveals() {
         var behavior = HomeBottomBarScrollBehavior()
+        _ = behavior.update(offset: 0, at: 0.9)
         _ = behavior.update(offset: -100, at: 1.0)
         XCTAssertEqual(behavior.update(offset: -40, at: 1.1), false)
         XCTAssertFalse(behavior.isHidden)
@@ -31,6 +33,7 @@ final class HomeBottomBarScrollBehaviorTests: XCTestCase {
 
     func testReturningToTopAlwaysReveals() {
         var behavior = HomeBottomBarScrollBehavior()
+        _ = behavior.update(offset: 0, at: 0.9)
         _ = behavior.update(offset: -100, at: 1.0)
         XCTAssertEqual(behavior.update(offset: -5, at: 3.0), false)
         XCTAssertFalse(behavior.isHidden)
@@ -45,6 +48,7 @@ final class HomeBottomBarScrollBehaviorTests: XCTestCase {
 
     func testResetClearsHistoryAndRestoresBar() {
         var behavior = HomeBottomBarScrollBehavior()
+        _ = behavior.update(offset: 0, at: 0.9)
         _ = behavior.update(offset: -10, at: 1.0)
         _ = behavior.update(offset: -12, at: 1.01)
         XCTAssertTrue(behavior.isHidden)
