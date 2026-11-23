@@ -26,6 +26,52 @@ enum HomeTab: Hashable {
     }
 }
 
+/// Pure scroll-state reducer for the home tab bar. Kept independent of SwiftUI so its
+/// direction, velocity and top-reset rules can be verified with deterministic unit tests.
+struct HomeBottomBarScrollBehavior {
+    private(set) var isHidden = false
+    private var previousOffset: CGFloat?
+    private var previousTime: TimeInterval?
+    let revealVelocity: CGFloat
+
+    init(revealVelocity: CGFloat = 400) {
+        self.revealVelocity = revealVelocity
+    }
+
+    mutating func update(offset: CGFloat, at time: TimeInterval) -> Bool? {
+        let previous = previousOffset
+        let previousSampleTime = previousTime
+        previousOffset = offset
+        previousTime = time
+
+        if offset > -8 {
+            return setHidden(false)
+        }
+        guard let previous, let previousSampleTime else { return nil }
+        let delta = offset - previous
+        guard abs(delta) > 1.5 else { return nil }
+        if delta < 0 {
+            return setHidden(true)
+        }
+
+        let elapsed = max(time - previousSampleTime, 0.001)
+        guard delta / elapsed >= revealVelocity else { return nil }
+        return setHidden(false)
+    }
+
+    mutating func reset() {
+        isHidden = false
+        previousOffset = nil
+        previousTime = nil
+    }
+
+    private mutating func setHidden(_ hidden: Bool) -> Bool? {
+        guard isHidden != hidden else { return nil }
+        isHidden = hidden
+        return hidden
+    }
+}
+
 /// Top-level home pages (横滑翻页 + 顶部分类条): one page per source; each source's own boards
 /// (红果榜单 / 真人剧 / …) are secondary chips inside its page. Adult sites only appear once enabled in
 /// 片源管理 (and unlocked with Face ID when the lock is on) — `SourceGate.visibleSites`.
@@ -106,9 +152,7 @@ struct HomeView: View {
     @State private var scrolled: [HomeSource: Bool] = [:]
     @State private var headerHidden = false
     @State private var lastFeedOffset: [HomeSource: CGFloat] = [:]
-    @State private var lastBottomBarOffset: [HomeSource: CGFloat] = [:]
-    @State private var lastBottomBarSampleTime: [HomeSource: TimeInterval] = [:]
-    private let bottomBarRevealVelocity: CGFloat = 400
+    @State private var bottomBarBehavior = HomeBottomBarScrollBehavior()
     private var pinned: Bool { scrolled[source] ?? false }
     @State private var showChannels = false
 
@@ -155,8 +199,7 @@ struct HomeView: View {
         .animation(.easeInOut(duration: 0.22), value: headerHidden)
         .compatOnChange(of: source) { _ in
             lastFeedOffset.removeAll()
-            lastBottomBarOffset.removeAll()
-            lastBottomBarSampleTime.removeAll()
+            bottomBarBehavior.reset()
             setHeaderHidden(false)
             setBottomBarHidden(false)
         }
@@ -166,8 +209,7 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .homeChromeResetRequested)) { _ in
             lastFeedOffset.removeAll()
-            lastBottomBarOffset.removeAll()
-            lastBottomBarSampleTime.removeAll()
+            bottomBarBehavior.reset()
             setHeaderHidden(false)
             setBottomBarHidden(false)
         }
@@ -194,27 +236,8 @@ struct HomeView: View {
     /// Reaching the top always restores the bar. Header visibility remains governed by its existing rule.
     private func handleBottomBarOffset(_ offset: CGFloat, for feedSource: HomeSource) {
         guard feedSource == source else { return }
-        let now = ProcessInfo.processInfo.systemUptime
-        let previous = lastBottomBarOffset[feedSource]
-        let previousTime = lastBottomBarSampleTime[feedSource]
-        lastBottomBarOffset[feedSource] = offset
-        lastBottomBarSampleTime[feedSource] = now
-
-        if offset > -8 {
-            setBottomBarHidden(false)
-            return
-        }
-        guard let previous, let previousTime else { return }
-        let delta = offset - previous
-        guard abs(delta) > 1.5 else { return }
-        if delta < 0 {
-            setBottomBarHidden(true)
-        } else {
-            let elapsed = max(now - previousTime, 0.001)
-            let velocity = delta / elapsed
-            if velocity >= bottomBarRevealVelocity {
-                setBottomBarHidden(false)
-            }
+        if let hidden = bottomBarBehavior.update(offset: offset, at: ProcessInfo.processInfo.systemUptime) {
+            setBottomBarHidden(hidden)
         }
     }
 
