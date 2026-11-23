@@ -31,7 +31,7 @@ struct RootTabView: View {
                 .overlay(alignment: .bottom) {
                     if showNav && !metrics.useRail {
                         let hideHomeBar = tab == 0 && homeBottomBarHidden
-                        GlassTabBar(selection: $tab, items: Self.items, searchTag: 4, transparentBackground: tab == 0) { i in
+                        GlassTabBar(selection: $tab, items: Self.items, searchTag: 4) { i in
                             if i == tab { paths[i] = NavigationPath() }
                         }
                         // Keep the bar mounted while hiding it. A full-height downward
@@ -88,24 +88,10 @@ private struct Stack<V: View>: View {
     }
 }
 
-private struct TabBarSurface: ViewModifier {
-    let radius: CGFloat
-    let transparent: Bool
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if transparent {
-            content
-        } else {
-            content.dsBar(radius)
-        }
-    }
-}
-
 struct GlassTabBar: View {
     @Binding var selection: Int
     let items: [(String, String)]
     var searchTag: Int? = nil
-    var transparentBackground = false
     var onReselect: (Int) -> Void = { _ in }
     @Namespace private var ns
     var body: some View {
@@ -134,7 +120,7 @@ struct GlassTabBar: View {
                 }
             }
             .padding(6)
-            .modifier(TabBarSurface(radius: 30, transparent: transparentBackground))
+            .dsBar(30)
 
             if let searchTag {
                 let searchOn = selection == searchTag
@@ -145,7 +131,7 @@ struct GlassTabBar: View {
                         .font(.system(size: 19, weight: searchOn ? .bold : .semibold))
                         .foregroundStyle(searchOn ? STVTheme.accent : STVTheme.text)
                         .frame(width: 60, height: 60)
-                        .modifier(TabBarSurface(radius: 30, transparent: transparentBackground))
+                        .dsBar(30)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("搜索")
