@@ -333,7 +333,10 @@ private struct HomeFeedPage: View {
         }
         .scrollIndicators(.hidden)
         .coordinateSpace(name: "home.feed.scroll")
-        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { onScrollOffset($0) }
+        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
+            if #unavailable(iOS 18.0) { onScrollOffset(offset) }
+        }
+        .compatOnScrollY { onScrollOffset(-$0) }
         .compatDefaultScrollAnchor(Self.debugAnchor)
         .compatOnScrolled(threshold: 4) { onScrolled($0) }
         .accessibilityIdentifier("home.page.\(source.label)")
@@ -470,7 +473,10 @@ private struct DynamicSiteFeed: View {
         }
         .scrollIndicators(.hidden)
         .coordinateSpace(name: "home.feed.scroll")
-        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { onScrollOffset($0) }
+        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
+            if #unavailable(iOS 18.0) { onScrollOffset(offset) }
+        }
+        .compatOnScrollY { onScrollOffset(-$0) }
         .accessibilityIdentifier("home.page.\(source.label)")
         .refreshable { await refresh() }
         .task { await refresh() }
