@@ -112,6 +112,25 @@ final class SiteParsingTests: XCTestCase {
         let s = XVProvider.streams(watch, page: "https://www.xvideos.com/video.olukc/slug")
         XCTAssertEqual(s.map(\.url), ["https://hls.example.com/x/hls.m3u8", "https://mp4.example.com/hd.mp4?secure=a", "https://mp4.example.com/sd.mp4?secure=a"])
         XCTAssertEqual(s[0].headers["Referer"], "https://www.xvideos.com/video.olukc/slug")
+
+        // Current and legacy player layouts: double quotes, escaped slashes, config fields and flv_url.
+        let modern = #"html5player.setVideoHLS("https:\\/\\/hls.example.com\\/master.m3u8?x=1\\u0026y=2");"#
+        let modernStreams = XVProvider.streams(modern, page: "https://www.xvideos.com/video.test/slug")
+        XCTAssertEqual(modernStreams.first?.url, "https://hls.example.com/master.m3u8?x=1&y=2")
+        XCTAssertEqual(modernStreams.first?.kind, .hls)
+
+        let config = #"{"hls_url":"https://hls.example.com/config.m3u8","videoUrl":"https://cdn.example.com/video.mp4"}"#
+        let configStreams = XVProvider.streams(config, page: "https://www.xvideos.com/video.test/slug")
+        XCTAssertEqual(configStreams.map(\.url), ["https://hls.example.com/config.m3u8", "https://cdn.example.com/video.mp4"])
+        XCTAssertEqual(configStreams.map(\.kind), [.hls, .mp4Clear])
+
+        let legacy = #"https://www.xvideos.com/video.test/?flv_url=https%3A%2F%2Fcdn.example.com%2Flegacy.mp4%3Ftoken%3Da%26q%3D1"#
+        XCTAssertEqual(XVProvider.streams(legacy, page: "https://www.xvideos.com/video.test/slug").first?.url,
+                       "https://cdn.example.com/legacy.mp4?token=a&q=1")
+
+        let raw = #"window.video = "https://cdn.example.com/fallback.mp4";"#
+        XCTAssertEqual(XVProvider.streams(raw, page: "https://www.xvideos.com/video.test/slug").first?.url,
+                       "https://cdn.example.com/fallback.mp4")
     }
 
     func testPornhub() {
