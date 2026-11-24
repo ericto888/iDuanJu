@@ -4,7 +4,7 @@ import SwiftUI
 /// 导航栏只在根页面显示；进入详情 / 播放器等二级页面时隐藏。
 struct RootTabView: View {
     @State private var tab = Int(ProcessInfo.processInfo.environment["STV_TAB"] ?? "") ?? 0
-    @State private var paths = [NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath()]
+    @State private var paths = [NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath()]
     @State private var homeChromeHidden = false
     @State private var homeBottomBarHidden = false
     @State private var categoryBottomBarHidden = false
@@ -27,7 +27,6 @@ struct RootTabView: View {
                     Stack(path: $paths[1]) { TVBoxHubView() }.tag(1)
                     Stack(path: $paths[2]) { CategoryView() }.tag(2)
                     Stack(path: $paths[3]) { ProfileView() }.tag(3)
-                    Stack(path: $paths[4]) { SearchView() }.tag(4)
                 }
                 .tint(STVTheme.accent)
                 .overlay(alignment: .bottom) {
@@ -36,7 +35,7 @@ struct RootTabView: View {
                             || (tab == 2 && categoryBottomBarHidden)
                             || (tab == 3 && profileBottomBarHidden)
                         if !hideActiveBar {
-                            GlassTabBar(selection: $tab, items: Self.items, searchTag: 4) { i in
+                            GlassTabBar(selection: $tab, items: Self.items) { i in
                                 if i == tab { paths[i] = NavigationPath() }
                             }
                         }
@@ -105,7 +104,6 @@ private struct Stack<V: View>: View {
 struct GlassTabBar: View {
     @Binding var selection: Int
     let items: [(String, String)]
-    var searchTag: Int? = nil
     var onReselect: (Int) -> Void = { _ in }
     @Namespace private var ns
     var body: some View {
@@ -136,22 +134,6 @@ struct GlassTabBar: View {
             .padding(6)
             .dsBar(30)
 
-            if let searchTag {
-                let searchOn = selection == searchTag
-                Button {
-                    if searchOn { onReselect(searchTag) } else { withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { selection = searchTag } }
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 19, weight: searchOn ? .bold : .semibold))
-                        .foregroundStyle(searchOn ? STVTheme.accent : STVTheme.text)
-                        .frame(width: 60, height: 60)
-                        .dsBar(30)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("搜索")
-                .accessibilityIdentifier("tab.search")
-                .accessibilityAddTraits(searchOn ? .isSelected : [])
-            }
         }
         .frame(maxWidth: 420)
         .padding(.horizontal, 16)
@@ -168,23 +150,6 @@ struct GlassNavigationRail: View {
     @Namespace private var ns
     var body: some View {
         VStack(spacing: 12) {
-            if let searchTag {
-                let searchOn = selection == searchTag
-                Button {
-                    if searchOn { onReselect(searchTag) } else { withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { selection = searchTag } }
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 19, weight: searchOn ? .bold : .semibold))
-                        .foregroundStyle(searchOn ? STVTheme.accent : STVTheme.text)
-                        .frame(width: 56, height: 56)
-                        .dsBar(28)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("搜索")
-                .accessibilityIdentifier("tab.search")
-                .accessibilityAddTraits(searchOn ? .isSelected : [])
-            }
-
             VStack(spacing: 6) {
                 ForEach(items.indices, id: \.self) { i in
                     let on = i == selection
