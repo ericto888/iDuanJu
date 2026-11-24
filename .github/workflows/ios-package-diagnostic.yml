@@ -16,7 +16,6 @@ jobs:
     env:
       STV_RUN_TESTS: '0'
       STV_BUILD_SIMULATOR: '0'
-      STV_BUILD_LOG_DIR: ${{ runner.temp }}/ios-package-logs
     steps:
       - name: Runner diagnostics
         run: |
@@ -26,7 +25,7 @@ jobs:
           xcode-select -p
           xcodebuild -version
           df -h
-          mkdir -p "$STV_BUILD_LOG_DIR"
+          mkdir -p "$RUNNER_TEMP/ios-package-logs"
 
       - name: Checkout source
         uses: actions/checkout@v4
@@ -72,7 +71,7 @@ jobs:
         run: |
           echo "UTC build start: $(date -u)"
           set -o pipefail
-          scripts/package.sh "$RUNNER_TEMP/dist" 2>&1 | tee "$STV_BUILD_LOG_DIR/package-wrapper.log"
+          scripts/package.sh "$RUNNER_TEMP/dist" 2>&1 | tee "$RUNNER_TEMP/ios-package-logs/package-wrapper.log"
           echo "UTC build end: $(date -u)"
 
       - name: Collect diagnostics
@@ -82,7 +81,7 @@ jobs:
           xcodebuild -version || true
           df -h || true
           mkdir -p "$RUNNER_TEMP/diagnostics"
-          cp -R "$STV_BUILD_LOG_DIR/." "$RUNNER_TEMP/diagnostics/" 2>/dev/null || true
+          cp -R "$RUNNER_TEMP/ios-package-logs/." "$RUNNER_TEMP/diagnostics/" 2>/dev/null || true
           cp -R "$RUNNER_TEMP/dist/logs/." "$RUNNER_TEMP/diagnostics/" 2>/dev/null || true
           printf 'run=%s\nattempt=%s\nsha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" > "$RUNNER_TEMP/diagnostics/run-info.txt"
 
