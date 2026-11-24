@@ -174,10 +174,10 @@ struct MacCMSProvider: SiteProvider {
 
     /// `vod_play_from` "a$$$b", `vod_play_url` "第1集$url#第2集$url$$$..." → lines of (name, [(epName, url)]).
     static func lines(from: String, urls: String) -> [(name: String, eps: [(String, String)])] {
-        let chunks = urls.components(separatedBy: "$$")
-        var names = from.components(separatedBy: "$$")
+        let chunks = urls.components(separatedBy: "$$$")
+        var names = from.components(separatedBy: "$$$")
         // 部分采集站（包括 FFZY）在 vod_play_from 中用逗号列出线路名，
-        // 但 vod_play_url 仍按 $$ 分隔；按线路数量对齐，避免线路名错位。
+        // 但 vod_play_url 仍按 $$$ 分隔；按线路数量对齐，避免线路名错位。
         if names.count == 1, chunks.count > 1 {
             let commaNames = from.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             if commaNames.count == chunks.count { names = commaNames }
