@@ -50,7 +50,7 @@ xcrun simctl boot "$SIM_ID" 2>&1 | tee "$LOG_DIR/simulator-boot.log" || true
 python3 -c 'import subprocess,sys; subprocess.run(["xcrun","simctl","bootstatus",sys.argv[1],"-b"],check=True,timeout=900)' "$SIM_ID" 2>&1 | tee -a "$LOG_DIR/simulator-boot.log"
 
 set -o pipefail
-xcodebuild -project STV.xcodeproj -scheme STV -configuration Release \
+xcodebuild -project STV.xcodeproj -scheme STV -configuration Debug \
   -destination "platform=iOS Simulator,id=$SIM_ID" -derivedDataPath DerivedDataValidation \
   -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO ARCHS="$SIM_ARCH" ONLY_ACTIVE_ARCH=YES ENABLE_TESTABILITY=YES \
   -parallel-testing-enabled NO \
