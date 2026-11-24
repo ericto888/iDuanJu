@@ -37,8 +37,6 @@ actor HongguoClient {
         playerSession = URLSession(configuration: pcfg)
     }
 
-    private static func vmID() -> String { String(1_000_000_000_000_000_000 + UInt64.random(in: 0..<8_000_000_000_000_000_000)) }
-
     // MARK: constants (fetch.go / rank_cell.go)
     private static let ua = HGDevice.ua
     /// AB-on form (dr_scene in path). Soft-rejected when server AB is off (2026-10-21).
