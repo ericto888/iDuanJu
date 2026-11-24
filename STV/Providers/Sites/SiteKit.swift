@@ -6,7 +6,16 @@ import Foundation
 
 extension DramaSource {
     /// Long-form single-video sites: no episodes, landscape player, "播放源" instead of "选集".
-    var isLongVideo: Bool { self != .hongguo && self != .huangguo }
+    var isLongVideo: Bool {
+        if self == .hongguo || self == .huangguo { return false }
+        // Dynamic plugin type is authoritative: shortdrama plugins use the episode grid;
+        // video plugins keep the long-video source selector. CMS and unknown sources retain legacy behavior.
+        let overrideManifest = PluginStore.overridePlugin(for: self)?.manifest
+        if let manifest = pluginID.flatMap({ PluginStore.snapshot($0)?.manifest }) ?? overrideManifest {
+            return manifest.type != .shortdrama
+        }
+        return true
+    }
     /// Hidden until enabled in 片源管理 (and optionally behind Face ID).
     /// Telegram channel videos play in the long-video player but are not a 片源管理 site
     /// (adult channels are gated per channel by `SourceGate.showAdultChannels`).
@@ -67,6 +76,7 @@ enum Sites {
     /// Built-in sites + enabled video plugins + 采集站.
     static var all: [DramaSource] { builtinSites + PluginStore.videoSources() + CMSStore.sources() }
     static func provider(_ s: DramaSource) -> SiteProvider? {
+        if let replacement = PluginStore.overridePlugin(for: s) { return JSVideoProvider(source: s, overridePluginID: replacement.id) }
         if s.pluginID != nil { return JSVideoProvider(source: s) }
         if let k = s.cmsKey { return CMSStore.site(k).map { MacCMSProvider(source: s, site: $0) } }
         let p: SiteProvider?

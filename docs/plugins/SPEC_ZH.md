@@ -34,9 +34,12 @@ manga18fx/
 | `capabilities` | ✓ | 实现了哪些函数。video/shortdrama 至少 `detail`+`play`；comic 至少 `detail`+`pages` |
 | `settings` | | 让用户填的配置项，如镜像地址、API key：`[{ "key": "mirror", "name": "镜像", "type": "text\|select\|secret", "default": "..." }]`。`secret` 类型脚本只拿到句柄，见安全说明 |
 | `update.url` | | 新版 manifest 的地址。必须是 https |
+| `overrides` | | 可选，`video` 插件接管的内置视频站源 ID 数组，如 `["xvideos"]`。接管后沿用内置站源入口/开关/历史身份，解析由插件执行；插件停用或卸载后自动恢复内置实现。同一内置站源同一时间只能由一个插件接管 |
 | `integrity` | ✓(打包时) | 每个文件的 `sha256-…`，由 `idj pack` 填写；`signature` 可选（作者 Ed25519 签名） |
 
 **权限越少越好。** 安装时用户会看到完整列表；升级时如果权限变多（多了域名、开了 CF/登录），App 会单独弹窗让用户再确认一次，不同意就停在旧版。
+
+`overrides` 仅允许 `video` 类型插件声明，目标必须是 App 明确开放接管的内置视频站源（如 `xvideos`、`xnxx`、`jable`、`missav`、`eporner`、`pornhub` 等）。不允许接管红果、黄果或 Telegram。安装/更新时如果新增接管目标，会要求用户确认；已被其他插件声明的目标会拒绝安装。被接管的内置站源不会再额外显示为一个 `p.<插件 ID>` 动态站源。
 
 ## 3. 要写哪些函数
 

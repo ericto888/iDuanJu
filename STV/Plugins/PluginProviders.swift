@@ -290,7 +290,9 @@ struct JSComicProvider: MangaProvider {
 
 struct JSVideoProvider: SiteProvider {
     let source: DramaSource
-    var pluginID: String { source.pluginID ?? "" }
+    /// Set when this provider is serving a built-in source through a manifest override.
+    var overridePluginID: String? = nil
+    var pluginID: String { overridePluginID ?? source.pluginID ?? "" }
     static let homeID = "__home"
 
     var categories: [SiteCategory] {

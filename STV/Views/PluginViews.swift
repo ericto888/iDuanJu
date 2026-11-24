@@ -23,6 +23,18 @@ struct PluginsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                NavigationLink { SourceStoreView() } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "storefront").font(.system(size: 20, weight: .semibold)).foregroundStyle(STVTheme.accent)
+                            .frame(width: 42, height: 42).background(STVTheme.accentSoft, in: RoundedRectangle(cornerRadius: 12))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("在线站源商店").font(.headline).foregroundStyle(STVTheme.text)
+                            Text("浏览、安装和更新社区站源").font(.caption).foregroundStyle(STVTheme.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(STVTheme.secondary)
+                    }.padding(14).background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14)).padding(.horizontal, 16)
+                }.buttonStyle(.plain).accessibilityIdentifier("plugins.onlineStore")
                 group("已安装（\(store.visiblePlugins.count)）") {
                     if store.visiblePlugins.isEmpty {
                         Text("还没有插件。可以从下面的网址 / 文件 / 订阅添加，或安装内置推荐。").font(.subheadline)
@@ -327,6 +339,14 @@ struct PluginConsentSheet: View {
                         Text("来源：\(pending.origin)").font(.caption).foregroundStyle(.secondary)
                         Label(pending.signedBy == nil ? "未签名（无法确认作者身份）" : "已验证作者签名", systemImage: pending.signedBy == nil ? "exclamationmark.shield" : "checkmark.shield")
                             .font(.caption).foregroundStyle(pending.signedBy == nil ? .orange : .green)
+                    }
+                }
+                if let targets = m.overrides, !targets.isEmpty {
+                    Section("接管的内置站源") {
+                        ForEach(targets, id: \.self) { target in
+                            Label(DramaSource(rawValue: target)?.label ?? target, systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
+                        }
+                        Text("启用插件后将使用商店插件解析这些内置站源，不会重复显示。停用或卸载插件后自动恢复内置实现。").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 if let diff = pending.diff, pending.isUpdate {

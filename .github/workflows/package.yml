@@ -1,8 +1,13 @@
 name: package
 
-# iOS-only packaging. Regression tests live in the separate validation workflow.
+# Device IPA packaging and simulator regression tests run independently.
+# A slow simulator test suite must never block delivery of the unsigned IPA.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feat/online-source-store
+      - feat/plugin-builtin-source-overrides
 
 permissions:
   contents: read
@@ -11,12 +16,11 @@ jobs:
   ios:
     name: unsigned iOS package
     runs-on: macos-15-intel
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          # Match the regression workflow so tested and packaged SDKs are identical.
           xcode-version: "26.3"
       - name: Cache XcodeGen installer
         uses: actions/cache@v4
@@ -29,8 +33,7 @@ jobs:
             HOMEBREW_NO_AUTO_UPDATE=1 brew install --quiet xcodegen
           fi
           xcodegen --version
-      # Release products are cached independently from Debug regression products.
-      - name: Cache Swift packages and Release build products
+      - name: Cache Swift packages and Release device build products
         uses: actions/cache@v4
         with:
           path: |
@@ -41,7 +44,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-xcode-26.3-ios-release-${{ hashFiles('project.yml', 'Packages/**/Package.swift', 'Package.resolved') }}-
             ${{ runner.os }}-xcode-26.3-ios-release-
-      - name: Build unsigned IPA
+      - name: Build unsigned IPA (device only)
         env:
           STV_RUN_TESTS: '0'
           STV_BUILD_SIMULATOR: '0'
@@ -53,8 +56,54 @@ jobs:
           name: ios-build-logs
           path: ${{ runner.temp }}/dist/logs/*.log
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
         with:
           name: ios-unsigned
           path: ${{ runner.temp }}/dist/*.ipa
           if-no-files-found: error
+
+  simulator-regression:
+    name: iOS Simulator regression tests
+    runs-on: macos-15-intel
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.3"
+      - name: Cache XcodeGen installer
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: ${{ runner.os }}-xcodegen-brew
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install --quiet xcodegen
+          fi
+          xcodegen --version
+      - name: Cache Swift packages and simulator test products
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            DerivedDataValidation/SourcePackages
+            DerivedDataValidation/Build
+          key: ${{ runner.os }}-xcode-26.3-ios-validation-${{ hashFiles('project.yml', 'Packages/**/Package.swift', 'Package.resolved') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-xcode-26.3-ios-validation-${{ hashFiles('project.yml', 'Packages/**/Package.swift', 'Package.resolved') }}-
+            ${{ runner.os }}-xcode-26.3-ios-validation-
+      - name: Run simulator-only regression tests
+        env:
+          STV_BUILD_LOG_DIR: ${{ runner.temp }}/ios-validation-logs
+        run: bash scripts/validate-ios-simulator.sh
+      - name: Upload simulator test logs and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-regression
+          path: |
+            ${{ runner.temp }}/ios-validation-logs/*.log
+            DerivedDataValidation/Logs/Test/*.xcresult
+          if-no-files-found: ignore
