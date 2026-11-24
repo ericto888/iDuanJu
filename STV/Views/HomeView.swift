@@ -230,32 +230,10 @@ struct HomeView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            TabView(selection: $source) {
-                ForEach(HomeSource.all) { s in
-                    if s == .channels {
-                        ChannelFeedView(embedded: true).tag(s)
-                    } else if s == .manga {
-                        MangaHomeView(embedded: true).tag(s)
-                    } else if s == .novel {
-                        NovelHomeView(embedded: true).tag(s)
-                    } else {
-                        HomeFeedPage(source: s,
-                                     bottomBarHidden: headerHidden,
-                                     tab: Binding(get: { subs[s] ?? s.subs[0] }, set: { subs[s] = $0 }),
-                                     onHero: { heroCovers[s] = $0 },
-                                     onScrolled: { v in if scrolled[s] != v { scrolled[s] = v } },
-                                     onScrollOffset: { offset in handleFeedOffset(offset, for: s) },
-                                     onScrollInteraction: { active in handleFeedInteraction(active, for: s) },
-                                     onScrollMetrics: { metrics in handleFeedMetrics(metrics, for: s) })
-                            .tag(s)
-                    }
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
+            sourcePager
         }
         // The feed must run to the physical bottom edge like 找剧: this VStack is the layer whose
-        // parent owns the real bottom safe area, so opt out here first (otherwise the paged host
-        // below can never grow past the Home Indicator and the feed stops 34 pt short).
+        // parent owns the real bottom safe area, so opt out here first.
         .ignoresSafeArea(.container, edges: .bottom)
         .background(STVTheme.bg.ignoresSafeArea())
         .dsAmbient(visible: !pinned)
@@ -279,6 +257,67 @@ struct HomeView: View {
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showChannels) { channelPanel }
         .compatOnChange(of: SourceGate.shared.visibleSites) { if !HomeSource.all.contains(source) { source = .hongguo } }
+    }
+
+    /// Horizontal source pager. iOS 17+ uses a paging `ScrollView` instead of a page-style
+    /// `TabView`: the TabView hosts its pages in a private pager that re-applies the bottom safe
+    /// area to each page, so the feed viewport stopped above the Home Indicator. A ScrollView is
+    /// the same structure as 找剧 / 我的 and reaches the physical screen edge.
+    @MainActor @ViewBuilder private var sourcePager: some View {
+        if #available(iOS 17.0, *) {
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(HomeSource.all) { s in
+                        sourcePage(s)
+                            .containerRelativeFrame(.horizontal)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: pagerSelection)
+            .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .ignoresSafeArea(.container, edges: .bottom)
+        } else {
+            TabView(selection: $source) {
+                ForEach(HomeSource.all) { s in
+                    sourcePage(s).tag(s)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+        }
+    }
+
+    @MainActor @ViewBuilder private func sourcePage(_ s: HomeSource) -> some View {
+        if s == .channels {
+            ChannelFeedView(embedded: true)
+        } else if s == .manga {
+            MangaHomeView(embedded: true)
+        } else if s == .novel {
+            NovelHomeView(embedded: true)
+        } else {
+            HomeFeedPage(source: s,
+                         bottomBarHidden: headerHidden,
+                         tab: Binding(get: { subs[s] ?? s.subs[0] }, set: { subs[s] = $0 }),
+                         onHero: { heroCovers[s] = $0 },
+                         onScrolled: { v in if scrolled[s] != v { scrolled[s] = v } },
+                         onScrollOffset: { offset in handleFeedOffset(offset, for: s) },
+                         onScrollInteraction: { active in handleFeedInteraction(active, for: s) },
+                         onScrollMetrics: { metrics in handleFeedMetrics(metrics, for: s) })
+        }
+    }
+
+    /// `scrollPosition(id:)` tracks the pager's item ids (`HomeSource.id`, a String).
+    @MainActor private var pagerSelection: Binding<String?> {
+        Binding(
+            get: { source.id },
+            set: { id in
+                guard let id, id != source.id,
+                      let picked = HomeSource.all.first(where: { $0.id == id }) else { return }
+                source = picked
+            }
+        )
     }
 
     private func setChromeHidden(_ hidden: Bool) {
