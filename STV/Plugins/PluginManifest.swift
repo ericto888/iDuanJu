@@ -61,7 +61,7 @@ struct PluginManifest: Codable, Hashable {
     var settings: [Setting]?
     var update: Update?
     /// Optional built-in video source IDs this plugin replaces while enabled, e.g. ["xvideos"].
-    var overrides: [String]?
+    var overrides: [String]? = nil
     var integrity: Integrity?
 
     var httpDomains: [String] { permissions.http }
