@@ -783,9 +783,6 @@ struct PlayerScreen: View {
                         OrientationGate.exitLandscape(); flashChrome()
                     }
                     .accessibilityIdentifier("player.exitFullscreen")
-                        OrientationGate.exitLandscape(); flashChrome()
-                    }
-                    .accessibilityIdentifier("player.exitFullscreen")
                 }
                 .opacity(dim).modifier(ChromeFade(on: chrome))
             }
