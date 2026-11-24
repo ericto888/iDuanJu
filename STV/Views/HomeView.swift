@@ -253,6 +253,9 @@ struct HomeView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
         }
+        // 首页内容铺到屏幕最底部，避免底部安全区露出系统默认白色背景。
+        .ignoresSafeArea(.container, edges: .bottom)
+        .background(STVTheme.bg.ignoresSafeArea())
         .dsAmbient(visible: !pinned)
         .animation(.easeInOut(duration: 0.22), value: headerHidden)
         .compatOnChange(of: source) { _ in
