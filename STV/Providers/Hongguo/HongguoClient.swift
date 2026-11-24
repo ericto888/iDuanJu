@@ -998,11 +998,13 @@ actor HongguoClient {
         ]
         let body = J.encodeSorted(bodyObj)
         var lastError: Error = PlayerEmptyBody()
+        var forceNewDevice = false
         // The supplied GuoApp source registers a 7.3.5.32 device and signs the exact
         // video_model/v1 request with Gorgon + Argus + Ladon. Rotate only after empty-body rejection.
         for attempt in 0..<3 {
             try Task.checkCancellation()
-            let device = try await ensurePlayback735Device(force: attempt > 0)
+            let device = try await ensurePlayback735Device(force: forceNewDevice)
+            forceNewDevice = false
             let now = Date()
             let nowMs = Int64(now.timeIntervalSince1970 * 1000)
             let q = GoURL.encode([
@@ -1031,7 +1033,14 @@ actor HongguoClient {
             do {
                 let (data, response) = try await playerSession.data(for: request)
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                guard status == 200 else { throw ProviderError.upstream("video_model HTTP \(status)") }
+                guard status == 200 else {
+                    let error = ProviderError.upstream("video_model HTTP \(status)")
+                    if status == 429 || status >= 500 {
+                        lastError = error
+                        if attempt < 2 { continue }
+                    }
+                    throw error
+                }
                 guard !data.isEmpty else { throw PlayerEmptyBody() }
                 let json = try J.parse(data)
                 for code in [json["code"], J.dict(json["BaseResp"])["StatusCode"]] where code != nil {
@@ -1053,10 +1062,14 @@ actor HongguoClient {
                 return resolved
             } catch is PlayerEmptyBody {
                 lastError = PlayerEmptyBody()
+                forceNewDevice = true
                 NSLog("[HG] GuoApp 7.3.5.32 video_model empty body; rotate registered identity (%d/3)", attempt + 1)
                 if attempt == 2 { throw lastError }
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let error as URLError {
+                lastError = error
+                if attempt == 2 { throw error }
             } catch {
                 throw error
             }
