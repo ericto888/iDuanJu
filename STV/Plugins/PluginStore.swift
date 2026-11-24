@@ -132,7 +132,7 @@ final class PluginStore: ObservableObject {
 
     func commit(_ p: PendingInstall) throws {
         let targets = Set(p.manifest.overrides ?? [])
-        let conflicts = plugins.filter { $0.id != p.manifest.id && !targets.isDisjoint(with: $0.manifest.overrides ?? []) }
+        let conflicts = plugins.filter { $0.id != p.manifest.id && $0.enabled && !targets.isDisjoint(with: $0.manifest.overrides ?? []) }
         if let conflict = conflicts.first, let target = targets.intersection(conflict.manifest.overrides ?? []).sorted().first {
             throw PluginError.install("内置站源 \(target) 已由插件 \(conflict.manifest.name) 接管，请先停用或卸载冲突插件")
         }
@@ -169,6 +169,14 @@ final class PluginStore: ObservableObject {
     }
 
     func setEnabled(_ id: String, _ on: Bool) {
+        if on, let rec = plugin(id) {
+            let targets = Set(rec.manifest.overrides ?? [])
+            let conflict = plugins.first { $0.id != id && $0.enabled && !targets.isDisjoint(with: $0.manifest.overrides ?? []) }
+            if let conflict, let target = targets.intersection(conflict.manifest.overrides ?? []).sorted().first {
+                PluginLog.add(id, "启用失败：内置站源 \\(target) 已由插件 \\(conflict.manifest.name) 接管")
+                return
+            }
+        }
         mutate(id) { $0.enabled = on; if on { $0.failures = 0; $0.disabledReason = nil } }
         PluginRuntime.unload(id)
     }
