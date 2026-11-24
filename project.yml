@@ -22,6 +22,8 @@ targets:
     platform: iOS
     sources:
       - STV
+    resources:
+      - path: STV/Providers/Hongguo/HGPlaybackV5.js
     dependencies:
       - package: TDLibKit
       - package: QuickJS
@@ -55,11 +57,9 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSFaceIDUsageDescription: 用于解锁「片源管理」里隐藏的长视频片源
-        NSPhotoLibraryAddUsageDescription: 用于把你下载的图片和视频保存到相册
+        NSPhotoLibraryAddUsageDescription: 用于把下载的图片和视频保存到相册
         LSApplicationQueriesSchemes: [tg]
         NSAppTransportSecurity:
-          # 「阅读」书源: many novel sites are http-only. (NSAllowsLocalNetworking must not be set alongside:
-          # iOS then ignores NSAllowsArbitraryLoads. Arbitrary loads already include the local proxy.)
           NSAllowsArbitraryLoads: true
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -82,7 +82,6 @@ targets:
       - path: STVTests
         includes:
           - "**/*.swift"
-      # Preserve fixture subdirectories (000.bin/routes.json recur per source); never flatten or omit them.
       - path: STVTests/Fixtures
         type: folder
     dependencies:
