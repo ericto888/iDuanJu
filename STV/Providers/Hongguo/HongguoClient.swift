@@ -14,8 +14,6 @@ actor HongguoClient {
     private var searchEntered = false
     private var lastSearchQuery = ""
     private var lastSearchAt: Date?
-    private let vmDeviceId = HongguoClient.vmID()
-    private let vmInstallId = HongguoClient.vmID()
     /// Resolved play URLs (hongguo-open-player entry cache, 180 s) + in-flight dedupe for next-episode prefetch.
     var resolveCache: [String: (video: HGResolvedVideo, at: Date)] = [:]
     var resolveInflight: [String: Task<HGResolvedVideo, Error>] = [:]
@@ -708,16 +706,16 @@ actor HongguoClient {
                         NSLog("[HG] legacy batch fallback error level=%d: %@", level, String(describing: error))
                     }
                 }
-                for level in [3, 4] {
+                do {
                     try Task.checkCancellation()
-                    do {
-                        let r = try await resolveSingle(vid, level: level)
-                        if r.err == Self.byteVC2Only && level == 3 { continue }
-                        NSLog("[HG] legacy single fallback ok level=%d streams=%d", level, r.streams.count)
+                    let r = try await resolveSingle(vid)
+                    if !r.streams.isEmpty {
+                        NSLog("[HG] GuoApp 7.3.5.32 single fallback ok streams=%d", r.streams.count)
                         return r
-                    } catch {
-                        NSLog("[HG] legacy single fallback error level=%d: %@", level, String(describing: error))
                     }
+                    NSLog("[HG] GuoApp 7.3.5.32 returned no compatible streams: %@", r.err ?? "unknown")
+                } catch {
+                    NSLog("[HG] GuoApp 7.3.5.32 single fallback error: %@", String(describing: error))
                 }
                 if Self.purePlayerOverride != nil { throw PlayerEmptyBody() }
                 playerRejected.insert(did)
@@ -759,6 +757,8 @@ actor HongguoClient {
     private static let purePlayerVersionCode = "73932"
     static let purePlayerUA = "com.phoenix.read/73932 (Linux; U; Android 14; zh_CN; 23127PN0CC; Build/UKQ1.230804.001; Cronet/TTNetVersion:8d40f833 2026-03-03 QuicVersion:21ac1950 2025-11-18)"
     private var playerIdentity: HGPlayerIdentity?
+    private var playback735Device: HGPlayback735Device?
+    private var playback735Registering: Task<HGPlayback735Device, Error>?
     private var playerRegistering: Task<HGPlayerIdentity, Error>?
     private var playerRejected = Set<String>()
     private var playerBlockedUntil: Date?
@@ -973,43 +973,98 @@ actor HongguoClient {
         return nil
     }
 
-    private func resolveSingle(_ vid: String, level: Int) async throws -> HGResolvedVideo {
-        let bodyObj: [String: Any] = ["video_id": vid, "content_type": 1,
-                                      "biz_param": ["need_all_video_definition": true, "video_platform": 3, "device_level": level] as [String: Any]]
+    private func ensurePlayback735Device(force: Bool = false) async throws -> HGPlayback735Device {
+        if force {
+            playback735Device = nil
+            HGPlayback735Device.reset()
+        }
+        if let current = playback735Device, current.isUsable { return current }
+        if let saved = HGPlayback735Device.load() {
+            playback735Device = saved
+            return saved
+        }
+        if let task = playback735Registering { return try await task.value }
+        let session = playerSession
+        let task = Task { try await HGPlayback735Device.register(session: session) }
+        playback735Registering = task
+        defer { playback735Registering = nil }
+        let registered = try await task.value
+        playback735Device = registered
+        return registered
+    }
+
+    private func resolveSingle(_ vid: String) async throws -> HGResolvedVideo {
+        let bodyObj: [String: Any] = [
+            "video_id": vid, "content_type": 1,
+            "biz_param": ["need_all_video_definition": true, "video_platform": 3] as [String: Any]
+        ]
         let body = J.encodeSorted(bodyObj)
-        let now = Date()
-        // video_model.go: separate anonymous 19-digit ids (newVideoModelDeviceID), never player mint / search device.
-        let q = GoURL.encode([
-            "aid": "8662", "app_name": "novelread", "version_code": "73532", "version_name": "7.3.5.32",
-            "manifest_version_code": "73532", "update_version_code": "73532", "channel": "update_64",
-            "device_platform": "android", "os": "android", "ssmix": "a", "device_type": "25053RT47C", "device_brand": "Redmi",
-            "language": "zh", "os_api": "36", "os_version": "16", "resolution": "1280*2772", "dpi": "520", "ac": "wifi",
-            "device_id": vmDeviceId, "iid": vmInstallId, "_rticket": String(Int64(now.timeIntervalSince1970 * 1000))
-        ])
-        var req = URLRequest(url: URL(string: Self.urlVideoModel + "?" + q)!)
-        req.httpMethod = "POST"
-        req.httpBody = body
-        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue(Self.videoModelUA, forHTTPHeaderField: "User-Agent")
-        req.setValue("0", forHTTPHeaderField: "X-XS-From-Web")
-        req.setValue("2", forHTTPHeaderField: "Sdk-Version")
-        for (k, v) in HGSign.videoModelHeaders(rawQuery: q, body: Array(body), now: now) { req.setValue(v, forHTTPHeaderField: k) }
-        // Same no-proxy session as batch — system proxy/SOCKS yields 200 empty on this Mac.
-        let (data, resp) = try await playerSession.data(for: req)
-        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        if data.isEmpty {
-            NSLog("[HG] resolveSingle HTTP %d empty (soft reject)", status)
-            throw ProviderError.upstream("HTTP \(status) 空响应（上游软拒绝）")
+        var lastError: Error = PlayerEmptyBody()
+        // The supplied GuoApp source registers a 7.3.5.32 device and signs the exact
+        // video_model/v1 request with Gorgon + Argus + Ladon. Rotate only after empty-body rejection.
+        for attempt in 0..<3 {
+            try Task.checkCancellation()
+            let device = try await ensurePlayback735Device(force: attempt > 0)
+            let now = Date()
+            let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+            let q = GoURL.encode([
+                "aid": "8662", "app_name": "novelread", "version_code": "73532", "version_name": "7.3.5.32",
+                "manifest_version_code": "73532", "update_version_code": "73532", "channel": "update_64",
+                "device_platform": "android", "os": "android", "ssmix": "a", "device_type": "25053RT47C",
+                "device_brand": "Redmi", "language": "zh", "os_api": "36", "os_version": "16",
+                "resolution": "1280*2772", "dpi": "520", "ac": "wifi",
+                "device_id": device.deviceId, "iid": device.iid, "_rticket": String(nowMs)
+            ])
+            guard let url = URL(string: Self.urlVideoModel + "?" + q) else {
+                throw ProviderError.invalid("红果 video_model 地址无效")
+            }
+            var request = URLRequest(url: url, timeoutInterval: 20)
+            request.httpMethod = "POST"
+            request.httpBody = body
+            request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue(Self.videoModelUA, forHTTPHeaderField: "User-Agent")
+            request.setValue("0", forHTTPHeaderField: "X-XS-From-Web")
+            request.setValue("2", forHTTPHeaderField: "Sdk-Version")
+            for (key, value) in HGSign.videoModelHeaders(rawQuery: q, body: Array(body), now: now, deviceId: device.deviceId) {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
+
+            do {
+                let (data, response) = try await playerSession.data(for: request)
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard status == 200 else { throw ProviderError.upstream("video_model HTTP \(status)") }
+                guard !data.isEmpty else { throw PlayerEmptyBody() }
+                let json = try J.parse(data)
+                for code in [json["code"], J.dict(json["BaseResp"])["StatusCode"]] where code != nil {
+                    guard J.str(code) == "0" else {
+                        throw ProviderError.upstream("video_model code=\(J.str(code)) \(J.str(json["message"]))")
+                    }
+                }
+                let dataObject = J.dict(json["data"])
+                var model = Self.videoModelJSON(dataObject["video_model"])
+                if model == nil, dataObject["video_list"] != nil {
+                    model = [
+                        "video_list": dataObject["video_list"] as Any,
+                        "video_duration": dataObject["video_duration"] as Any,
+                        "duration": dataObject["duration"] as Any
+                    ]
+                }
+                guard let raw = model else { throw ProviderError.upstream("video_model 缺失") }
+                let resolved = try await materialize(raw, vid: vid)
+                NSLog("[HG] GuoApp 7.3.5.32 video_model ok streams=%d", resolved.streams.count)
+                return resolved
+            } catch is PlayerEmptyBody {
+                lastError = PlayerEmptyBody()
+                NSLog("[HG] GuoApp 7.3.5.32 video_model empty body; rotate registered identity (%d/3)", attempt + 1)
+                if attempt == 2 { throw lastError }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw error
+            }
         }
-        let j = try J.parse(data)
-        for c in [j["code"], J.dict(j["BaseResp"])["StatusCode"]] where c != nil {
-            if J.str(c) != "0" { throw ProviderError.upstream("video_model code=\(J.str(c))") }
-        }
-        guard let raw = Self.videoModelJSON(J.dict(j["data"])["video_model"]) else { throw ProviderError.upstream("video_model 缺失") }
-        let r = try await materialize(raw, vid: vid)
-        NSLog("[HG] resolveSingle code ok level=%d streams=%d", level, r.streams.count)
-        return r
+        throw lastError
     }
 
     private static func videoModelJSON(_ v: Any?) -> [String: Any]? {
