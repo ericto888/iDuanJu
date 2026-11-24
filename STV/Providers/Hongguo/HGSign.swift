@@ -305,14 +305,17 @@ enum HGSign {
     private static func aesCBCEncrypt(_ input: [UInt8], key: [UInt8], iv: [UInt8]) -> [UInt8] {
         guard key.count == kCCKeySizeAES128, iv.count == kCCBlockSizeAES128 else { return [] }
         var output = [UInt8](repeating: 0, count: input.count + kCCBlockSizeAES128)
+        let outputCount = output.count
+        let inputCount = input.count
+        let keyCount = key.count
         var moved = 0
         let status = key.withUnsafeBytes { keyBytes in
             iv.withUnsafeBytes { ivBytes in
                 input.withUnsafeBytes { inputBytes in
                     output.withUnsafeMutableBytes { outputBytes in
                         CCCrypt(CCOperation(kCCEncrypt), CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionPKCS7Padding),
-                                keyBytes.baseAddress, key.count, ivBytes.baseAddress,
-                                inputBytes.baseAddress, input.count, outputBytes.baseAddress, output.count, &moved)
+                                keyBytes.baseAddress, keyCount, ivBytes.baseAddress,
+                                inputBytes.baseAddress, inputCount, outputBytes.baseAddress, outputCount, &moved)
                     }
                 }
             }
