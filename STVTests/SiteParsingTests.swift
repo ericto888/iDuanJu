@@ -71,6 +71,8 @@ final class SiteParsingTests: XCTestCase {
         XCTAssertEqual(TubeFmt.duration("1 h 5 min"), 3900)
         XCTAssertEqual(TubeFmt.duration("12 min"), 720)
         XCTAssertEqual(TubeFmt.duration("16:41"), 1001)
+        XCTAssertEqual(XVProvider.call("setVideoHLS", #"html5player.setVideoHLS("https:\/\/cdn.example.com\/master.m3u8");"#), "https://cdn.example.com/master.m3u8")
+        XCTAssertEqual(XVProvider.call("setVideoUrlHigh", #"html5player.setVideoUrlHigh('https:\/\/cdn.example.com\/video.mp4?x=1\u0026y=2');"#), "https://cdn.example.com/video.mp4?x=1&y=2")
         XCTAssertFalse(TubeSafety.allowed("Hidden camera something"))
         XCTAssertFalse(TubeSafety.allowed("某某 未成年"))
         XCTAssertTrue(TubeSafety.allowed("Couple vacation video"))
