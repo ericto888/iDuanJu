@@ -743,6 +743,21 @@ private struct DynamicSiteFeed: View {
         }
         let fallback = SiteCategory(id: "", title: "推荐", path: "")
         guard let provider = Sites.provider(source) else { return [fallback] }
+
+        // JS 视频插件的分类由 home() 动态提供。不能只读 cachedCategories：
+        // 首次进入时缓存通常为空，而此前只有点击“推荐”后才可能触发 home()，形成循环依赖。
+        if let pluginID = source.pluginID,
+           let response = try? await PluginRuntime.call(pluginID, "home", [:]) as? [String: Any] {
+            let fresh = PluginOut.categories(response["categories"])
+            if !fresh.isEmpty {
+                await MainActor.run { PluginStore.shared.cacheCategories(pluginID, fresh) }
+                return [fallback] + fresh.map {
+                    SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank)
+                }
+            }
+        }
+
+        // home() 不可用时仍兼容已有缓存分类及旧插件。
         let categories = provider.categories.filter { !$0.id.isEmpty }
         return [fallback] + categories
     }
