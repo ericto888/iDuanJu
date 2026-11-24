@@ -468,6 +468,10 @@ private struct HomeFeedPage: View {
             .animation(.easeOut(duration: 0.25), value: bottomBarHidden)
             .animation(.easeOut(duration: 0.25), value: heroPicks.isEmpty)
         }
+        // The inner horizontal pager hosts this feed inside a TabView; extend the actual
+        // vertical scroll viewport through the bottom safe area, not only the outer HomeView.
+        .ignoresSafeArea(.container, edges: .bottom)
+        .background(STVTheme.bg.ignoresSafeArea())
         .scrollIndicators(.hidden)
         .coordinateSpace(name: "home.feed.scroll")
         .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
