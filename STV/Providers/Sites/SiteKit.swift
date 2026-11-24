@@ -11,7 +11,7 @@ extension DramaSource {
         // Dynamic plugin type is authoritative: shortdrama plugins use the episode grid;
         // video plugins keep the long-video source selector. CMS and unknown sources retain legacy behavior.
         let overrideManifest = PluginStore.overridePlugin(for: self)?.manifest
-        if let id = pluginID, let manifest = PluginStore.snapshot(id)?.manifest ?? overrideManifest {
+        if let manifest = pluginID.flatMap({ PluginStore.snapshot($0)?.manifest }) ?? overrideManifest {
             return manifest.type != .shortdrama
         }
         return true
