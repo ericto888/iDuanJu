@@ -60,6 +60,8 @@ struct PluginManifest: Codable, Hashable {
     var capabilities: [String]
     var settings: [Setting]?
     var update: Update?
+    /// Optional built-in video source IDs this plugin replaces while enabled, e.g. ["xvideos"].
+    var overrides: [String]?
     var integrity: Integrity?
 
     var httpDomains: [String] { permissions.http }
@@ -98,6 +100,13 @@ struct PluginManifest: Codable, Hashable {
             p.append("域名格式不对：\(d)（只允许 example.com 或 *.example.com）")
         }
         for c in type.requiredCapabilities where !capabilities.contains(c) { p.append("type=\(type.rawValue) 必须实现 \(c)") }
+        if let overrides, !overrides.isEmpty {
+            if type != .video { p.append("只有 type=video 插件可以接管内置视频站源") }
+            if Set(overrides).count != overrides.count { p.append("overrides 不能包含重复站源 ID") }
+            for target in overrides where !DramaSource.overridableBuiltins.contains(where: { $0.rawValue == target }) {
+                p.append("不允许接管该内置站源：\(target)")
+            }
+        }
         for s in settings ?? [] {
             if s.key.range(of: #"^[a-zA-Z][a-zA-Z0-9_]{0,31}$"#, options: .regularExpression) == nil { p.append("settings.key 不合法：\(s.key)") }
             if !["text", "select", "secret"].contains(s.type) { p.append("settings.type 只能是 text/select/secret：\(s.key)") }
@@ -183,6 +192,8 @@ struct PermissionDiff: Hashable {
         flag("请你登录该站点", old.allowsLogin, new.allowsLogin)
         flag("成人内容", old.adult, new.adult)
         if old.type != new.type { flags.append("新增：类型改为 \(new.type.label)") }
+        let addedOverrides = Set(new.overrides ?? []).subtracting(old.overrides ?? []).sorted()
+        if !addedOverrides.isEmpty { flags.append("新增：接管内置站源 \(addedOverrides.joined(separator: "、"))") }
     }
 }
 
