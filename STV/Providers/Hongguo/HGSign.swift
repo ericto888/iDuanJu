@@ -135,6 +135,30 @@ enum HGSign {
         ]
     }
 
+    /// Keep the older batch endpoint's 0x8440401c dialect separate from the registered
+    /// GuoApp 7.3.5.32 single-video signer below.
+    static func playerBatchHeaders(rawQuery: String, body: [UInt8], now: Date) -> [String: String] {
+        let ts = UInt32(truncatingIfNeeded: Int64(now.timeIntervalSince1970))
+        let qh = Bytes.md5(rawQuery), bh = Bytes.md5(body)
+        var p = [UInt8](repeating: 0, count: 20)
+        for i in 0..<4 { p[i] = qh[i]; p[4 + i] = bh[i] }
+        p[12] = 0; p[13] = 6; p[14] = 11; p[15] = 28
+        let tsb = Bytes.u32BE(ts); for i in 0..<4 { p[16 + i] = tsb[i] }
+        let key: [UInt8] = [0x44, 0xb9, 0xb9, 0xd9, 0xa4, 0xae, 0xf9, 0xfc, 0xa4, 0x93, 0xaa, 0x75, 0x7c, 0xa3, 0xc2, 0xc4, 0xa4, 0x96, 0x93, 0x8f]
+        for i in 0..<20 { p[i] ^= key[i] }
+        for i in 0..<20 {
+            let rot = (p[i] << 4) | (p[i] >> 4)
+            let mixed = rot ^ p[(i + 1) % 20]
+            p[i] = bitReverse(mixed) ^ 0xff ^ 20
+        }
+        return [
+            "X-Gorgon": Bytes.hex([0x84, 0x04, 0x40, 0x1c, 0, 0] + p),
+            "X-Khronos": String(ts),
+            "X-SS-STUB": Bytes.hex(bh).uppercased(),
+            "X-SS-Req-Ticket": String(Int64(now.timeIntervalSince1970 * 1000))
+        ]
+    }
+
     // MARK: video_model/v1 signature (GuoApp 2.0.0+112 signPlayer)
     static func videoModelHeaders(rawQuery: String, body: [UInt8], now: Date, deviceId: String) -> [String: String] {
         let nowMs = Int64(now.timeIntervalSince1970 * 1000)
