@@ -263,7 +263,7 @@ final class PluginTests: XCTestCase {
         XCTAssertTrue(try m(validOverride).problems(appVersion: "1.5").isEmpty)
         var invalidOverride = overrideBase; invalidOverride["overrides"] = ["not-a-builtin"]
         XCTAssertTrue(try m(invalidOverride).problems(appVersion: "1.5").contains { $0.contains("不允许接管") })
-        var wrongTypeOverride: [String: Any] = ["overrides": ["xvideos"]]
+        let wrongTypeOverride: [String: Any] = ["overrides": ["xvideos"]]
         XCTAssertTrue(try m(wrongTypeOverride).problems(appVersion: "1.5").contains { $0.contains("只有 type=video") })
         // Integrity mismatch
         let bad = try m(["integrity": ["files": ["main.js": "sha256-AAAA"]]])
