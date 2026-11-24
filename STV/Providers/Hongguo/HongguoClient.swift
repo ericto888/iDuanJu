@@ -1043,12 +1043,11 @@ actor HongguoClient {
                 }
                 let dataObject = J.dict(json["data"])
                 var model = Self.videoModelJSON(dataObject["video_model"])
-                if model == nil, dataObject["video_list"] != nil {
-                    model = [
-                        "video_list": dataObject["video_list"] as Any,
-                        "video_duration": dataObject["video_duration"] as Any,
-                        "duration": dataObject["duration"] as Any
-                    ]
+                if model == nil, let videoList = dataObject["video_list"] {
+                    var fallbackModel: [String: Any] = ["video_list": videoList]
+                    if let duration = dataObject["video_duration"] { fallbackModel["video_duration"] = duration }
+                    if let duration = dataObject["duration"] { fallbackModel["duration"] = duration }
+                    model = fallbackModel
                 }
                 guard let raw = model else { throw ProviderError.upstream("video_model 缺失") }
                 let resolved = try await materialize(raw, vid: vid)
@@ -1069,7 +1068,14 @@ actor HongguoClient {
 
     private static func videoModelJSON(_ v: Any?) -> [String: Any]? {
         if let d = v as? [String: Any] { return d }
-        if let s = v as? String, let data = s.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { return o }
+        guard let s = v as? String else { return nil }
+        if let data = s.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return object
+        }
+        if let decoded = Self.b64(s), let text = String(data: decoded, encoding: .utf8),
+           let data = text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return object
+        }
         return nil
     }
 
