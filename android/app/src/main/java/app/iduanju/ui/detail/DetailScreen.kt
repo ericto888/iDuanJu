@@ -93,16 +93,29 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
     var reload by remember { mutableIntStateOf(0) }
     LaunchedEffect(seriesId, reload) {
         err = null
-        try { d = if(app.iduanju.BuildConfig.DEBUG && seriesId in listOf("ui-color-bars", "ui-detail-sparse", "ui-detail-full")) HGSeriesDetail(
-            seriesId=seriesId,title="本地界面测试 · 非真实片源",desc="此页面使用明确标注的本地样例数据，用于检查详情页的排版、折叠、选集和滚动吸顶，不代表真实片源服务。".repeat(4),
-            author="界面验证",totalEps=48,episodes=(1..48).map{app.iduanju.core.hongguo.HGEpisode(it,"fixture-$it",60,"测试第 $it 集")},
-            tags=listOf("本地样例","排版验证"),favoriteCount=403000,
-            rating=if(seriesId=="ui-detail-sparse")0.0 else 8.6,ratingCount=if(seriesId=="ui-detail-sparse")"" else "1.2万",
-            hotText=if(seriesId=="ui-detail-sparse")"" else "512万",source="本地样例",
-            relatedSeries=(1..3).map { HGSeries(seriesId=if(it==1)seriesId else "sample-$it",title="本地系列样例 $it",episodeCount=48) },
-            cast=(1..5).map { app.iduanju.core.hongguo.HGCelebrity(id="sample-$it",name="样例演员 $it",role="饰 样例") })
-            else withContext(Dispatchers.IO) { app.iduanju.data.Catalog.detail(seriesId) } }
-        catch (e: Exception) { err = e.message ?: "加载失败" }
+        try {
+            if (app.iduanju.BuildConfig.DEBUG && seriesId in listOf("ui-color-bars", "ui-detail-sparse", "ui-detail-full")) {
+                d = HGSeriesDetail(
+                    seriesId=seriesId,title="本地界面测试 · 非真实片源",desc="此页面使用明确标注的本地样例数据，用于检查详情页的排版、折叠、选集和滚动吸顶，不代表真实片源服务。".repeat(4),
+                    author="界面验证",totalEps=48,episodes=(1..48).map{app.iduanju.core.hongguo.HGEpisode(it,"fixture-$it",60,"测试第 $it 集")},
+                    tags=listOf("本地样例","排版验证"),favoriteCount=403000,
+                    rating=if(seriesId=="ui-detail-sparse")0.0 else 8.6,ratingCount=if(seriesId=="ui-detail-sparse")"" else "1.2万",
+                    hotText=if(seriesId=="ui-detail-sparse")"" else "512万",source="本地样例",
+                    relatedSeries=(1..3).map { HGSeries(seriesId=if(it==1)seriesId else "sample-$it",title="本地系列样例 $it",episodeCount=48) },
+                    cast=(1..5).map { app.iduanju.core.hongguo.HGCelebrity(id="sample-$it",name="样例演员 $it",role="饰 样例") })
+            } else {
+                val base = withContext(Dispatchers.IO) { app.iduanju.data.Catalog.detail(seriesId, web = false) }
+                d = base
+                if (app.iduanju.data.Catalog.isHongguo(seriesId) && base.cast.isEmpty() && base.tags.isEmpty()) {
+                    val enriched = withContext(Dispatchers.IO) { app.iduanju.data.Catalog.enrich(seriesId, base) }
+                    if (enriched != null && d?.seriesId == enriched.seriesId) d = enriched
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            err = e.message ?: "加载失败"
+        }
     }
     val metrics = LocalLayoutMetrics.current
     val isExpanded = metrics.tier == SizeTier.Expanded

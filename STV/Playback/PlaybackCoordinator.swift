@@ -142,14 +142,19 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     private var lastPrefetchPoll = Date.distantPast
 
     let av: AVPlayerEngine
-    private(set) lazy var mpv: MPVPlayerEngine? = {
-        do { return try MPVPlayerEngine() } catch {
-            #if DEBUG
-            NSLog("%@", "[STV] MPVKit unavailable: \(error)")
-            #endif
-            return nil
+    private var mpvInstance: MPVPlayerEngine?
+    private var mpvInitAttempted = false
+    var mpv: MPVPlayerEngine? {
+        if !mpvInitAttempted {
+            mpvInitAttempted = true
+            do { mpvInstance = try MPVPlayerEngine() } catch {
+                #if DEBUG
+                NSLog("%@", "[STV] MPVKit unavailable: \(error)")
+                #endif
+            }
         }
-    }()
+        return mpvInstance
+    }
     private(set) var engine: PlayerEngine
     /// Episodes MPVKit could not open → AVPlayer.
     private var mpvFailed: Set<Int> = []
@@ -303,6 +308,13 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         endObserver = nil
         audioObservers.forEach(NotificationCenter.default.removeObserver)
         audioObservers.removeAll()
+        timer?.invalidate(); timer = nil
+        observer = nil
+        engine.onPlaybackRequested = nil
+        suppliedEngine?.stop()
+        av.stop()
+        mpvInstance?.shutdown()
+        mpvInstance = nil
         if let commands = nowPlaying?.remoteCommandCenter {
             [commands.playCommand, commands.pauseCommand, commands.togglePlayPauseCommand].forEach { $0.removeTarget(self) }
         }
@@ -320,12 +332,6 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         pipIdentity = nil
         pipActive = false
         pipPossible = false
-        timer?.invalidate(); timer = nil
-        observer = nil
-        engine.onPlaybackRequested = nil
-        suppliedEngine?.stop()
-        av.stop()
-        mpv?.stop()
         readyIndex = nil
         current = nil
         finaleEnded = false

@@ -15,6 +15,7 @@ import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
 import androidx.compose.ui.graphics.graphicsLayer
 import app.iduanju.core.hongguo.HGFilterOption
@@ -63,7 +64,7 @@ import androidx.lifecycle.viewModelScope
 /** ui-redesign 01–03 (iOS CategoryView twin): 榜单 = segmented 剧种 + chips + top-3 posters + ranked rows;
  *  筛选找片 = card panel that collapses into a sticky glass strip. */
 @Composable
-fun CategoryScreen(onOpenDetail: (String) -> Unit) {
+fun CategoryScreen(onOpenDetail: (String) -> Unit, onSearch: (() -> Unit)? = null) {
     val c = IdjThemeColors
     // State lives in a ViewModel scoped to the 找剧 back-stack entry: opening a drama and coming back keeps the
     // list, filters, paging cursor and scroll position, and in-flight loads are not cancelled by leaving.
@@ -159,8 +160,19 @@ fun CategoryScreen(onOpenDetail: (String) -> Unit) {
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 110.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
             item(span = { GridItemSpan(maxLineSpan) }, key = "tabs") {
-                UnderlineTabs(listOf(false, true), filterMode, { if (it) "筛选找片" else "榜单" }, onSelect = { if (it != filterMode) filterMode = it },
-                    modifier = Modifier.padding(start = 4.dp))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    UnderlineTabs(listOf(false, true), filterMode, { if (it) "筛选找片" else "榜单" }, onSelect = { if (it != filterMode) filterMode = it },
+                        modifier = Modifier.padding(start = 4.dp).weight(1f))
+                    if (onSearch != null) {
+                        GlassIconButton(
+                            Icons.Rounded.Search,
+                            "搜索",
+                            size = 38.dp,
+                            iconSize = 19.dp,
+                            onClick = onSearch,
+                        )
+                    }
+                }
             }
             if (!filterMode) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "rankhead") {
