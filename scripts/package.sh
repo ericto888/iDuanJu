@@ -27,7 +27,7 @@ if [[ "${STV_RUN_TESTS:-0}" == "1" ]]; then
     -destination "platform=iOS Simulator,id=$SIM_ID" -derivedDataPath DerivedDataRelease \
     CODE_SIGNING_ALLOWED=NO ARCHS="$SIM_ARCH" ONLY_ACTIVE_ARCH=YES ENABLE_TESTABILITY=YES -parallel-testing-enabled NO \
     -only-testing:STVTests/LegadoTests -only-testing:STVTests/PluginTests/testCMSCategoryRequestsKeepFullCategoryList \
-    -only-testing:STVTests/PluginTests/testMacCMSParsing -only-testing:STVTests/CENCStreamTests \
+    -only-testing:STVTests/PluginTests/testMacCMSParsing -only-testing:STVTests/PluginTests/testManifestValidation -only-testing:STVTests/CENCStreamTests \
     test 2>&1 | tee "$LOG_DIR/tests.log"
 fi
 fi

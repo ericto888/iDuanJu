@@ -341,6 +341,14 @@ struct PluginConsentSheet: View {
                             .font(.caption).foregroundStyle(pending.signedBy == nil ? .orange : .green)
                     }
                 }
+                if let targets = m.overrides, !targets.isEmpty {
+                    Section("接管的内置站源") {
+                        ForEach(targets, id: \.self) { target in
+                            Label(DramaSource(rawValue: target)?.label ?? target, systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
+                        }
+                        Text("启用插件后将使用商店插件解析这些内置站源，不会重复显示。停用或卸载插件后自动恢复内置实现。").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 if let diff = pending.diff, pending.isUpdate {
                     Section("更新：从 v\(pending.existing?.manifest.version ?? "?") 到 v\(m.version) 的权限变化") {
                         if diff.isEmpty { Text("权限没有变化").foregroundStyle(.secondary) }

@@ -24,6 +24,8 @@ struct DramaSource: RawRepresentable, Hashable, Codable, Identifiable, Sendable 
     static let legado = DramaSource("legado")
     static let telegram = DramaSource("telegram")
     static let builtins: [DramaSource] = [.hongguo, .huangguo, .jable, .missav, .hanime1, .supjav, .eporner, .xvideos, .xnxx, .pornhub, .telegram]
+    /// Built-in video sites that a reviewed JS video plugin may take over. App-specific feeds and Telegram stay native.
+    static let overridableBuiltins: [DramaSource] = [.jable, .missav, .hanime1, .supjav, .eporner, .xvideos, .xnxx, .pornhub]
 
     static func plugin(_ id: String) -> DramaSource { DramaSource("p." + id) }
     static func cms(_ key: String) -> DramaSource { DramaSource("cms." + key) }

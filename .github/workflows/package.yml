@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - feat/online-source-store
+      - feat/plugin-builtin-source-overrides
 
 permissions:
   contents: read
@@ -46,7 +47,7 @@ jobs:
             ${{ runner.os }}-xcode-26.3-ios-release-
       - name: Build unsigned IPA
         env:
-          STV_RUN_TESTS: '0'
+          STV_RUN_TESTS: '1'
           STV_BUILD_SIMULATOR: '0'
         run: scripts/package.sh "$RUNNER_TEMP/dist"
       - name: Upload build logs

@@ -87,8 +87,12 @@ final class PluginStore: ObservableObject {
         snapLock.lock(); defer { snapLock.unlock() }
         return snap.values.sorted { $0.installedAt < $1.installedAt }
     }
+    nonisolated static func overridePlugin(for source: DramaSource) -> InstalledPlugin? {
+        guard DramaSource.overridableBuiltins.contains(source) else { return nil }
+        return allSnapshot().first { $0.enabled && $0.manifest.type == .video && ($0.manifest.overrides ?? []).contains(source.rawValue) }
+    }
     nonisolated static func videoSources() -> [DramaSource] {
-        allSnapshot().filter { $0.enabled && [.video, .shortdrama].contains($0.manifest.type) }.map { DramaSource.plugin($0.id) }
+        allSnapshot().filter { $0.enabled && [.video, .shortdrama].contains($0.manifest.type) && ($0.manifest.overrides ?? []).isEmpty }.map { DramaSource.plugin($0.id) }
     }
     nonisolated static func comicSources() -> [MangaSourceID] {
         allSnapshot().filter { $0.enabled && $0.manifest.type == .comic }.map { MangaSourceID.plugin($0.id) }
@@ -127,6 +131,11 @@ final class PluginStore: ObservableObject {
     // MARK: Install / update
 
     func commit(_ p: PendingInstall) throws {
+        let targets = Set(p.manifest.overrides ?? [])
+        let conflicts = plugins.filter { $0.id != p.manifest.id && $0.enabled && !targets.isDisjoint(with: $0.manifest.overrides ?? []) }
+        if let conflict = conflicts.first, let target = targets.intersection(conflict.manifest.overrides ?? []).sorted().first {
+            throw PluginError.install("内置站源 \(target) 已由插件 \(conflict.manifest.name) 接管，请先停用或卸载冲突插件")
+        }
         let dir = PluginPaths.dir(p.manifest.id)
         try Data(p.source.utf8).write(to: dir.appendingPathComponent(p.manifest.entry), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         try JSONEncoder().encode(p.manifest).write(to: dir.appendingPathComponent("manifest.json"), options: .atomic)
@@ -160,6 +169,14 @@ final class PluginStore: ObservableObject {
     }
 
     func setEnabled(_ id: String, _ on: Bool) {
+        if on, let rec = plugin(id) {
+            let targets = Set(rec.manifest.overrides ?? [])
+            let conflict = plugins.first { $0.id != id && $0.enabled && !targets.isDisjoint(with: $0.manifest.overrides ?? []) }
+            if let conflict, let target = targets.intersection(conflict.manifest.overrides ?? []).sorted().first {
+                PluginLog.add(id, "启用失败：内置站源 \\(target) 已由插件 \\(conflict.manifest.name) 接管")
+                return
+            }
+        }
         mutate(id) { $0.enabled = on; if on { $0.failures = 0; $0.disabledReason = nil } }
         PluginRuntime.unload(id)
     }
