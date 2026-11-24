@@ -137,16 +137,22 @@ struct SourcesView: View {
             return "商店插件接管 · \\(replacement.manifest.name) v\\(replacement.manifest.version)"
         }
         switch s {
-        case .jable: "HLS 直连 · 镜像 jable.tv / fs1.app"
-        case .missav: "HLS 1080P/720P/480P/360P · 5 个镜像自动探测（.fans/.media 免验证）"
-        case .hanime1: "MP4 直链（带签名）· 常需 Cloudflare 验证"
-        case .supjav: "多线路（FST/VOE/TV/ST…，不含 LUC）· HLS 经本机代理去伪装头"
-        case .eporner: "官方公开 API · HLS + MP4 多画质 · 大陆直连可达"
-        case .xvideos: "HLS 自适应 + MP4 · 需代理"
-        case .xnxx: "HLS 自适应 + MP4 · 需代理"
-        case .pornhub: "HLS 1080P/720P/480P · 需代理"
-        default: s.pluginID != nil ? "JS 插件 · " + (PluginStore.snapshot(s.pluginID!)?.manifest.httpDomains.first ?? "") :
-                 s.cmsKey != nil ? "苹果 CMS 采集站 · " + (CMSStore.site(s.cmsKey!).flatMap { URL(string: $0.api)?.host } ?? "") : s.siteHost
+        case .jable: return "HLS 直连 · 镜像 jable.tv / fs1.app"
+        case .missav: return "HLS 1080P/720P/480P/360P · 5 个镜像自动探测（.fans/.media 免验证）"
+        case .hanime1: return "MP4 直链（带签名）· 常需 Cloudflare 验证"
+        case .supjav: return "多线路（FST/VOE/TV/ST…，不含 LUC）· HLS 经本机代理去伪装头"
+        case .eporner: return "官方公开 API · HLS + MP4 多画质 · 大陆直连可达"
+        case .xvideos: return "HLS 自适应 + MP4 · 需代理"
+        case .xnxx: return "HLS 自适应 + MP4 · 需代理"
+        case .pornhub: return "HLS 1080P/720P/480P · 需代理"
+        default:
+            if let pluginID = s.pluginID {
+                return "JS 插件 · " + (PluginStore.snapshot(pluginID)?.manifest.httpDomains.first ?? "")
+            }
+            if let cmsKey = s.cmsKey {
+                return "苹果 CMS 采集站 · " + (CMSStore.site(cmsKey).flatMap { URL(string: $0.api)?.host } ?? "")
+            }
+            return s.siteHost
         }
     }
 
