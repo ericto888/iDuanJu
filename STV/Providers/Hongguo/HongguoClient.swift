@@ -674,20 +674,6 @@ actor HongguoClient {
     // MARK: resolve (resolve.go batch via postPlayerBatch → video_model.go single dialect)
 
     func resolveFresh(vid: String) async throws -> HGResolvedVideo {
-        // GuoApp 2.0.0+112 uses the 7.4.5.32 V5-signed video_tab endpoint first,
-        // then its V5-signed multi_video_model/player/v1 fallback. Keep the existing
-        // 7.3.9 / legacy dialects below as compatibility fallbacks.
-        do {
-            let v5 = try await resolvePlaybackV5(vid: vid)
-            if !v5.streams.isEmpty {
-                NSLog("[HG] GuoApp V5 playback ok streams=%d", v5.streams.count)
-                return v5
-            }
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            NSLog("[HG] GuoApp V5 playback fallback: %@", String(describing: error))
-        }
         for attempt in 0..<3 {
             try Task.checkCancellation()
             let pairs = try await purePlayerPairs()
@@ -773,9 +759,6 @@ actor HongguoClient {
     private static let purePlayerVersionCode = "73932"
     static let purePlayerUA = "com.phoenix.read/73932 (Linux; U; Android 14; zh_CN; 23127PN0CC; Build/UKQ1.230804.001; Cronet/TTNetVersion:8d40f833 2026-03-03 QuicVersion:21ac1950 2025-11-18)"
     private var playerIdentity: HGPlayerIdentity?
-    private var playbackV5Device: HGPlaybackV5Device?
-    private var playbackV5Registering: Task<HGPlaybackV5Device, Error>?
-    private var playbackV5Signer: HGPlaybackV5Signer?
     private var playerRegistering: Task<HGPlayerIdentity, Error>?
     private var playerRejected = Set<String>()
     private var playerBlockedUntil: Date?
@@ -946,165 +929,6 @@ actor HongguoClient {
         return try await materialize(model, vid: vid)
     }
 
-    private struct PlaybackV5EmptyBody: Error {}
-
-    private static let playbackV5Base = "https://api5-normal-sinfonlinea.fqnovel.com"
-    private static let playbackV5UA = "com.phoenix.read/74532 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)"
-
-    private func ensurePlaybackV5Device(force: Bool = false) async throws -> HGPlaybackV5Device {
-        if force {
-            playbackV5Device = nil
-            HGPlaybackV5Device.reset()
-        }
-        if let current = playbackV5Device, current.isUsable { return current }
-        if let saved = HGPlaybackV5Device.load() {
-            playbackV5Device = saved
-            return saved
-        }
-        if let task = playbackV5Registering { return try await task.value }
-        let session = playerSession
-        let task = Task { try await HGPlaybackV5Device.register(session: session) }
-        playbackV5Registering = task
-        defer { playbackV5Registering = nil }
-        let registered = try await task.value
-        playbackV5Device = registered
-        return registered
-    }
-
-    private func playbackV5Query(_ device: HGPlaybackV5Device) -> [String: String] {
-        [
-            "aid": "8662", "app_name": "novelread", "version_code": "74532", "version_name": "7.4.5.32",
-            "channel": "vivo_8662_64", "device_platform": "android", "device_type": "PGT-AN10", "os_version": "12",
-            "update_version_code": "74532", "iid": device.iid, "cdid": UUID().uuidString.lowercased(),
-            "device_id": device.deviceId
-        ]
-    }
-
-    private func playbackV5Request(method: String, path: String, extra: [String: String],
-                                   body: Data?, device: HGPlaybackV5Device) async throws -> [String: Any] {
-        if playbackV5Signer == nil { playbackV5Signer = try HGPlaybackV5Signer() }
-        var values = playbackV5Query(device)
-        for (key, value) in extra { values[key] = value }
-        let base = Self.playbackV5Base + path
-        let signed = try playbackV5Signer!.sign(base: base, values: values, body: body, nowMillis: Self.nowMs())
-        guard let url = URL(string: signed.url) else { throw ProviderError.invalid("红果 V5 播放地址无效") }
-        var request = URLRequest(url: url, timeoutInterval: 20)
-        request.httpMethod = method
-        request.httpBody = body
-        request.setValue(Self.playbackV5UA, forHTTPHeaderField: "User-Agent")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        for (key, value) in signed.headers { request.setValue(value, forHTTPHeaderField: key) }
-        let (data, response) = try await playerSession.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200 else { throw ProviderError.upstream("红果 V5 \(path) HTTP \(status)") }
-        guard !data.isEmpty else { throw PlaybackV5EmptyBody() }
-        let json = try J.parse(data)
-        for code in [json["code"], J.dict(json["BaseResp"])["StatusCode"]] where code != nil {
-            guard J.str(code) == "0" else {
-                throw ProviderError.upstream("红果 V5 播放接口 code=\(J.str(code))")
-            }
-        }
-        return json
-    }
-
-    private func playbackV5Model(_ row: [String: Any]) -> [String: Any]? {
-        var model = Self.videoModelJSON(row["video_model"])
-        if model == nil, let encoded = row["video_model"] as? String,
-           let decoded = Data(base64Encoded: encoded),
-           let text = String(data: decoded, encoding: .utf8),
-           let parsed = try? J.parse(Data(text.utf8)) {
-            model = parsed
-        }
-        if model == nil, row["video_list"] != nil { model = row }
-        guard var result = model, !result.isEmpty else { return nil }
-        for key in ["fallback_api", "key_seed", "url_expire", "video_duration", "duration"] where result[key] == nil {
-            result[key] = row[key]
-        }
-        return result
-    }
-
-    /// Exact GuoApp 2.0.0+112 order: signed video_tab first, signed player batch second.
-    /// Both use the registered 7.4.5.32 identity and V5 Helios/Medusa headers.
-    private func resolvePlaybackV5(vid: String) async throws -> HGResolvedVideo {
-        guard Self.looksSID(vid) else { throw ProviderError.invalid("红果分集 ID 无效") }
-        var lastError: Error = ProviderError.upstream("红果 V5 未返回播放模型")
-        for attempt in 0..<3 {
-            try Task.checkCancellation()
-            let device = try await ensurePlaybackV5Device(force: attempt > 0)
-            var sawEmptyBody = false
-
-            do {
-                let tab = try await playbackV5Request(
-                    method: "GET",
-                    path: "/reading/bookapi/video_tab/multi_video_model/v1/",
-                    extra: [
-                        "video_id": vid, "video_id_type": "0", "device_level": "1",
-                        "need_all_video_definition": "1", "need_mp4_align": "0",
-                        "use_os_player": "0", "video_platform": "1024", "source": "0", "from_video_id": ""
-                    ],
-                    body: nil, device: device
-                )
-                let data = J.dict(J.dict(tab["data"])["video_model_data"])
-                let row = J.dict(data[vid])
-                if let model = playbackV5Model(row) {
-                    let resolved = try await materialize(model, vid: vid)
-                    if !resolved.streams.isEmpty { return resolved }
-                    lastError = ProviderError.upstream(resolved.err ?? "红果 V5 video_tab 没有兼容片源")
-                } else {
-                    lastError = ProviderError.upstream("红果 V5 video_tab 未返回本集 video_model")
-                }
-            } catch is PlaybackV5EmptyBody {
-                sawEmptyBody = true
-                lastError = ProviderError.upstream("红果 V5 video_tab 返回空包")
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                lastError = error
-            }
-
-            do {
-                let payload: [String: Any] = [
-                    "biz_param": [
-                        "detail_page_version": 0, "device_level": 1, "disable_digg_stat": false,
-                        "disable_video_relate_book": false, "need_all_video_definition": true,
-                        "need_mp4_align": false, "use_os_player": false, "use_server_dns": false,
-                        "video_platform": 1024
-                    ],
-                    "mixed_video_id_map": ["1004": [vid]],
-                    "dr_scene": "player"
-                ]
-                let body = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-                let player = try await playbackV5Request(
-                    method: "POST", path: "/novel/player/multi_video_model/player/v1",
-                    extra: [:], body: body, device: device
-                )
-                let root = J.dict(player["data"])
-                let group = J.dict(root["1004"])
-                let row = J.dict((group.isEmpty ? root : group)[vid])
-                if let model = playbackV5Model(row) {
-                    let resolved = try await materialize(model, vid: vid)
-                    if !resolved.streams.isEmpty { return resolved }
-                    lastError = ProviderError.upstream(resolved.err ?? "红果 V5 player 没有兼容片源")
-                } else {
-                    lastError = ProviderError.upstream("红果 V5 player 未返回本集 video_model")
-                }
-            } catch is PlaybackV5EmptyBody {
-                sawEmptyBody = true
-                lastError = ProviderError.upstream("红果 V5 player 返回空包")
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                lastError = error
-            }
-
-            if !sawEmptyBody { break }
-            if attempt < 2 {
-                NSLog("[HG] V5 playback soft reject; rotate registered device attempt=%d", attempt + 1)
-            }
-        }
-        throw lastError
-    }
-
     private static let byteVC2Only = "该集仅返回 ByteVC2 编码，iOS 无法解码"
 
     private func resolveBatch(_ vid: String, level: Int) async throws -> HGResolvedVideo? {
@@ -1190,15 +1014,7 @@ actor HongguoClient {
 
     private static func videoModelJSON(_ v: Any?) -> [String: Any]? {
         if let d = v as? [String: Any] { return d }
-        if let s = v as? String {
-            if let data = s.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                return object
-            }
-            if let decoded = Data(base64Encoded: s), let text = String(data: decoded, encoding: .utf8),
-               let data = text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                return object
-            }
-        }
+        if let s = v as? String, let data = s.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { return o }
         return nil
     }
 
