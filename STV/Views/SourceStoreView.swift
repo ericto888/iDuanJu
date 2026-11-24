@@ -132,6 +132,10 @@ struct SourceStoreView: View {
                 guard accepted else { return }
                 do {
                     try store.commit(item)
+                    // 提交成功后立即同步商店卡片状态，避免旧的 updateAvailableIDs
+                    // 继续让“更新”按钮显示，直到用户重新进入商店或刷新目录。
+                    updateAvailableIDs.remove(item.manifest.id)
+                    checkingUpdateIDs.remove(item.manifest.id)
                     message = "已安装 \(item.manifest.name) \(item.manifest.version)"
                 } catch {
                     message = error.localizedDescription
