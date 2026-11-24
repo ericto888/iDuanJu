@@ -296,8 +296,13 @@ struct JSVideoProvider: SiteProvider {
     static let homeID = "__home"
 
     var categories: [SiteCategory] {
-        [SiteCategory(id: Self.homeID, title: "推荐", path: Self.homeID)]
-            + (PluginStore.snapshot(pluginID)?.cachedCategories ?? []).map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }
+        // “推荐”由宿主统一提供；过滤站源缓存中的同名分类，避免旧缓存或站源重复声明时出现两个推荐入口。
+        let cached = PluginStore.snapshot(pluginID)?.cachedCategories ?? []
+        let sourceCategories = cached.filter {
+            $0.id != Self.homeID && $0.name.trimmingCharacters(in: .whitespacesAndNewlines) != "推荐"
+        }
+        return [SiteCategory(id: Self.homeID, title: "推荐", path: Self.homeID)]
+            + sourceCategories.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }
     }
 
     private func series(_ o: [String: Any]) -> HGSeries? {
