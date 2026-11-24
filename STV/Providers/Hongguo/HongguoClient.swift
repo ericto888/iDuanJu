@@ -37,6 +37,8 @@ actor HongguoClient {
             "HTTPProxy": "", "HTTPSProxy": "", "SOCKSProxy": ""
         ]
         playerSession = URLSession(configuration: pcfg)
+        HGProtocol.shared.load()
+        HGProtocol.shared.refreshAsync(session: session)
     }
 
     private static func vmID() -> String { String(1_000_000_000_000_000_000 + UInt64.random(in: 0..<8_000_000_000_000_000_000)) }
@@ -114,7 +116,15 @@ actor HongguoClient {
         return d
     }
 
-    func resetDevice() { device = nil; HGDevice.reset() }
+    func resetDevice() {
+        device = nil
+        HGDevice.reset()
+        playerIdentity = nil
+        playerRejected.removeAll()
+        playerBlockedUntil = nil
+        HGPlayerIdentity.reset()
+        resolveCache.removeAll()
+    }
 
     /// Last automatic re-registration (soft-reject recovery). Throttle so a blocked network can't hammer device_register.
     private var lastAutoReregister: Date?
@@ -671,64 +681,261 @@ actor HongguoClient {
         return selection
     }
 
-    // MARK: resolve (resolve.go batch via postPlayerBatch → video_model.go single dialect)
+    // MARK: resolve (7.4.5.32 Medusa v5 preload/v1 + video_tab/v1 + web fallback)
+
+    private static func fallbackIdentity() -> HGPlayerIdentity {
+        HGProtocol.shared.current.fallbackIdentity ?? HGPlayerIdentity.fallbackVerified
+    }
+
+    private var preferredPreloadHost: String?
+
+    private func orderedPreloadHosts() -> [String] {
+        let hosts = HGProtocol.shared.current.preloadHosts
+        guard let first = preferredPreloadHost, hosts.contains(first) else { return hosts }
+        return [first] + hosts.filter { $0 != first }
+    }
+
+    private func v5PlayerIdentity() async throws -> HGPlayerIdentity {
+        if let override = Self.purePlayerOverride {
+            let cdid = Self.stableUUID("hongguo-player-cdid:" + override.did)
+            let openudid = HGPlayerSign.hexStr(Array(SHA256.hash(data: Data(("hongguo-player-openudid:" + override.did).utf8)).prefix(8)))
+            return HGPlayerIdentity(deviceId: override.did, iid: override.iid, cdid: cdid, openudid: openudid, registeredAt: Date().timeIntervalSince1970)
+        }
+        return try await ensurePlayerIdentity()
+    }
+
+    private static func v5BasePairs(_ id: HGPlayerIdentity) -> [(String, String)] {
+        HGProtocol.shared.current.appQuery.map { ($0.k, $0.v) } + [("iid", id.iid), ("cdid", id.cdid), ("device_id", id.deviceId)]
+    }
 
     func resolveFresh(vid: String) async throws -> HGResolvedVideo {
-        for attempt in 0..<3 {
-            try Task.checkCancellation()
-            let pairs = try await purePlayerPairs()
-            let did = pairs.first { $0.0 == "device_id" }?.1 ?? ""
+        guard !vid.isEmpty, vid.count <= 30, vid.allSatisfy(\.isNumber) else {
+            throw ProviderError.invalid("红果分集编号无效")
+        }
+        var lastErr: Error = ProviderError.upstream("没有可用播放流")
+
+        func tryIdentity(_ identity: HGPlayerIdentity) async throws -> HGResolvedVideo? {
+            let r: HGResolvedVideo
             do {
-                for level in [3, 4] {
-                    var result: HGResolvedVideo?
-                    do { result = try await resolvePure(vid, level: level, pairs: pairs) }
-                    catch is PlayerEmptyBody {
-                        for path in ["/novel/player/multi_video_model/v1", "/novel/player/multi_video_model/player/v1"] {
-                            do { result = try await resolveCurrentBatch(vid, level: level, pairs: pairs, path: path); break }
-                            catch is PlayerEmptyBody { }
-                        }
-                    }
-                    guard let r = result else { throw PlayerEmptyBody() }
-                    if r.err == Self.byteVC2Only && level == 3 { continue }
-                    return r
-                }
+                r = try await resolvePreloadV5(vid, identity: identity)
             } catch is PlayerEmptyBody {
-                // The registered 7.3.9 player dialect can be soft-rejected while the
-                // older batch dialect is still serving the same vid. Keep that path
-                // as a real fallback before throwing away the current identity.
-                for level in [3, 4] {
-                    try Task.checkCancellation()
+                if identity.registeredAt > 0, Date().timeIntervalSince1970 - identity.registeredAt < 8 {
+                    try await Task.sleep(for: .milliseconds(1500))
                     do {
-                        if let r = try await resolveBatch(vid, level: level) {
-                            if r.err == Self.byteVC2Only && level == 3 { continue }
-                            NSLog("[HG] legacy batch fallback ok level=%d streams=%d", level, r.streams.count)
-                            return r
-                        }
-                    } catch {
-                        NSLog("[HG] legacy batch fallback error level=%d: %@", level, String(describing: error))
+                        r = try await resolvePreloadV5(vid, identity: identity)
+                    } catch is PlayerEmptyBody {
+                        r = try await resolveVideoTabV5(vid, identity: identity)
+                    }
+                } else {
+                    r = try await resolveVideoTabV5(vid, identity: identity)
+                }
+            }
+            if r.err == nil, !r.streams.isEmpty { return r }
+            lastErr = ProviderError.upstream(r.err ?? "没有可用播放流")
+            return nil
+        }
+
+        try Task.checkCancellation()
+        let primary = try? await v5PlayerIdentity()
+        if let primary {
+            do {
+                if let r = try await tryIdentity(primary) { return r }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch is PlayerEmptyBody {
+                lastErr = PlayerEmptyBody()
+                if Self.purePlayerOverride == nil {
+                    playerRejected.insert(primary.deviceId)
+                    if playerIdentity?.deviceId == primary.deviceId {
+                        playerIdentity = nil
+                        HGPlayerIdentity.reset()
                     }
                 }
-                for level in [3, 4] {
-                    try Task.checkCancellation()
-                    do {
-                        let r = try await resolveSingle(vid, level: level)
-                        if r.err == Self.byteVC2Only && level == 3 { continue }
-                        NSLog("[HG] legacy single fallback ok level=%d streams=%d", level, r.streams.count)
+            } catch {
+                lastErr = error
+            }
+        }
+
+        if Self.purePlayerOverride == nil {
+            try Task.checkCancellation()
+            let secondary: HGPlayerIdentity?
+            if primary?.deviceId == Self.fallbackIdentity().deviceId {
+                secondary = try? await HGPlayerIdentity.register(session: playerSession)
+            } else {
+                secondary = Self.fallbackIdentity()
+            }
+            if let secondary, !playerRejected.contains(secondary.deviceId) {
+                do {
+                    if let r = try await tryIdentity(secondary) {
+                        playerIdentity = secondary
+                        secondary.save()
                         return r
-                    } catch {
-                        NSLog("[HG] legacy single fallback error level=%d: %@", level, String(describing: error))
                     }
-                }
-                if Self.purePlayerOverride != nil { throw PlayerEmptyBody() }
-                playerRejected.insert(did)
-                if playerIdentity?.deviceId == did { playerIdentity = nil }
-                if attempt == 2 {
-                    playerBlockedUntil = Date().addingTimeInterval(30)
-                    throw ProviderError.upstream("取流被上游空包拒绝，已尝试 3 个匿名身份，请稍后重试")
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    lastErr = error
                 }
             }
         }
-        throw ProviderError.upstream("没有可用播放流")
+
+        HGProtocol.shared.refreshAsync(session: session, force: true)
+        if let web = try? await resolveWebFallbackAPI(vid: vid) {
+            return web
+        }
+        if lastErr is PlayerEmptyBody {
+            throw ProviderError.upstream("取流被上游空包拒绝，请稍后重试或在「我的」重置红果设备")
+        }
+        throw lastErr
+    }
+
+    private func resolvePreloadV5(_ vid: String, identity: HGPlayerIdentity) async throws -> HGResolvedVideo {
+        let cfg = HGProtocol.shared.current
+        let rawBody = J.encodeSorted([
+            "biz_param": [
+                "detail_page_version": 0, "device_level": cfg.preloadDeviceLevel,
+                "disable_digg_stat": false, "disable_video_relate_book": false,
+                "need_all_video_definition": true, "need_mp4_align": false,
+                "use_os_player": false, "use_server_dns": false,
+                "video_platform": 1024,
+            ] as [String: Any],
+            "dr_scene": cfg.preloadDrScene,
+            "mixed_video_id_map": ["1004": [vid]],
+        ] as [String: Any])
+        let gz = Gzip.compress(rawBody)
+        let gzBytes = Array(gz)
+        let pairs = Self.v5BasePairs(identity)
+        var sawEmpty = false
+        var lastErr: Error = PlayerEmptyBody()
+        for host in orderedPreloadHosts() {
+            try Task.checkCancellation()
+            let now = try await signingMillis()
+            let signed = try HGCurrentPlayer.signPlaybackV5(pairs: pairs, nowMillis: now, body: gzBytes, includeBodyHeaders: true)
+            guard let url = URL(string: "https://\(host)\(cfg.preloadPath)?\(signed.query)") else { continue }
+            var req = URLRequest(url: url, timeoutInterval: 15)
+            req.httpMethod = "POST"
+            req.httpBody = gz
+            req.setValue("okhttp/4.12.0", forHTTPHeaderField: "User-Agent")
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            req.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
+            for (k, v) in signed.headers { req.setValue(v, forHTTPHeaderField: k) }
+            do {
+                let (bytes, resp) = try await playerSession.data(for: req)
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                if status == 429 || status >= 500 {
+                    lastErr = ProviderError.upstream("preload/v1 HTTP \(status)")
+                    continue
+                }
+                guard status == 200 else { throw ProviderError.upstream("preload/v1 HTTP \(status)") }
+                if bytes.isEmpty {
+                    sawEmpty = true
+                    NSLog("[HG] preload/v1 HTTP 200 empty host=%@", host)
+                    continue
+                }
+                let j = try J.parse(bytes)
+                for code in [j["code"], J.dict(j["BaseResp"])["StatusCode"]] where code != nil {
+                    guard J.str(code) == "0" else {
+                        throw ProviderError.upstream("preload/v1 code=\(J.str(code)) \(J.str(j["message"]))")
+                    }
+                }
+                let data = J.dict(j["data"])
+                let entries = (data["1004"] as? [String: Any]) ?? data
+                guard let model = Self.videoModelJSON(J.dict(entries[vid])["video_model"]) else {
+                    throw ProviderError.upstream("preload/v1 缺少请求的分集")
+                }
+                preferredPreloadHost = host
+                return try await materialize(model, vid: vid)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastErr = error
+            }
+        }
+        if sawEmpty { throw PlayerEmptyBody() }
+        throw lastErr
+    }
+
+    private func resolveVideoTabV5(_ vid: String, identity: HGPlayerIdentity) async throws -> HGResolvedVideo {
+        let cfg = HGProtocol.shared.current
+        let pairs = Self.v5BasePairs(identity) + [
+            ("video_id", vid), ("video_id_type", "0"), ("device_level", String(cfg.tabDeviceLevel)),
+            ("need_all_video_definition", "1"), ("need_mp4_align", "0"), ("use_os_player", "0"),
+            ("video_platform", "1024"), ("source", "0"), ("from_video_id", ""),
+        ]
+        let videoTabUA = "com.phoenix.read/73932 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)"
+        var sawEmpty = false
+        var lastErr: Error = PlayerEmptyBody()
+        for host in cfg.tabHosts {
+            try Task.checkCancellation()
+            let now = try await signingMillis()
+            let signed = try HGCurrentPlayer.signPlaybackV5(pairs: pairs, nowMillis: now, body: [], includeBodyHeaders: false)
+            guard let url = URL(string: "https://\(host)\(cfg.tabPath)?\(signed.query)") else { continue }
+            var req = URLRequest(url: url, timeoutInterval: 15)
+            req.httpMethod = "GET"
+            req.setValue(videoTabUA, forHTTPHeaderField: "User-Agent")
+            req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Accept")
+            req.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
+            for (k, v) in signed.headers { req.setValue(v, forHTTPHeaderField: k) }
+            do {
+                let (bytes, resp) = try await playerSession.data(for: req)
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                guard status == 200 else {
+                    lastErr = ProviderError.upstream("video_tab HTTP \(status)")
+                    continue
+                }
+                if bytes.isEmpty {
+                    sawEmpty = true
+                    NSLog("[HG] video_tab HTTP 200 empty host=%@", host)
+                    continue
+                }
+                let j = try J.parse(bytes)
+                for code in [j["code"], J.dict(j["BaseResp"])["StatusCode"]] where code != nil {
+                    guard J.str(code) == "0" else {
+                        throw ProviderError.upstream("video_tab code=\(J.str(code)) \(J.str(j["message"]))")
+                    }
+                }
+                let data = J.dict(j["data"])
+                let bucket = (data["video_model_data"] as? [String: Any]) ?? (data["1004"] as? [String: Any]) ?? data
+                guard let model = Self.videoModelJSON(J.dict(bucket[vid])["video_model"]) else {
+                    throw ProviderError.upstream("video_tab 缺少请求的分集")
+                }
+                return try await materialize(model, vid: vid)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastErr = error
+            }
+        }
+        if sawEmpty { throw PlayerEmptyBody() }
+        throw lastErr
+    }
+
+    func resolveWebFallbackAPI(vid: String) async throws -> HGResolvedVideo {
+        guard let url = URL(string: "https://hongguoduanju.com/api/video/protected/fallback-play-info") else {
+            throw ProviderError.invalid("红果网页接口")
+        }
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.httpMethod = "POST"
+        req.httpBody = J.encodeSorted(["item_id": vid, "force_refresh": false] as [String: Any])
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("https://hongguoduanju.com", forHTTPHeaderField: "Origin")
+        req.setValue("https://hongguoduanju.com/", forHTTPHeaderField: "Referer")
+        let (data, resp) = try await playerSession.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else {
+            throw ProviderError.upstream("网页备用播放接口不可用")
+        }
+        let j = try J.parse(data)
+        let d = J.dict(j["data"]).isEmpty ? j : J.dict(j["data"])
+        let rawURL = J.firstNonEmpty(J.str(d["play_url"]), J.str(d["main_url"]), J.str(d["url"]))
+        guard let media = URL(string: rawURL), ["http", "https"].contains(media.scheme) else {
+            throw ProviderError.upstream("网页备用播放地址无效")
+        }
+        let quality = J.str(d["definition"]).isEmpty ? "360p" : J.str(d["definition"])
+        let stream = HGStream(streamId: "web-\(vid)", quality: quality, url: media.absoluteString, key: "", kind: .mp4Clear)
+        return HGResolvedVideo(vid: vid, url: media.absoluteString, key: nil, duration: J.double(d["duration"]),
+                               expiresAt: J.int(d["expire_time"]), err: nil, streams: [stream], note: "web")
     }
 
     /// Pure video_model at level 3 then 4. An empty body at level 3 means the device is rejected, so level 4 is
