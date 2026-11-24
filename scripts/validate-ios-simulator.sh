@@ -38,5 +38,6 @@ xcodebuild -project STV.xcodeproj -scheme STV -configuration Release \
   -only-testing:STVTests/PluginTests/testCMSCategoryRequestsKeepFullCategoryList \
   -only-testing:STVTests/PluginTests/testMacCMSParsing \
   -only-testing:STVTests/PluginTests/testManifestValidation \
+  -only-testing:STVTests/SiteParsingTests/testTubeHelpers \
   -only-testing:STVTests/CENCStreamTests \
   test 2>&1 | tee "$LOG_DIR/tests.log"
