@@ -173,7 +173,7 @@ final class PluginStore: ObservableObject {
             let targets = Set(rec.manifest.overrides ?? [])
             let conflict = plugins.first { $0.id != id && $0.enabled && !targets.isDisjoint(with: $0.manifest.overrides ?? []) }
             if let conflict, let target = targets.intersection(conflict.manifest.overrides ?? []).sorted().first {
-                PluginLog.add(id, "启用失败：内置站源 \\(target) 已由插件 \\(conflict.manifest.name) 接管")
+                PluginLog.add(id, "启用失败：内置站源 \(target) 已由插件 \(conflict.manifest.name) 接管")
                 return
             }
         }
