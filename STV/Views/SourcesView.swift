@@ -133,6 +133,9 @@ struct SourcesView: View {
     }
 
     static func note(_ s: DramaSource) -> String {
+        if let replacement = PluginStore.overridePlugin(for: s) {
+            return "商店插件接管 · \\(replacement.manifest.name) v\\(replacement.manifest.version)"
+        }
         switch s {
         case .jable: "HLS 直连 · 镜像 jable.tv / fs1.app"
         case .missav: "HLS 1080P/720P/480P/360P · 5 个镜像自动探测（.fans/.media 免验证）"
