@@ -27,7 +27,7 @@ print(max(candidates,key=lambda item:item[0])[1])
 
 echo "Testing with iOS Simulator SDK $SDK_VERSION on $SIM_ID" | tee "$LOG_DIR/environment.log"
 xcrun simctl boot "$SIM_ID" || true
-python3 -c 'import subprocess,sys; subprocess.run(["xcrun","simctl","bootstatus",sys.argv[1],"-b"],check=True,timeout=180)' "$SIM_ID"
+python3 -c 'import subprocess,sys; subprocess.run(["xcrun","simctl","bootstatus",sys.argv[1],"-b"],check=True,timeout=300)' "$SIM_ID"
 
 set -o pipefail
 xcodebuild -project STV.xcodeproj -scheme STV -configuration Release \
