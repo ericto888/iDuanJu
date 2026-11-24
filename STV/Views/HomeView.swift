@@ -797,7 +797,6 @@ private struct HuangguaHomeFeed: View {
                     HStack {
                         Button {
                             self.selectedCategory = nil
-                            allPager.reset { _, _ in HGPage(items: [], hasMore: false, nextOffset: nil) }
                         } label: {
                             Label("返回黄瓜首页", systemImage: "chevron.left")
                                 .font(.system(size: 14, weight: .medium))
