@@ -474,7 +474,11 @@ private struct HomeFeedPage: View {
     }
 
     var body: some View {
-        if case .site(let source) = tab, source.cmsKey != nil || source.pluginID != nil {
+        if case .site(let source) = tab, source.pluginID == "com.eric.idj.huanggua" {
+            HuangguaHomeFeed(source: source, bottomBarHidden: bottomBarHidden,
+                             onHero: onHero, onScrollOffset: onScrollOffset,
+                             onScrollInteraction: onScrollInteraction, onScrollMetrics: onScrollMetrics)
+        } else if case .site(let source) = tab, source.cmsKey != nil || source.pluginID != nil {
             DynamicSiteFeed(source: source, bottomBarHidden: bottomBarHidden, onHero: onHero, onScrollOffset: onScrollOffset, onScrollInteraction: onScrollInteraction, onScrollMetrics: onScrollMetrics)
         } else {
             rankFeed
@@ -760,6 +764,185 @@ private struct DynamicSiteFeed: View {
         // home() 不可用时仍兼容已有缓存分类及旧插件。
         let categories = provider.categories.filter { !$0.id.isEmpty }
         return [fallback] + categories
+    }
+}
+
+/// 黄瓜短剧专属首页：TOP 1-5 轮播 → 推荐横向卡片 → 各站点分类横向卡片。
+/// “全部”进入对应分类的完整网格，不再把分类只放在页面顶部的筛选条里。
+private struct HuangguaHomeFeed: View {
+    let source: DramaSource
+    let bottomBarHidden: Bool
+    var onHero: (String) -> Void
+    var onScrollOffset: (CGFloat) -> Void = { _ in }
+    var onScrollInteraction: (Bool) -> Void = { _ in }
+    var onScrollMetrics: (CompatScrollMetrics) -> Void = { _ in }
+
+    @State private var categories: [SiteCategory] = []
+    @State private var recommendation: [HGSeries] = []
+    @State private var categoryItems: [String: [HGSeries]] = [:]
+    @State private var selectedCategory: SiteCategory?
+    @State private var allItems: [HGSeries] = []
+    @State private var isLoading = false
+    @State private var loadError: Error?
+    @State private var heroIndex = 0
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                GeometryReader { proxy in
+                    Color.clear.preference(key: HomeFeedScrollOffsetKey.self, value: proxy.frame(in: .named("home.feed.scroll")).minY)
+                }.frame(height: 0)
+
+                if let selectedCategory {
+                    HStack {
+                        Button {
+                            self.selectedCategory = nil
+                            allItems = []
+                        } label: {
+                            Label("返回黄瓜首页", systemImage: "chevron.left")
+                                .font(.system(size: 14, weight: .medium))
+                        }.buttonStyle(.plain)
+                        Spacer()
+                        Text(selectedCategory.title).font(.system(size: 17, weight: .semibold))
+                    }.padding(.horizontal, 16).padding(.top, 8)
+
+                    if isLoading && allItems.isEmpty {
+                        loadingGrid
+                    } else if let loadError, allItems.isEmpty {
+                        ErrorStateView(error: loadError) { Task { await loadAll(selectedCategory) } }
+                    } else {
+                        NumberedGrid(items: allItems, numbered: false, hasMore: false, loading: false) {}
+                            .padding(.horizontal, 16)
+                    }
+                } else {
+                    if !recommendation.isEmpty {
+                        PosterHero(board: "黄瓜短剧", picks: Array(recommendation.prefix(5)), index: $heroIndex)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 8)
+                            .onChange(of: heroIndex) { _, index in
+                                let picks = Array(recommendation.prefix(5))
+                                if picks.indices.contains(index) { onHero(picks[index].cover) }
+                            }
+
+                        shelf(title: "推荐", items: recommendation, category: SiteCategory(id: "", title: "推荐", path: ""))
+                    } else if isLoading {
+                        loadingGrid
+                    }
+
+                    ForEach(categories) { category in
+                        if let items = categoryItems[category.id], !items.isEmpty {
+                            shelf(title: category.title, items: items, category: category)
+                        }
+                    }
+
+                    if let loadError, recommendation.isEmpty {
+                        ErrorStateView(error: loadError) { Task { await refresh() } }
+                    }
+                }
+            }
+            .padding(.bottom, bottomBarHidden ? 0 : 96)
+        }
+        .ignoresSafeArea(.container, edges: .bottom)
+        .background(STVTheme.bg.ignoresSafeArea())
+        .scrollIndicators(.hidden)
+        .coordinateSpace(name: "home.feed.scroll")
+        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
+            if #unavailable(iOS 18.0) { onScrollOffset(offset) }
+        }
+        .compatOnScrollInteraction { onScrollInteraction($0) }
+        .compatOnScrollMetrics { onScrollMetrics($0) }
+        .accessibilityIdentifier("home.page.黄瓜短剧")
+        .refreshable { await refresh() }
+        .task { if recommendation.isEmpty { await refresh() } }
+        .onChange(of: recommendation.count) { _, _ in
+            if let cover = recommendation.first?.cover, !cover.isEmpty { onHero(cover) }
+        }
+    }
+
+    @ViewBuilder private func shelf(title: String, items: [HGSeries], category: SiteCategory) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            DSSectionHeader(title: title) {
+                Button {
+                    Task { await loadAll(category) }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text("全部")
+                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                    }.font(.system(size: 12, weight: .medium)).foregroundStyle(STVTheme.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("home.more.黄瓜.\(title)")
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(items.prefix(12)) { series in
+                        NavigationLink(value: Route.series(series)) {
+                            HomePosterCard(series: series).frame(width: 112)
+                        }.buttonStyle(.plain)
+                    }
+                }.padding(.horizontal, 16)
+            }
+            .compatScrollBounceBasedOnSize(axes: .horizontal)
+        }
+        .padding(.top, 2)
+    }
+
+    private var loadingGrid: some View {
+        LazyVGrid(columns: HomeSection.columns(landscape: false), spacing: 16) {
+            ForEach(0..<6, id: \.self) { _ in
+                VStack(alignment: .leading, spacing: 8) {
+                    ShimmerBlock().aspectRatio(3/4, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    ShimmerBlock().frame(height: 12).frame(maxWidth: 90)
+                }
+            }
+        }.padding(.horizontal, 16)
+    }
+
+    @MainActor private func refresh() async {
+        guard !isLoading else { return }
+        isLoading = true
+        loadError = nil
+        defer { isLoading = false }
+        do {
+            guard let pluginID = source.pluginID,
+                  let provider = Sites.provider(source) else { throw ProviderError.unsupported("黄瓜短剧插件未启用") }
+            let home = try await PluginRuntime.call(pluginID, "home", [:]) as? [String: Any] ?? [:]
+            let fresh = PluginOut.categories(home["categories"]).filter { $0.id != "browse" }
+            PluginStore.shared.cacheCategories(pluginID, fresh)
+            categories = fresh.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id) }
+
+            let rec = try await provider.list(SiteCategory(id: "", title: "推荐", path: ""), page: 1)
+            recommendation = rec.items
+            var loaded: [String: [HGSeries]] = [:]
+            for category in categories {
+                let page = try await provider.list(category, page: 1)
+                loaded[category.id] = page.items
+            }
+            categoryItems = loaded
+        } catch {
+            loadError = error
+        }
+    }
+
+    @MainActor private func loadAll(_ category: SiteCategory) async {
+        guard let provider = Sites.provider(source) else { return }
+        selectedCategory = category
+        allItems = []
+        isLoading = true
+        loadError = nil
+        defer { isLoading = false }
+        do {
+            if category.id.isEmpty {
+                allItems = recommendation
+            } else if let cached = categoryItems[category.id], !cached.isEmpty {
+                allItems = cached
+            } else {
+                allItems = try await provider.list(category, page: 1).items
+            }
+        } catch {
+            loadError = error
+        }
     }
 }
 
