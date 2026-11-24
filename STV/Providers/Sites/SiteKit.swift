@@ -10,7 +10,8 @@ extension DramaSource {
         if self == .hongguo || self == .huangguo { return false }
         // Dynamic plugin type is authoritative: shortdrama plugins use the episode grid;
         // video plugins keep the long-video source selector. CMS and unknown sources retain legacy behavior.
-        if let id = pluginID, let manifest = PluginStore.snapshot(id)?.manifest {
+        let overrideManifest = PluginStore.overridePlugin(for: self)?.manifest
+        if let id = pluginID, let manifest = PluginStore.snapshot(id)?.manifest ?? overrideManifest {
             return manifest.type != .shortdrama
         }
         return true
@@ -75,6 +76,7 @@ enum Sites {
     /// Built-in sites + enabled video plugins + 采集站.
     static var all: [DramaSource] { builtinSites + PluginStore.videoSources() + CMSStore.sources() }
     static func provider(_ s: DramaSource) -> SiteProvider? {
+        if let replacement = PluginStore.overridePlugin(for: s) { return JSVideoProvider(source: s, overridePluginID: replacement.id) }
         if s.pluginID != nil { return JSVideoProvider(source: s) }
         if let k = s.cmsKey { return CMSStore.site(k).map { MacCMSProvider(source: s, site: $0) } }
         let p: SiteProvider?
