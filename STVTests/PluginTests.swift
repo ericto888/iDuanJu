@@ -251,6 +251,7 @@ final class PluginTests: XCTestCase {
             return try PluginManifest.decode(try JSONSerialization.data(withJSONObject: o))
         }
         XCTAssertEqual(try m([:]).problems(appVersion: "1.5"), [])
+        XCTAssertNil(try m([:]).overrides, "legacy manifests remain compatible without overrides")
         XCTAssertThrowsError(try m(["compat": "catvod"]), "CatVod compat mode is not supported")
         XCTAssertFalse(try m(["id": "Bad Id"]).problems(appVersion: "1.5").isEmpty)
         XCTAssertFalse(try m(["permissions": ["http": ["*"]]]).problems(appVersion: "1.5").isEmpty)
@@ -261,6 +262,9 @@ final class PluginTests: XCTestCase {
         let overrideBase: [String: Any] = ["type": "video", "capabilities": ["detail", "play"]]
         var validOverride = overrideBase; validOverride["overrides"] = ["xvideos"]
         XCTAssertTrue(try m(validOverride).problems(appVersion: "1.5").isEmpty)
+        let takeoverDiff = PermissionDiff(old: try m(overrideBase), new: try m(validOverride))
+        XCTAssertTrue(takeoverDiff.needsConsent)
+        XCTAssertTrue(takeoverDiff.flags.contains { $0.contains("接管内置站源 xvideos") })
         var invalidOverride = overrideBase; invalidOverride["overrides"] = ["not-a-builtin"]
         XCTAssertTrue(try m(invalidOverride).problems(appVersion: "1.5").contains { $0.contains("不允许接管") })
         let wrongTypeOverride: [String: Any] = ["overrides": ["xvideos"]]
