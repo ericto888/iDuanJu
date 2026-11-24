@@ -97,7 +97,7 @@ jobs:
       - name: Run simulator-only regression tests
         env:
           STV_BUILD_LOG_DIR: ${{ runner.temp }}/ios-validation-logs
-        run: scripts/validate-ios-simulator.sh
+        run: bash scripts/validate-ios-simulator.sh
       - name: Upload simulator test logs and results
         if: always()
         uses: actions/upload-artifact@v4
