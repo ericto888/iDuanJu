@@ -26,13 +26,33 @@ print(max(candidates,key=lambda item:item[0])[1])
 ' "$SDK_VERSION")
 
 echo "Testing with iOS Simulator SDK $SDK_VERSION on $SIM_ID" | tee "$LOG_DIR/environment.log"
-xcrun simctl boot "$SIM_ID" || true
-python3 -c 'import subprocess,sys; subprocess.run(["xcrun","simctl","bootstatus",sys.argv[1],"-b"],check=True,timeout=300)' "$SIM_ID"
+
+# Resolve large binary artifacts before booting the simulator. Retry transient
+# GitHub release download timeouts instead of failing the whole validation job.
+attempt=1
+max_attempts=3
+while true; do
+  echo "Resolving Swift packages (attempt $attempt/$max_attempts)..." | tee -a "$LOG_DIR/package-resolution.log"
+  if xcodebuild -resolvePackageDependencies -project STV.xcodeproj -scheme STV 2>&1 | tee -a "$LOG_DIR/package-resolution.log"; then
+    break
+  fi
+  if (( attempt >= max_attempts )); then
+    echo "Swift package resolution failed after $max_attempts attempts." >&2
+    exit 1
+  fi
+  sleep $((attempt * 20))
+  attempt=$((attempt + 1))
+done
+
+# Fresh GitHub runners may spend several minutes migrating the selected iOS
+# runtime on first boot. Five minutes was too short; allow up to fifteen.
+xcrun simctl boot "$SIM_ID" 2>&1 | tee "$LOG_DIR/simulator-boot.log" || true
+python3 -c 'import subprocess,sys; subprocess.run(["xcrun","simctl","bootstatus",sys.argv[1],"-b"],check=True,timeout=900)' "$SIM_ID" 2>&1 | tee -a "$LOG_DIR/simulator-boot.log"
 
 set -o pipefail
 xcodebuild -project STV.xcodeproj -scheme STV -configuration Release \
   -destination "platform=iOS Simulator,id=$SIM_ID" -derivedDataPath DerivedDataValidation \
-  CODE_SIGNING_ALLOWED=NO ARCHS="$SIM_ARCH" ONLY_ACTIVE_ARCH=YES ENABLE_TESTABILITY=YES \
+  -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO ARCHS="$SIM_ARCH" ONLY_ACTIVE_ARCH=YES ENABLE_TESTABILITY=YES \
   -parallel-testing-enabled NO \
   -only-testing:STVTests/LegadoTests \
   -only-testing:STVTests/PluginTests/testCMSCategoryRequestsKeepFullCategoryList \
