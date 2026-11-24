@@ -819,7 +819,7 @@ private struct HuangguaHomeFeed: View {
                         PosterHero(board: "黄瓜短剧", picks: Array(recommendation.prefix(5)), index: $heroIndex)
                             .padding(.horizontal, 16)
                             .padding(.top, 8)
-                            .onChange(of: heroIndex) { _, index in
+                            .compatOnChange(of: heroIndex) { index in
                                 let picks = Array(recommendation.prefix(5))
                                 if picks.indices.contains(index) { onHero(picks[index].cover) }
                             }
@@ -854,7 +854,7 @@ private struct HuangguaHomeFeed: View {
         .accessibilityIdentifier("home.page.黄瓜短剧")
         .refreshable { await refresh() }
         .task { if recommendation.isEmpty { await refresh() } }
-        .onChange(of: recommendation.count) { _, _ in
+        .compatOnChange(of: recommendation.count) { _ in
             if let cover = recommendation.first?.cover, !cover.isEmpty { onHero(cover) }
         }
     }
