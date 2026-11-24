@@ -781,7 +781,7 @@ private struct HuangguaHomeFeed: View {
     @State private var recommendation: [HGSeries] = []
     @State private var categoryItems: [String: [HGSeries]] = [:]
     @State private var selectedCategory: SiteCategory?
-    @State private var allItems: [HGSeries] = []
+    @StateObject private var allPager = Pager()
     @State private var isLoading = false
     @State private var loadError: Error?
     @State private var heroIndex = 0
@@ -797,7 +797,7 @@ private struct HuangguaHomeFeed: View {
                     HStack {
                         Button {
                             self.selectedCategory = nil
-                            allItems = []
+                            allPager.reset { _, _ in HGPage(items: [], hasMore: false, nextOffset: nil) }
                         } label: {
                             Label("返回黄瓜首页", systemImage: "chevron.left")
                                 .font(.system(size: 14, weight: .medium))
@@ -806,13 +806,16 @@ private struct HuangguaHomeFeed: View {
                         Text(selectedCategory.title).font(.system(size: 17, weight: .semibold))
                     }.padding(.horizontal, 16).padding(.top, 8)
 
-                    if isLoading && allItems.isEmpty {
+                    if allPager.items.isEmpty && allPager.isLoading {
                         loadingGrid
-                    } else if let loadError, allItems.isEmpty {
-                        ErrorStateView(error: loadError) { Task { await loadAll(selectedCategory) } }
+                    } else if let error = allPager.error, allPager.items.isEmpty {
+                        ErrorStateView(error: error) { reloadAll(selectedCategory) }
                     } else {
-                        NumberedGrid(items: allItems, numbered: false, hasMore: false, loading: false) {}
-                            .padding(.horizontal, 16)
+                        NumberedGrid(items: allPager.items, numbered: false,
+                                     hasMore: allPager.hasMore, loading: allPager.isLoading) {
+                            allPager.loadMore()
+                        }
+                        .padding(.horizontal, 16)
                     }
                 } else {
                     if !recommendation.isEmpty {
@@ -926,22 +929,17 @@ private struct HuangguaHomeFeed: View {
     }
 
     @MainActor private func loadAll(_ category: SiteCategory) async {
-        guard let provider = Sites.provider(source) else { return }
         selectedCategory = category
-        allItems = []
-        isLoading = true
-        loadError = nil
-        defer { isLoading = false }
-        do {
-            if category.id.isEmpty {
-                allItems = recommendation
-            } else if let cached = categoryItems[category.id], !cached.isEmpty {
-                allItems = cached
-            } else {
-                allItems = try await provider.list(category, page: 1).items
-            }
-        } catch {
-            loadError = error
+        reloadAll(category)
+    }
+
+    /// Use the shared host Pager for every plugin category. The source owns URL construction,
+    /// page parsing and hasMore; the app only requests the next page through SiteProvider.
+    @MainActor private func reloadAll(_ category: SiteCategory) {
+        guard let provider = Sites.provider(source) else { return }
+        allPager.reset { previous, _ in
+            let requestedPage = max(1, previous.nextOffset ?? 1)
+            return try await provider.list(category, page: requestedPage)
         }
     }
 }
