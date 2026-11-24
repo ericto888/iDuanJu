@@ -235,7 +235,7 @@ struct XVProvider: SiteProvider {
 
     static func call(_ fn: String, _ h: String) -> String {
         let name = NSRegularExpression.escapedPattern(for: fn)
-        let prefix = "html5player\\s*\\.\\s*" + name + "\\s*\(\\s*"
+        let prefix = "html5player\\s*\\.\\s*" + name + "\\s*\\(\\s*"
         let patterns = [
             prefix + "'((?:\\\\.|[^'\\\\])*)'\\s*\\)",
             prefix + "\"((?:\\\\.|[^\"\\\\])*)\"\\s*\\)"
