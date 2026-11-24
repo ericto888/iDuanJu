@@ -236,7 +236,7 @@ actor HongguoClient {
         if base == urlBatchABOff {
             return HGSign.genericSessionHeaders(rawQuery: query, body: bytes, now: now)
         }
-        return HGSign.videoModelHeaders(rawQuery: query, body: bytes, now: now)
+        return HGSign.playerBatchHeaders(rawQuery: query, body: bytes, now: now)
     }
 
     private func postPlayerBatch(_ base: String, _ query: String, _ body: Data) async throws -> [String: Any] {
