@@ -183,9 +183,9 @@ struct XVProvider: SiteProvider {
         ]
         return [
             .init(id: "new", title: "最新", path: "/|/new/{p0}"),
-            .init(id: "best", title: "上月最佳", path: "/best/\\(m)|/best/\\(m)/{p0}", isRank: true)
+            .init(id: "best", title: "上月最佳", path: "/best/\(m)|/best/\(m)/{p0}", isRank: true)
         ] + taxonomy.map { id, title in
-            .init(id: "category-\\(id)", title: title, path: "/c/\\(id)/1|/c/\\(id)/{p}")
+            .init(id: "category-\(id)", title: title, path: "/c/\(id)/1|/c/\(id)/{p}")
         }
     }
     private func get(_ path: String, ttl: TimeInterval = 120) async throws -> SiteHTTP.Response {
@@ -235,7 +235,7 @@ struct XVProvider: SiteProvider {
 
     static func call(_ fn: String, _ h: String) -> String {
         let name = NSRegularExpression.escapedPattern(for: fn)
-        let prefix = "html5player\\s*\\.\\s*" + name + "\\s*\\(\\s*"
+        let prefix = "html5player\\s*\\.\\s*" + name + "\\s*\(\\s*"
         let patterns = [
             prefix + "'((?:\\\\.|[^'\\\\])*)'\\s*\\)",
             prefix + "\"((?:\\\\.|[^\"\\\\])*)\"\\s*\\)"
