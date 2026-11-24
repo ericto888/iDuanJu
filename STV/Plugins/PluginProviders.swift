@@ -294,14 +294,8 @@ struct JSVideoProvider: SiteProvider {
     static let homeID = "__home"
 
     var categories: [SiteCategory] {
-        let cached = PluginStore.snapshot(pluginID)?.cachedCategories ?? []
-        // Huanggua's plugin exposes a recommendation entry in its legacy category
-        // list as well as the host-provided home tab. Keep the host home tab only.
-        let visible = pluginID == "com.eric.idj.huanggua"
-            ? cached.filter { $0.name != "推荐" }
-            : cached
-        return [SiteCategory(id: Self.homeID, title: "推荐", path: Self.homeID)]
-            + visible.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }
+        [SiteCategory(id: Self.homeID, title: "推荐", path: Self.homeID)]
+            + (PluginStore.snapshot(pluginID)?.cachedCategories ?? []).map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }
     }
 
     private func series(_ o: [String: Any]) -> HGSeries? {
