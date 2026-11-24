@@ -117,6 +117,8 @@ struct HGSeriesDetail: Hashable {
     var rating: Double = 0
     var ratingCount: String = ""
     var hotText: String = ""
+    /// CMS 按影片分类与实际集数判定：电视剧/动漫/综艺走选集，电影走播放源。
+    var isLongVideo: Bool? = nil
 }
 
 /// A hongguo celebrity (actor). `id` is the numeric celebrity_id used by the homepage / works APIs.
