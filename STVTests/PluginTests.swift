@@ -258,6 +258,13 @@ final class PluginTests: XCTestCase {
         XCTAssertFalse(try m(["capabilities": ["detail"]]).problems(appVersion: "1.5").isEmpty)
         XCTAssertFalse(try m(["minAppVersion": "9.0"]).problems(appVersion: "1.5").isEmpty)
         XCTAssertFalse(try m(["entry": "../x.js"]).problems(appVersion: "1.5").isEmpty)
+        let overrideBase: [String: Any] = ["type": "video", "capabilities": ["detail", "play"]]
+        var validOverride = overrideBase; validOverride["overrides"] = ["xvideos"]
+        XCTAssertTrue(try m(validOverride).problems(appVersion: "1.5").isEmpty)
+        var invalidOverride = overrideBase; invalidOverride["overrides"] = ["not-a-builtin"]
+        XCTAssertTrue(try m(invalidOverride).problems(appVersion: "1.5").contains { $0.contains("不允许接管") })
+        var wrongTypeOverride: [String: Any] = ["overrides": ["xvideos"]]
+        XCTAssertTrue(try m(wrongTypeOverride).problems(appVersion: "1.5").contains { $0.contains("只有 type=video") })
         // Integrity mismatch
         let bad = try m(["integrity": ["files": ["main.js": "sha256-AAAA"]]])
         XCTAssertThrowsError(try PluginInstaller.validate(manifest: bad, source: Data(Self.stub.utf8), origin: "test"))
