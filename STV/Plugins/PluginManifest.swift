@@ -194,6 +194,8 @@ struct PermissionDiff: Hashable {
         if old.type != new.type { flags.append("新增：类型改为 \(new.type.label)") }
         let addedOverrides = Set(new.overrides ?? []).subtracting(old.overrides ?? []).sorted()
         if !addedOverrides.isEmpty { flags.append("新增：接管内置站源 \(addedOverrides.joined(separator: "、"))") }
+        let removedOverrides = Set(old.overrides ?? []).subtracting(new.overrides ?? []).sorted()
+        if !removedOverrides.isEmpty { flags.append("取消：释放内置站源 \(removedOverrides.joined(separator: "、"))") }
     }
 }
 
