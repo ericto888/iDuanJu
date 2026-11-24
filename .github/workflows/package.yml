@@ -8,6 +8,7 @@ on:
     branches:
       - feat/online-source-store
       - feat/plugin-builtin-source-overrides
+      - main
 
 permissions:
   contents: read
