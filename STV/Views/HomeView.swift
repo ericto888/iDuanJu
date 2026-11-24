@@ -869,7 +869,7 @@ private struct HuangguaHomeFeed: View {
         VStack(alignment: .leading, spacing: 12) {
             DSSectionHeader(title: title) {
                 Button {
-                    Task { await loadAll(category) }
+                    loadAll(category)
                 } label: {
                     HStack(spacing: 3) {
                         Text("全部")
@@ -931,7 +931,7 @@ private struct HuangguaHomeFeed: View {
         }
     }
 
-    @MainActor private func loadAll(_ category: SiteCategory) async {
+    @MainActor private func loadAll(_ category: SiteCategory) {
         selectedCategory = category
         startAll(category)
     }
