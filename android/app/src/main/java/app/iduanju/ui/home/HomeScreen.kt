@@ -204,7 +204,7 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
                 }
             }
             HorizontalPager(pager, Modifier.fillMaxSize().nestedScroll(feedScrollConnection), userScrollEnabled = !immersive, beyondViewportPageCount = 0) { page ->
-                val any = pages[page]
+                val any = pages.getOrElse(page) { pages.first() }
                 if (any is app.iduanju.core.cms.CMSSite) { SiteFeedPage(any, onOpenDetail); return@HorizontalPager }
                 if (any is app.iduanju.plugin.PluginStore.Installed) { PluginFeedPage(any, onOpenDetail); return@HorizontalPager }
                 val s = any as HomeSource
@@ -215,6 +215,25 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
                     return@HorizontalPager
                 }
                 if (s == HomeSource.channels) { app.iduanju.tg.ChannelFeedPage(onPlay); return@HorizontalPager }
+                if (s == HomeSource.ai && adult) {
+                    // iOS AI剧: 红果 AI剧 | 黄果 AI 站 (the latter only behind the adult gate)
+                    val aiTabs = listOf("红果 AI剧", "黄果 AI 站")
+                    val sel = (HomeSubSel.map[s.label] ?: 0).coerceIn(0, 1)
+                    Column(Modifier.fillMaxSize()) {
+                        SegmentedTabs(
+                            items = aiTabs,
+                            selected = aiTabs[sel],
+                            label = { it },
+                            onSelect = { HomeSubSel.map[s.label] = aiTabs.indexOf(it) },
+                            modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp),
+                        )
+                        Box(Modifier.weight(1f)) {
+                            if (sel == 1) app.iduanju.huangguo.HuangguoFeedPage(onOpenDetail, aiOnly = true)
+                            else FeedPage(s, onOpenDetail)
+                        }
+                    }
+                    return@HorizontalPager
+                }
                 if (s.subs().isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("「${s.label}」Android 版尚未移植", color = c.secondary, fontSize = 14.sp)
@@ -274,7 +293,7 @@ private fun ChannelSheet(pages: List<Any>, labels: List<String>, current: Int, o
                 val subs: List<String> = when (p) {
                     is HomeSource -> when (p) {
                         HomeSource.huangguo -> listOf("视频站", "App 源")
-                        HomeSource.ai -> p.subs().map { it.subLabel }
+                        HomeSource.ai -> p.subs().map { it.subLabel } + if (IdjApp.instance.cms.adultUnlocked) listOf("黄果 AI 站") else emptyList()
                         HomeSource.channels, HomeSource.manga -> emptyList()
                         else -> p.subs().map { it.subLabel }
                     }

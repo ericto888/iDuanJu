@@ -2,7 +2,9 @@ import Foundation
 import WebKit
 
 /// Hongguo web account session (QR login via https://hongguoduanju.com) + cloud watch-history sync.
-/// Mirrors Android's `HongguoWebAccount.kt`.
+/// Uses a persistent same-origin `WKWebView` (`WKWebsiteDataStore.default()`) for `/api/pc/*` requests so
+/// `HttpOnly` / `SameSite` session cookies set during QR login are always sent natively by WebKit without
+/// cookie-jar flush races or `URLSession` mismatches.
 @MainActor
 final class HongguoWebAccount: ObservableObject {
     struct Profile: Codable, Equatable {
@@ -19,6 +21,8 @@ final class HongguoWebAccount: ObservableObject {
     private static let cookieKey = "stv.hg.web.cookie"
     private static let sessionTagTTL: TimeInterval = 15 * 60
     private static let reportThrottle: TimeInterval = 30
+    /// Grace window after WebView confirms login during which transient empty checks must never wipe `profile`.
+    private static let loginGraceWindow: TimeInterval = 90
 
     @Published private(set) var profile: Profile?
     @Published private(set) var syncing = false
@@ -26,9 +30,20 @@ final class HongguoWebAccount: ObservableObject {
 
     var isLoggedIn: Bool { profile != nil }
 
+    /// Live QR-login WebView while `HongguoLoginView` is presented, preferred over the background API WebView.
+    weak var activeLoginWebView: WKWebView?
+
     private var cachedCookieHeader: String?
+    private var lastConfirmedLoginAt: Date?
     private var sessionTags: [String: (tag: String, at: Date)] = [:]
     private var lastReportedAt: [String: Date] = [:]
+
+    private var apiWebView: WKWebView?
+    private var apiWebViewReady = false
+    private var apiReadyWaiters: [CheckedContinuation<Bool, Never>] = []
+    private var pendingCalls: [String: CheckedContinuation<(status: Int, text: String)?, Never>] = [:]
+    private lazy var apiBridge = APIBridge(owner: self)
+
     private let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
         c.timeoutIntervalForRequest = 15
@@ -44,6 +59,171 @@ final class HongguoWebAccount: ObservableObject {
            !saved.nickname.isEmpty {
             profile = saved
         }
+    }
+
+    // MARK: - Same-origin WebKit RPC
+
+    private final class APIBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+        weak var owner: HongguoWebAccount?
+        init(owner: HongguoWebAccount) { self.owner = owner }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "idjApi",
+                  let dict = message.body as? [String: Any],
+                  let reqId = dict["reqId"] as? String else { return }
+            let status = dict["status"] as? Int ?? 0
+            let text = dict["text"] as? String ?? ""
+            Task { @MainActor [weak owner] in
+                owner?.completeCall(reqId: reqId, result: status > 0 ? (status, text) : nil)
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            Task { @MainActor [weak owner] in
+                owner?.markApiWebViewReady(true)
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            Task { @MainActor [weak owner] in
+                owner?.markApiWebViewReady(false)
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            Task { @MainActor [weak owner] in
+                owner?.markApiWebViewReady(false)
+            }
+        }
+    }
+
+    private func markApiWebViewReady(_ ok: Bool) {
+        apiWebViewReady = ok
+        let waiters = apiReadyWaiters
+        apiReadyWaiters.removeAll()
+        for w in waiters { w.resume(returning: ok) }
+    }
+
+    private func completeCall(reqId: String, result: (status: Int, text: String)?) {
+        guard let cont = pendingCalls.removeValue(forKey: reqId) else { return }
+        cont.resume(returning: result)
+    }
+
+    /// Ensures a lightweight same-origin `WKWebView` on `https://hongguoduanju.com` is ready to run `fetch(...)`.
+    private func ensureApiWebView() async -> WKWebView? {
+        if let live = activeLoginWebView, live.url?.host?.lowercased().contains("hongguoduanju.com") == true {
+            return live
+        }
+        if let wv = apiWebView, apiWebViewReady, wv.url?.host?.lowercased().contains("hongguoduanju.com") == true {
+            return wv
+        }
+        if apiWebView == nil {
+            let ucc = WKUserContentController()
+            ucc.add(apiBridge, name: "idjApi")
+            let cfg = WKWebViewConfiguration()
+            cfg.userContentController = ucc
+            cfg.websiteDataStore = .default()
+            cfg.defaultWebpagePreferences.preferredContentMode = .desktop
+            let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 240), configuration: cfg)
+            wv.customUserAgent = Self.pcUserAgent
+            wv.navigationDelegate = apiBridge
+            apiWebView = wv
+            apiWebViewReady = false
+            // Load a tiny same-origin endpoint so cookies + origin are bound without heavy video DOM.
+            if let u = URL(string: "\(Self.webOrigin)/robots.txt") {
+                wv.load(URLRequest(url: u))
+            }
+        } else if let wv = apiWebView, !wv.isLoading, !apiWebViewReady {
+            if let u = URL(string: "\(Self.webOrigin)/robots.txt") {
+                wv.load(URLRequest(url: u))
+            }
+        }
+
+        let ready = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { @MainActor in
+                if self.apiWebViewReady { return true }
+                return await withCheckedContinuation { cont in
+                    self.apiReadyWaiters.append(cont)
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        return ready ? apiWebView : nil
+    }
+
+    /// Executes a same-origin `fetch` inside WebKit so `HttpOnly` cookies are sent natively.
+    private func webViewFetch(
+        path: String,
+        method: String = "GET",
+        headers: [String: String] = [:],
+        body: String? = nil
+    ) async -> (status: Int, text: String)? {
+        guard let wv = await ensureApiWebView() else { return nil }
+        let isDedicatedApiWV = (wv === apiWebView)
+        if !isDedicatedApiWV {
+            // For `activeLoginWebView`, ensure `idjApi` handler is attached once.
+            wv.configuration.userContentController.removeScriptMessageHandler(forName: "idjApi")
+            wv.configuration.userContentController.add(apiBridge, name: "idjApi")
+        }
+
+        let reqId = UUID().uuidString
+        let hdrData = (try? JSONSerialization.data(withJSONObject: headers)) ?? Data("{}".utf8)
+        let hdrJSON = String(data: hdrData, encoding: .utf8) ?? "{}"
+        let pathLit = Self.jsStringLiteral(path)
+        let methodLit = Self.jsStringLiteral(method)
+        let reqIdLit = Self.jsStringLiteral(reqId)
+        let bodyExpr = body.map { Self.jsStringLiteral($0) } ?? "undefined"
+
+        let js = """
+        (function() {
+          var reqId = \(reqIdLit);
+          var opts = { method: \(methodLit), credentials: 'include', headers: \(hdrJSON) };
+          var bodyVal = \(bodyExpr);
+          if (bodyVal !== undefined) opts.body = bodyVal;
+          fetch(\(pathLit), opts)
+            .then(function(r) { return r.text().then(function(t) { return { status: r.status, text: t }; }); })
+            .then(function(res) {
+              window.webkit.messageHandlers.idjApi.postMessage({ reqId: reqId, status: res.status, text: res.text });
+            })
+            .catch(function() {
+              window.webkit.messageHandlers.idjApi.postMessage({ reqId: reqId, status: 0, text: '' });
+            });
+        })();
+        """
+
+        return await withTaskGroup(of: (status: Int, text: String)?.self) { group in
+            group.addTask { @MainActor in
+                await withCheckedContinuation { cont in
+                    self.pendingCalls[reqId] = cont
+                    wv.evaluateJavaScript(js) { _, err in
+                        if err != nil {
+                            Task { @MainActor in self.completeCall(reqId: reqId, result: nil) }
+                        }
+                    }
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                await MainActor.run { self.completeCall(reqId: reqId, result: nil) }
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
+    private static func jsStringLiteral(_ s: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: [s]),
+              let arr = String(data: data, encoding: .utf8),
+              arr.count >= 2 else { return "\"\"" }
+        return String(arr.dropFirst().dropLast())
     }
 
     /// Snapshot cookies for `hongguoduanju.com` from `WKWebsiteDataStore` into `UserDefaults`.
@@ -71,25 +251,79 @@ final class HongguoWebAccount: ObservableObject {
         }
     }
 
-    /// Called when the in-app WKWebView directly observes a logged-in `/api/pc/profile` response.
-    /// Snapshots cookies immediately (and retries briefly for WebKit's cookie store flush) and persists the profile.
+    private static func parseProfileJSON(_ data: Data) -> (hasRoot: Bool, profile: Profile?) {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return (false, nil)
+        }
+        let candidates: [[String: Any]?] = [
+            root["profile"] as? [String: Any],
+            (root["data"] as? [String: Any])?["profile"] as? [String: Any],
+            root["user"] as? [String: Any],
+            (root["data"] as? [String: Any])?["user"] as? [String: Any]
+        ]
+        for cand in candidates {
+            guard let p = cand else { continue }
+            let nick = (
+                (p["nickname"] as? String) ??
+                (p["name"] as? String) ??
+                (p["screen_name"] as? String) ??
+                (p["user_name"] as? String) ?? ""
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            let avatar = (
+                (p["avatarUrl"] as? String) ??
+                (p["avatar_url"] as? String) ??
+                (p["avatar"] as? String) ?? ""
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !nick.isEmpty {
+                return (true, Profile(nickname: nick, avatarUrl: avatar))
+            }
+        }
+        return (true, nil)
+    }
+
+    /// Called when the in-app WKWebView directly observes a logged-in profile response or SSR state.
     func acceptWebViewLogin(nickname: String, avatarUrl: String) async {
         let trimmed = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        lastConfirmedLoginAt = Date()
         saveProfile(Profile(nickname: trimmed, avatarUrl: avatarUrl.trimmingCharacters(in: .whitespacesAndNewlines)))
         _ = await syncCookiesFromWebView()
-        try? await Task.sleep(for: .milliseconds(400))
+        try? await Task.sleep(nanoseconds: 500_000_000)
         _ = await syncCookiesFromWebView()
+    }
+
+    private var withinLoginGrace: Bool {
+        guard let t = lastConfirmedLoginAt else { return false }
+        return Date().timeIntervalSince(t) < Self.loginGraceWindow
     }
 
     @discardableResult
     func refreshProfile() async -> Profile? {
         syncing = true
         defer { syncing = false }
+
+        // 1) Primary: same-origin fetch inside WebKit (always carries HttpOnly session cookies).
+        if let res = await webViewFetch(path: "/api/pc/profile", headers: ["Accept": "application/json"]),
+           res.status == 200,
+           let data = res.text.data(using: .utf8) {
+            let parsed = Self.parseProfileJSON(data)
+            if let found = parsed.profile {
+                lastConfirmedLoginAt = Date()
+                saveProfile(found)
+                _ = await syncCookiesFromWebView()
+                return found
+            }
+            if parsed.hasRoot && !withinLoginGrace {
+                saveProfile(nil)
+                return nil
+            }
+            return profile
+        }
+
+        // 2) Fallback: URLSession with snapshotted cookies (never clear profile on fallback miss if already logged in).
         let cookie = await syncCookiesFromWebView()
         guard let cookie, !cookie.isEmpty, let url = URL(string: "\(Self.webOrigin)/api/pc/profile") else {
-            saveProfile(nil)
-            return nil
+            return profile
         }
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
@@ -100,34 +334,22 @@ final class HongguoWebAccount: ObservableObject {
         do {
             let (data, resp) = try await session.data(for: req)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            guard code == 200,
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let p = root["profile"] as? [String: Any] else {
-                if code == 200 { saveProfile(nil) }
-                return profile
+            if code == 200 {
+                let parsed = Self.parseProfileJSON(data)
+                if let found = parsed.profile {
+                    lastConfirmedLoginAt = Date()
+                    saveProfile(found)
+                    return found
+                }
             }
-            let nickname = ((p["nickname"] as? String) ?? (p["name"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let avatar = ((p["avatarUrl"] as? String) ?? (p["avatar_url"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !nickname.isEmpty else {
-                saveProfile(nil)
-                return nil
-            }
-            let next = Profile(nickname: nickname, avatarUrl: avatar)
-            saveProfile(next)
-            return next
+            return profile
         } catch {
             return profile
         }
     }
 
     func logout() {
-        Task {
-            let store = WKWebsiteDataStore.default().httpCookieStore
-            let all = await store.allCookies()
-            for c in all where c.domain.lowercased().contains("hongguoduanju.com") {
-                await store.deleteCookie(c)
-            }
-        }
+        lastConfirmedLoginAt = nil
         cachedCookieHeader = nil
         UserDefaults.standard.removeObject(forKey: Self.cookieKey)
         UserDefaults.standard.removeObject(forKey: Self.profileKey)
@@ -135,6 +357,19 @@ final class HongguoWebAccount: ObservableObject {
         lastReportedAt.removeAll()
         profile = nil
         lastSyncNote = nil
+
+        Task {
+            let dataStore = WKWebsiteDataStore.default()
+            let all = await dataStore.httpCookieStore.allCookies()
+            for c in all where c.domain.lowercased().contains("hongguoduanju.com") {
+                await dataStore.httpCookieStore.deleteCookie(c)
+            }
+            let records = await dataStore.dataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes())
+            let targets = records.filter { $0.displayName.lowercased().contains("hongguoduanju") }
+            if !targets.isEmpty {
+                await dataStore.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: targets)
+            }
+        }
     }
 
     func reportProgressAsync(
@@ -159,12 +394,11 @@ final class HongguoWebAccount: ObservableObject {
 
         Task { [weak self] in
             guard let self else { return }
-            guard let cookie = await self.syncCookiesFromWebView(), !cookie.isEmpty else { return }
+            let cookie = await self.syncCookiesFromWebView() ?? ""
             guard let sessionTag = await self.fetchSessionTag(seriesId: seriesId, vid: vid, cookie: cookie) else {
                 self.lastSyncNote = "未获取到网页同步会话，请尝试重新登录"
                 return
             }
-            guard let url = URL(string: "\(Self.webOrigin)/api/pc/watch-history") else { return }
             let payload: [String: Any] = [
                 "book_id": seriesId,
                 "book_type": 2,
@@ -175,10 +409,35 @@ final class HongguoWebAccount: ObservableObject {
                 "current_play_position": String(max(0, positionMs)),
                 "player_accumulate_total_time": String(max(1000, accumulatedMs))
             ]
-            guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
+            guard let bodyData = try? JSONSerialization.data(withJSONObject: payload),
+                  let bodyString = String(data: bodyData, encoding: .utf8) else { return }
+
+            // Primary: same-origin POST inside WebKit so HttpOnly session cookies & Origin/Referer match natively.
+            if let res = await self.webViewFetch(
+                path: "/api/pc/watch-history",
+                method: "POST",
+                headers: [
+                    "Content-Type": "application/json; charset=utf-8",
+                    "Accept": "application/json",
+                    "X-PC-History-Session": sessionTag
+                ],
+                body: bodyString
+            ), res.status > 0 {
+                let json = res.text.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                let ok = (json?["isSuccess"] as? Bool) == true
+                if ok {
+                    self.lastSyncNote = "已同步第 \(episodeNumber) 集到红果"
+                    return
+                } else if res.status == 401 || res.status == 403 {
+                    self.sessionTags.removeValue(forKey: seriesId)
+                }
+            }
+
+            // Fallback: URLSession
+            guard !cookie.isEmpty, let url = URL(string: "\(Self.webOrigin)/api/pc/watch-history") else { return }
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
-            req.httpBody = body
+            req.httpBody = bodyData
             req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
             req.setValue(cookie, forHTTPHeaderField: "Cookie")
             req.setValue(Self.pcUserAgent, forHTTPHeaderField: "User-Agent")
@@ -210,9 +469,14 @@ final class HongguoWebAccount: ObservableObject {
         if let cached = sessionTags[seriesId], Date().timeIntervalSince(cached.at) < Self.sessionTagTTL {
             return cached.tag
         }
-        let candidates = ["\(Self.webOrigin)/player/\(seriesId)/\(vid)", "\(Self.webOrigin)/player/\(seriesId)"]
-        for page in candidates {
-            guard let url = URL(string: page) else { continue }
+        let paths = ["/player/\(seriesId)/\(vid)", "/player/\(seriesId)"]
+        for path in paths {
+            if let res = await webViewFetch(path: path), (200..<300).contains(res.status),
+               let tag = Self.extractSessionTag(from: res.text) {
+                sessionTags[seriesId] = (tag, Date())
+                return tag
+            }
+            guard !cookie.isEmpty, let url = URL(string: "\(Self.webOrigin)\(path)") else { continue }
             var req = URLRequest(url: url)
             req.httpMethod = "GET"
             req.setValue(cookie, forHTTPHeaderField: "Cookie")
@@ -220,11 +484,10 @@ final class HongguoWebAccount: ObservableObject {
             req.setValue("\(Self.webOrigin)/", forHTTPHeaderField: "Referer")
             guard let (data, resp) = try? await session.data(for: req),
                   let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-                  let html = String(data: data, encoding: .utf8) else { continue }
-            if let tag = Self.extractSessionTag(from: html) {
-                sessionTags[seriesId] = (tag, Date())
-                return tag
-            }
+                  let html = String(data: data, encoding: .utf8),
+                  let tag = Self.extractSessionTag(from: html) else { continue }
+            sessionTags[seriesId] = (tag, Date())
+            return tag
         }
         return nil
     }

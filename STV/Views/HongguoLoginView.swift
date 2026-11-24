@@ -3,8 +3,8 @@ import UIKit
 import WebKit
 
 /// Native QR login sheet for 红果短剧 (mirrors Android's `HongguoLoginScreen.kt`).
-/// Drives a hidden desktop-mode `WKWebView` on `https://hongguoduanju.com`, extracts the QR image via JS bridge,
-/// and polls `HongguoWebAccount.shared.refreshProfile()` until login succeeds.
+/// Drives a desktop-viewport `WKWebView` on `https://hongguoduanju.com`, extracts the QR image via JS bridge,
+/// and verifies login directly inside WebKit's same-origin session so `HttpOnly` cookies are never lost.
 struct HongguoLoginView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -18,166 +18,168 @@ struct HongguoLoginView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                // Keep WKWebView at full opacity (covered by opaque STVTheme.bg) so iOS WebKit does not
-                // freeze or throttle its QR-polling timers when returning from the Hongguo app.
-                HongguoQRWebView(
-                    refreshNonce: refreshNonce,
-                    checkNonce: checkNonce,
-                    onQrUpdate: { dataURL, status in
-                        qrStatus = status
-                        if let img = Self.decodeDataURL(dataURL) {
-                            qrImage = img
-                        }
-                    },
-                    onLoggedIn: { nickname, avatarUrl in
-                        guard loggedInName == nil else { return }
-                        loggedInName = nickname
-                        Task {
-                            await account.acceptWebViewLogin(nickname: nickname, avatarUrl: avatarUrl)
-                            try? await Task.sleep(for: .milliseconds(600))
-                            dismiss()
-                        }
+            ScrollView {
+                VStack(spacing: 20) {
+                    VStack(spacing: 6) {
+                        Text("红果短剧扫码登录")
+                            .font(.title2.weight(.heavy))
+                            .foregroundStyle(STVTheme.text)
+                        Text("使用红果短剧 App 扫描下方二维码，同步本机观看进度")
+                            .font(.subheadline)
+                            .foregroundStyle(STVTheme.secondary)
+                            .multilineTextAlignment(.center)
                     }
-                )
-                .frame(width: 1280, height: 900)
-                .allowsHitTesting(false)
+                    .padding(.top, 12)
 
-                STVTheme.bg.ignoresSafeArea()
+                    // QR card
+                    VStack(spacing: 14) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(Color.white)
+                                .frame(width: 224, height: 224)
 
-                ScrollView {
-                    VStack(spacing: 20) {
-                        VStack(spacing: 6) {
-                            Text("红果短剧扫码登录")
-                                .font(.title2.weight(.heavy))
-                                .foregroundStyle(STVTheme.text)
-                            Text("使用红果短剧 App 扫描下方二维码，同步本机观看进度")
-                                .font(.subheadline)
-                                .foregroundStyle(STVTheme.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                        .padding(.top, 12)
+                            if let loggedInName {
+                                VStack(spacing: 10) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 48))
+                                        .foregroundStyle(.green)
+                                    Text("已登录：\(loggedInName)")
+                                        .font(.headline)
+                                        .foregroundStyle(.black)
+                                }
+                            } else if let qrImage {
+                                Image(uiImage: qrImage)
+                                    .interpolation(.none)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 200, height: 200)
+                                    .opacity(qrStatus == "expired" ? 0.25 : 1)
 
-                        // QR card
-                        VStack(spacing: 14) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .fill(Color.white)
-                                    .frame(width: 224, height: 224)
-
-                                if let loggedInName {
-                                    VStack(spacing: 10) {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .font(.system(size: 48))
-                                            .foregroundStyle(.green)
-                                        Text("已登录：\(loggedInName)")
-                                            .font(.headline)
-                                            .foregroundStyle(.black)
-                                    }
-                                } else if let qrImage {
-                                    Image(uiImage: qrImage)
-                                        .interpolation(.none)
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(width: 200, height: 200)
-                                        .opacity(qrStatus == "expired" ? 0.25 : 1)
-
-                                    if qrStatus == "expired" {
-                                        Button {
-                                            qrStatus = "loading"
-                                            refreshNonce += 1
-                                        } label: {
-                                            VStack(spacing: 6) {
-                                                Image(systemName: "arrow.clockwise.circle.fill")
-                                                    .font(.system(size: 36))
-                                                Text("二维码已过期\n点击刷新")
-                                                    .font(.caption.weight(.semibold))
-                                                    .multilineTextAlignment(.center)
-                                            }
-                                            .foregroundStyle(.black)
-                                            .padding(14)
-                                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                                if qrStatus == "expired" {
+                                    Button {
+                                        saveNotice = nil
+                                        qrStatus = "loading"
+                                        refreshNonce += 1
+                                    } label: {
+                                        VStack(spacing: 6) {
+                                            Image(systemName: "arrow.clockwise.circle.fill")
+                                                .font(.system(size: 36))
+                                            Text("二维码已过期\n点击刷新")
+                                                .font(.caption.weight(.semibold))
+                                                .multilineTextAlignment(.center)
                                         }
-                                    }
-                                } else {
-                                    VStack(spacing: 10) {
-                                        ProgressView().tint(.gray)
-                                        Text("正在获取二维码…")
-                                            .font(.caption)
-                                            .foregroundStyle(.gray)
+                                        .foregroundStyle(.black)
+                                        .padding(14)
+                                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
                                     }
                                 }
+                            } else {
+                                VStack(spacing: 10) {
+                                    ProgressView().tint(.gray)
+                                    Text("正在获取二维码…")
+                                        .font(.caption)
+                                        .foregroundStyle(.gray)
+                                }
                             }
-
-                            Text(statusLabel)
-                                .font(.footnote.weight(.medium))
-                                .foregroundStyle(qrStatus == "scanned" ? STVTheme.accent : STVTheme.secondary)
                         }
-                        .padding(22)
-                        .frame(maxWidth: 320)
-                        .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(STVTheme.hairline, lineWidth: 1))
 
-                        HStack(spacing: 12) {
+                        Text(statusLabel)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(qrStatus == "scanned" ? STVTheme.accent : STVTheme.secondary)
+                    }
+                    .padding(22)
+                    .frame(maxWidth: 320)
+                    .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(STVTheme.hairline, lineWidth: 1))
+
+                    HStack(spacing: 12) {
+                        Button {
+                            saveNotice = nil
+                            qrStatus = "loading"
+                            refreshNonce += 1
+                        } label: {
+                            Label("刷新二维码", systemImage: "arrow.clockwise")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(STVTheme.surface, in: Capsule())
+                        }
+                        .foregroundStyle(STVTheme.text)
+
+                        if let qrImage {
                             Button {
-                                qrStatus = "loading"
-                                refreshNonce += 1
+                                UIImageWriteToSavedPhotosAlbum(qrImage, nil, nil, nil)
+                                saveNotice = "已保存二维码到相册，可在红果短剧 App 内相册扫码"
                             } label: {
-                                Label("刷新二维码", systemImage: "arrow.clockwise")
+                                Label("保存到相册", systemImage: "square.and.arrow.down")
                                     .font(.subheadline.weight(.semibold))
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 12)
-                                    .background(STVTheme.surface, in: Capsule())
+                                    .background(STVTheme.accent, in: Capsule())
                             }
-                            .foregroundStyle(STVTheme.text)
-
-                            if let qrImage {
-                                Button {
-                                    UIImageWriteToSavedPhotosAlbum(qrImage, nil, nil, nil)
-                                    saveNotice = "已保存二维码到相册，可在红果短剧 App 内相册扫码"
-                                } label: {
-                                    Label("保存到相册", systemImage: "square.and.arrow.down")
-                                        .font(.subheadline.weight(.semibold))
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 12)
-                                        .background(STVTheme.accent, in: Capsule())
-                                }
-                                .foregroundStyle(.white)
-                            }
-                        }
-                        .frame(maxWidth: 320)
-
-                        if let saveNotice {
-                            Text(saveNotice)
-                                .font(.caption)
-                                .foregroundStyle(STVTheme.accent)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 24)
-                        }
-
-                        if loggedInName == nil && qrImage != nil {
-                            Button {
-                                checkNonce += 1
-                                Task {
-                                    if let p = await account.refreshProfile() {
-                                        loggedInName = p.nickname
-                                        try? await Task.sleep(for: .milliseconds(600))
-                                        dismiss()
-                                    } else {
-                                        saveNotice = "正在同步登录状态，若刚在红果确认请稍等 1-2 秒再点一次"
-                                    }
-                                }
-                            } label: {
-                                Text("我已扫码确认，立即检查登录状态")
-                                    .font(.footnote.weight(.medium))
-                                    .foregroundStyle(STVTheme.accent)
-                                    .padding(.vertical, 6)
-                            }
+                            .foregroundStyle(.white)
                         }
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 32)
+                    .frame(maxWidth: 320)
+
+                    if let saveNotice {
+                        Text(saveNotice)
+                            .font(.caption)
+                            .foregroundStyle(STVTheme.accent)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                    }
+
+                    if loggedInName == nil && qrImage != nil {
+                        Button {
+                            checkNonce += 1
+                            Task {
+                                try? await Task.sleep(nanoseconds: 350_000_000)
+                                guard loggedInName == nil else { return }
+                                if let p = await account.refreshProfile() {
+                                    completeLogin(nickname: p.nickname, avatarUrl: p.avatarUrl)
+                                } else {
+                                    saveNotice = "正在等待红果网页端确认，若刚点确认请稍等 1–2 秒再试"
+                                }
+                            }
+                        } label: {
+                            Text("我已扫码确认，立即检查登录状态")
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(STVTheme.accent)
+                                .padding(.vertical, 6)
+                        }
+                    }
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 32)
+            }
+            .background {
+                ZStack(alignment: .topLeading) {
+                    // Keep WKWebView mounted in `.background` (never expanding screen layout width) at 1280×900
+                    // so desktop login modal renders cleanly and WebKit timers stay active on app foregrounding.
+                    HongguoQRWebView(
+                        refreshNonce: refreshNonce,
+                        checkNonce: checkNonce,
+                        onQrUpdate: { dataURL, status in
+                            qrStatus = status
+                            if let img = Self.decodeDataURL(dataURL) {
+                                qrImage = img
+                            } else if status == "loading" && dataURL.isEmpty {
+                                qrImage = nil
+                            }
+                        },
+                        onLoggedIn: { nickname, avatarUrl in
+                            completeLogin(nickname: nickname, avatarUrl: avatarUrl)
+                        }
+                    )
+                    .frame(width: 1280, height: 900)
+                    .allowsHitTesting(false)
+
+                    STVTheme.bg.ignoresSafeArea()
+                }
+                .clipped()
+                .ignoresSafeArea()
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -189,29 +191,41 @@ struct HongguoLoginView: View {
                 if phase == .active, loggedInName == nil {
                     checkNonce += 1
                     Task {
-                        try? await Task.sleep(for: .milliseconds(600))
-                        guard !Task.isCancelled, loggedInName == nil else { return }
-                        if let p = await account.refreshProfile() {
-                            loggedInName = p.nickname
-                            try? await Task.sleep(for: .milliseconds(600))
-                            dismiss()
+                        for delayNs in [500_000_000 as UInt64, 1_500_000_000 as UInt64] {
+                            try? await Task.sleep(nanoseconds: delayNs)
+                            guard !Task.isCancelled, loggedInName == nil else { return }
+                            checkNonce += 1
+                            if let p = await account.refreshProfile() {
+                                completeLogin(nickname: p.nickname, avatarUrl: p.avatarUrl)
+                                return
+                            }
                         }
                     }
                 }
             }
             .task {
                 while !Task.isCancelled && loggedInName == nil {
-                    try? await Task.sleep(for: .milliseconds(2500))
-                    guard !Task.isCancelled else { break }
+                    try? await Task.sleep(nanoseconds: 2_200_000_000)
+                    guard !Task.isCancelled, loggedInName == nil else { break }
                     checkNonce += 1
                     if let p = await account.refreshProfile() {
-                        loggedInName = p.nickname
-                        try? await Task.sleep(for: .milliseconds(700))
-                        dismiss()
+                        completeLogin(nickname: p.nickname, avatarUrl: p.avatarUrl)
                         break
                     }
                 }
             }
+        }
+    }
+
+    private func completeLogin(nickname: String, avatarUrl: String) {
+        let trimmed = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard loggedInName == nil, !trimmed.isEmpty else { return }
+        loggedInName = trimmed
+        saveNotice = nil
+        Task {
+            await account.acceptWebViewLogin(nickname: trimmed, avatarUrl: avatarUrl)
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            dismiss()
         }
     }
 
@@ -244,6 +258,7 @@ private struct HongguoQRWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let ucc = WKUserContentController()
         ucc.add(context.coordinator, name: "idjLogin")
+        ucc.addUserScript(WKUserScript(source: Self.viewportScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         ucc.addUserScript(WKUserScript(source: Self.bridgeJS, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         let cfg = WKWebViewConfiguration()
         cfg.userContentController = ucc
@@ -253,6 +268,7 @@ private struct HongguoQRWebView: UIViewRepresentable {
         wv.customUserAgent = HongguoWebAccount.pcUserAgent
         wv.navigationDelegate = context.coordinator
         context.coordinator.webView = wv
+        HongguoWebAccount.shared.activeLoginWebView = wv
         if let url = URL(string: HongguoWebAccount.webOrigin) {
             wv.load(URLRequest(url: url))
         }
@@ -271,7 +287,11 @@ private struct HongguoQRWebView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        if HongguoWebAccount.shared.activeLoginWebView === uiView {
+            HongguoWebAccount.shared.activeLoginWebView = nil
+        }
         uiView.configuration.userContentController.removeScriptMessageHandler(forName: "idjLogin")
+        uiView.configuration.userContentController.removeScriptMessageHandler(forName: "idjApi")
         uiView.stopLoading()
     }
 
@@ -312,9 +332,39 @@ private struct HongguoQRWebView: UIViewRepresentable {
         }
     }
 
+    private static let viewportScript: String = """
+    (function() {
+      try {
+        var obs = new MutationObserver(function() {
+          var vp = document.querySelector('meta[name="viewport"]');
+          if (vp && vp.getAttribute('content') !== 'width=1280') {
+            vp.setAttribute('content', 'width=1280');
+          }
+        });
+        obs.observe(document.documentElement, { childList: true, subtree: true });
+      } catch (e) {}
+    })();
+    """
+
     private static let bridgeJS: String = """
     (function() {
       try {
+        var st = document.getElementById('idj-login-fix');
+        if (!st) {
+          st = document.createElement('style');
+          st.id = 'idj-login-fix';
+          (document.head || document.documentElement).appendChild(st);
+        }
+        st.textContent = '*,*::before,*::after{animation:none!important;transition:none!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important;}video{display:none!important;}[role="dialog"],[class*="pc-login-dialog"]{max-height:calc(100% - 32px)!important;opacity:1!important;visibility:visible!important;}';
+        var vp = document.querySelector('meta[name="viewport"]');
+        if (vp) vp.setAttribute('content', 'width=1280');
+        else if (document.head) {
+          var m = document.createElement('meta');
+          m.name = 'viewport';
+          m.content = 'width=1280';
+          document.head.appendChild(m);
+        }
+
         function isElVisible(el) {
           if (!el) return false;
           if (el.offsetWidth <= 0 || el.offsetHeight <= 0) return false;
@@ -324,23 +374,47 @@ private struct HongguoQRWebView: UIViewRepresentable {
         function findDialog() {
           return document.querySelector('[role="dialog"], [class*="pc-login-dialog"]');
         }
+        function notifyLogin(nick, avatar) {
+          if (window.__idjLoggedInNotified || !nick) return;
+          window.__idjLoggedInNotified = true;
+          if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.idjLogin) {
+            window.webkit.messageHandlers.idjLogin.postMessage({
+              loggedIn: true,
+              nickname: String(nick).trim(),
+              avatarUrl: String(avatar || '').trim()
+            });
+          }
+        }
+        function extractProfile(j) {
+          if (!j || typeof j !== 'object') return null;
+          var cands = [j.profile, j.data && j.data.profile, j.user, j.data && j.data.user];
+          for (var i = 0; i < cands.length; i++) {
+            var p = cands[i];
+            if (p && typeof p === 'object') {
+              var nick = (p.nickname || p.name || p.screen_name || p.user_name || '').trim();
+              if (nick) {
+                return { nickname: nick, avatarUrl: (p.avatarUrl || p.avatar_url || p.avatar || '').trim() };
+              }
+            }
+          }
+          return null;
+        }
         function checkProfileInWebView() {
           if (window.__idjLoggedInNotified) return;
-          fetch('/api/pc/profile', { credentials: 'include', headers: { 'Accept': 'application/json' } })
+          try {
+            var rd = window._ROUTER_DATA && window._ROUTER_DATA.loaderData;
+            if (rd) {
+              for (var k in rd) {
+                var found = extractProfile(rd[k]);
+                if (found) { notifyLogin(found.nickname, found.avatarUrl); return; }
+              }
+            }
+          } catch (e) {}
+          fetch('/api/pc/profile?t=' + Date.now(), { credentials: 'include', cache: 'no-store', headers: { 'Accept': 'application/json' } })
             .then(function(r) { return r.ok ? r.json() : null; })
             .then(function(j) {
-              var p = j && j.profile;
-              var nick = p && (p.nickname || p.name || '').trim();
-              if (nick) {
-                window.__idjLoggedInNotified = true;
-                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.idjLogin) {
-                  window.webkit.messageHandlers.idjLogin.postMessage({
-                    loggedIn: true,
-                    nickname: nick,
-                    avatarUrl: (p.avatarUrl || p.avatar_url || '').trim()
-                  });
-                }
-              }
+              var found = extractProfile(j);
+              if (found) notifyLogin(found.nickname, found.avatarUrl);
             })
             .catch(function() {});
         }
@@ -410,6 +484,13 @@ private struct HongguoQRWebView: UIViewRepresentable {
                 if (src.indexOf('data:image/') === 0 && (im.naturalWidth >= 100 || !!im.closest('.web-login-scan-code') || (im.alt || '').indexOf('二维码') >= 0)) {
                   qrSrc = src;
                   break;
+                }
+              }
+              if (!qrSrc) {
+                var scanImg = dlg.querySelector('.web-login-scan-code img, [alt*="二维码"]');
+                if (scanImg) {
+                  var ss = scanImg.getAttribute('src') || scanImg.src || '';
+                  if (ss.indexOf('data:image/') === 0) qrSrc = ss;
                 }
               }
               if (!qrSrc) {

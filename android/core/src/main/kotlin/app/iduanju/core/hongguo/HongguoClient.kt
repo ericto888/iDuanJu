@@ -203,7 +203,7 @@ class HongguoClient(
             "&ac=wifi&channel=ry_hongguo_offlinestore_04&aid=8662&app_name=novelread" +
             "&version_code=73332&version_name=7.3.3.32&device_platform=android&os=android&ssmix=a&device_type=sdk_gphone64_arm64&device_brand=google" +
             "&language=en&os_api=35&os_version=15&manifest_version_code=73332&resolution=1080*2400&dpi=420&update_version_code=73332" +
-            "&_rticket=$rt&&host_abi=arm64-v8a&dragon_device_type=phone&pv_player=73332&compliance_status=0&need_personal_recommend=1" +
+            "&_rticket=$rt&host_abi=arm64-v8a&dragon_device_type=phone&pv_player=73332&compliance_status=0&need_personal_recommend=1" +
             "&player_so_load=1&is_android_pad_screen=0&rom_version=sdk_gphone64_arm64-userdebug+15+AE3A.240806.043+12960925+dev-keys" +
             "&cdid=22daeba8-ef23-4742-abbe-c41bc3d6d4c8"
 
@@ -351,8 +351,14 @@ class HongguoClient(
                 val tm = J.dict(tab)
                 if (!(J.int(tm.opt("tab_type")) == 11 || J.str(tm.opt("title")) == "综合")) continue
                 val items = ArrayList<HGSeries>(); val seen = HashSet<String>()
+                val lands = ArrayList<HGDetailExtras.SeriesLandRef>()
                 for (c in J.arr(tm.opt("data"))) {
                     val cm = J.dict(c)
+                    val land = HGDetailExtras.seriesLandFromCell(cm)
+                    if (land.stickIds.isNotEmpty()) {
+                        lands.add(land)
+                        continue
+                    }
                     var vds = J.arr(cm.opt("video_data"))
                     if (vds.isEmpty()) (cm.opt("video_data") as? JSONObject)?.let { vds = listOf(it) }
                     val fallbackSid = firstID(cm, "book_id", "search_result_id")
@@ -360,10 +366,17 @@ class HongguoClient(
                         val vm = J.dict(v)
                         if (contentFilter != HGContentFilter.all && contentFilterOf(vm) != contentFilter) continue
                         val s = parseVideoData(vm)
-                        if (s.seriesId.isEmpty()) s.seriesId = fallbackSid
-                        if (s.seriesId.isEmpty() && s.title.isEmpty()) continue
-                        if (s.seriesId.isNotEmpty() && !seen.add(s.seriesId)) continue
+                        if (s.seriesId.isEmpty() && s.title.isNotEmpty()) s.seriesId = fallbackSid
+                        if (!looksSID(s.seriesId) || s.title.isEmpty()) continue
+                        if (!seen.add(s.seriesId)) continue
                         items.add(s)
+                    }
+                }
+                for (land in lands) {
+                    val more = try { HGDetailExtras.seriesLanding(this, land.stickIds, land.from, land.query, land.bookId) } catch (_: Exception) { emptyList() }
+                    for (s in more) {
+                        if (!looksSID(s.seriesId) || s.title.isEmpty()) continue
+                        if (seen.add(s.seriesId)) items.add(s)
                     }
                 }
                 val next = J.int(tm.opt("next_offset"))
@@ -463,6 +476,10 @@ class HongguoClient(
         return HGPage(items, J.bool(data.opt("has_more")), J.int(data.opt("next_offset")), null, J.str(data.opt("session_id")).ifEmpty { null })
     }
 
+    private val detailPool = java.util.concurrent.Executors.newCachedThreadPool { r ->
+        Thread(r, "hg-detail").apply { isDaemon = true }
+    }
+
     // ---- detail ----
     fun detail(seriesId: String, web: Boolean = true): HGSeriesDetail {
         val body = mapOf(
@@ -474,42 +491,61 @@ class HongguoClient(
             ),
             "dr_scene" to "preload", "series_id" to seriesId,
         )
-        // no retry on soft-rejected detail preload (iOS bb23241); preload / directory / landing / web run concurrently (iOS async let)
-        val pool = java.util.concurrent.ForkJoinPool.commonPool()
-        val detailF = java.util.concurrent.CompletableFuture.supplyAsync({ try { postJSON(URL_DETAIL, detailQuery(nowMs()), J.encodeSorted(body), retries = 0) } catch (_: Exception) { null } }, pool)
-        val dirF = java.util.concurrent.CompletableFuture.supplyAsync({ try { bookDirectory(seriesId) } catch (_: Exception) { null } }, pool)
-        val landedF = java.util.concurrent.CompletableFuture.supplyAsync({ try { HGDetailExtras.seriesLanding(this, seriesId, maxPages = 2) } catch (_: Exception) { null } }, pool)
-        val webF = if (web) java.util.concurrent.CompletableFuture.supplyAsync({ try { HGDetailExtras.webDetail(seriesId) } catch (_: Exception) { null } }, pool) else null
-        val detailJ = detailF.get()
-        val dirJ = dirF.get()
-        val landed = landedF.get()
-        val webD = webF?.get()
+        // Dedicated IO pool (never starves ForkJoinPool.commonPool on low-core mobile devices)
+        val detailF = java.util.concurrent.CompletableFuture.supplyAsync({ try { postJSON(URL_DETAIL, detailQuery(nowMs()), J.encodeSorted(body), retries = 0) } catch (_: Exception) { null } }, detailPool)
+        val dirF = java.util.concurrent.CompletableFuture.supplyAsync({ try { bookDirectory(seriesId) } catch (_: Exception) { null } }, detailPool)
+        val landedF = java.util.concurrent.CompletableFuture.supplyAsync({ try { HGDetailExtras.seriesLanding(this, seriesId, maxPages = 2) } catch (_: Exception) { null } }, detailPool)
+        val webF = if (web) java.util.concurrent.CompletableFuture.supplyAsync({ try { HGDetailExtras.webDetail(seriesId) } catch (_: Exception) { null } }, detailPool) else null
+        val detailJ = runCatching { detailF.get(12, TimeUnit.SECONDS) }.getOrNull()
+        val dirJ = runCatching { dirF.get(15, TimeUnit.SECONDS) }.getOrNull()
+        val landed = runCatching { landedF.get(8, TimeUnit.SECONDS) }.getOrNull()
+        var webD = webF?.let { runCatching { it.get(10, TimeUnit.SECONDS) }.getOrNull() }
         var vd = JSONObject()
         if (detailJ != null && J.str(detailJ.opt("code")) == "0") {
             vd = J.dict(J.dict(J.dict(detailJ.opt("data")).opt(seriesId)).opt("video_data"))
         }
         val info = J.dict(J.dict(dirJ?.opt("data")).opt("book_info"))
         if (vd.length() == 0) {
-            if (dirJ == null) throw ProviderException.upstream("详情获取失败")
-            lastDetailRoute = "directory"
-            val data = J.dict(dirJ.opt("data"))
-            val eps = ArrayList<HGEpisode>()
-            J.arr(data.opt("item_data_list")).forEachIndexed { i, raw ->
-                val m = J.dict(raw)
-                val vid = J.firstNonEmpty(J.str(m.opt("item_id")), J.str(m.opt("vid")))
-                if (vid.isEmpty()) return@forEachIndexed
-                val n = J.int(m.opt("chapter_index"))
-                eps.add(HGEpisode(if (n > 0) n else i + 1, vid, 0, J.str(m.opt("title"))))
+            if (dirJ != null) {
+                lastDetailRoute = "directory"
+                val data = J.dict(dirJ.opt("data"))
+                val eps = ArrayList<HGEpisode>()
+                J.arr(data.opt("item_data_list")).forEachIndexed { i, raw ->
+                    val m = J.dict(raw)
+                    val vid = J.firstNonEmpty(J.str(m.opt("item_id")), J.str(m.opt("vid")))
+                    if (vid.isEmpty()) return@forEachIndexed
+                    val n = J.int(m.opt("chapter_index"))
+                    eps.add(HGEpisode(if (n > 0) n else i + 1, vid, 0, J.str(m.opt("title"))))
+                }
+                if (eps.isEmpty() && webD == null) {
+                    webD = try { HGDetailExtras.webDetail(seriesId) } catch (_: Exception) { null }
+                }
+                val title = J.firstNonEmpty(J.str(info.opt("book_name")), J.str(info.opt("original_book_name")), webD?.title.orEmpty())
+                val cover = J.firstNonEmpty(J.str(info.opt("thumb_url")), webD?.cover.orEmpty())
+                val total = maxOf(J.int(info.opt("serial_count")), eps.size, webD?.totalEps ?: 0)
+                if (eps.isNotEmpty() || title.isNotEmpty()) {
+                    val related = HGDetailExtras.loadRelatedSeries(seriesId, title, cover, total, JSONObject(), landed)
+                    return HGDetailExtras.enrich(HGSeriesDetail(
+                        seriesId = seriesId, title = title, cover = cover, desc = J.str(info.opt("abstract")),
+                        author = J.str(info.opt("author")), actors = names(info.opt("roles"), info.opt("role")),
+                        onlineTime = J.unix(info.opt("create_time")), totalEps = total, episodes = eps, relatedSeries = related,
+                    ), webD)
+                }
             }
-            val title = J.firstNonEmpty(J.str(info.opt("book_name")), J.str(info.opt("original_book_name")))
-            val cover = J.str(info.opt("thumb_url"))
-            val total = maxOf(J.int(info.opt("serial_count")), eps.size)
-            val related = HGDetailExtras.loadRelatedSeries(seriesId, title, cover, total, JSONObject(), landed)
-            return HGDetailExtras.enrich(HGSeriesDetail(
-                seriesId = seriesId, title = title, cover = cover, desc = J.str(info.opt("abstract")),
-                author = J.str(info.opt("author")), actors = names(info.opt("roles"), info.opt("role")),
-                onlineTime = J.unix(info.opt("create_time")), totalEps = total, episodes = eps, relatedSeries = related,
-            ), webD)
+            // Independent 3rd fallback: official web page (hongguoduanju.com _ROUTER_DATA carries full vid_list + metadata)
+            if (webD == null) webD = try { HGDetailExtras.webDetail(seriesId) } catch (_: Exception) { null }
+            val w = webD
+            if (w != null && (w.episodes.isNotEmpty() || w.title.isNotEmpty())) {
+                lastDetailRoute = "web"
+                val total = maxOf(w.totalEps, w.episodes.size)
+                val related = HGDetailExtras.loadRelatedSeries(seriesId, w.title, w.cover, total, JSONObject(), landed)
+                return HGDetailExtras.enrich(HGSeriesDetail(
+                    seriesId = seriesId, title = w.title, cover = w.cover, desc = w.intro,
+                    actors = w.cast.map { it.name }, onlineTime = w.onlineTime,
+                    totalEps = total, episodes = w.episodes, relatedSeries = related,
+                ), w)
+            }
+            throw ProviderException.upstream("详情获取失败")
         }
         lastDetailRoute = "preload"
         val eps = ArrayList<HGEpisode>()
@@ -530,7 +566,43 @@ class HongguoClient(
         ), webD)
     }
 
+    private fun isDirOk(j: JSONObject): Boolean {
+        val code = J.str(j.opt("code"))
+        if (!(code == "0" || code.uppercase() == "SUCCESS" || J.str(j.opt("message")).uppercase() == "SUCCESS")) return false
+        val data = J.dict(j.opt("data"))
+        return data.length() > 0 && (J.arr(data.opt("item_data_list")).isNotEmpty() || J.dict(data.opt("book_info")).length() > 0)
+    }
+
     private fun bookDirectory(sid: String): JSONObject {
+        var lastErr: Exception = ProviderException.upstream("directory 请求失败")
+        // 1) Fast unsigned playerQuery path
+        try {
+            val now = nowMs()
+            val rb = Request.Builder().url(URL_BOOK_DIR + playerQuery(now) + "&book_id=$sid")
+                .header("User-Agent", UA)
+                .header("Accept", "application/json; charset=utf-8,application/x-protobuf")
+                .header("x-ss-dp", "8662").header("x-ss-req-ticket", now.toString())
+                .header("x-khronos", (now / 1000).toString()).header("sdk-version", "2")
+                .header("passport-sdk-version", "5051452")
+            val j = send(rb.build(), retries = 0)
+            if (isDirOk(j)) return j
+            lastErr = ProviderException.upstream("directory code=${J.str(j.opt("code"))}")
+        } catch (e: Exception) {
+            lastErr = e
+            if (!hasPureOverride()) runCatching { HGPlayerDevice.remint() }
+        }
+        // 2) Registered device + full 6-header HGSign fallback (survives minted-ID rate limits / soft-rejects)
+        try {
+            val d = ensureDevice()
+            val u = URL_BOOK_DIR + listQuery(d, nowMs()) + "&book_id=$sid"
+            val j = list(u, signed = true)
+            if (isDirOk(j)) return j
+            lastErr = ProviderException.upstream("directory(signed) code=${J.str(j.opt("code"))}")
+        } catch (e: Exception) {
+            lastErr = e
+        }
+        // 3) Brief backoff + fresh playerQuery retry for transient 100103 / network blips
+        Thread.sleep(500)
         val now = nowMs()
         val rb = Request.Builder().url(URL_BOOK_DIR + playerQuery(now) + "&book_id=$sid")
             .header("User-Agent", UA)
@@ -538,12 +610,9 @@ class HongguoClient(
             .header("x-ss-dp", "8662").header("x-ss-req-ticket", now.toString())
             .header("x-khronos", (now / 1000).toString()).header("sdk-version", "2")
             .header("passport-sdk-version", "5051452")
-        val j = send(rb.build(), retries = 1)
-        val code = J.str(j.opt("code"))
-        if (!(code == "0" || code.uppercase() == "SUCCESS" || J.str(j.opt("message")).uppercase() == "SUCCESS")) {
-            throw ProviderException.upstream("directory code=$code")
-        }
-        return j
+        val j = send(rb.build(), retries = 0)
+        if (isDirOk(j)) return j
+        throw lastErr
     }
 
     // ---- resolve ----

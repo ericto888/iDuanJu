@@ -145,11 +145,49 @@ final class MPVMetalView: UIView {
         shuttingDown = true
         refitTask?.cancel()
         lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        // Drain any pending videoQueue property calls before destroying mpv_handle* to avoid use-after-free.
         videoQueue.sync {}
         if let handle = mpv {
+            mpv = nil
+            // Keep MPVMetalView / CAMetalLayer (`wid` unretained pointer) alive until `mpv_terminate_destroy`
+            // finishes tearing down MoltenVK's VkSurfaceKHR, then release UIView on the main thread.
+            let keepSurfaceAlive = hostView
             mpv_wakeup(handle)
+            eventQueue.async {
+                mpv_terminate_destroy(handle)
+                DispatchQueue.main.async { _ = keepSurfaceAlive }
+            }
+        }
+    }
+
+    func shutdown() {
+        guard !shuttingDown else { return }
+        shuttingDown = true
+        generation += 1
+        hostView.onResize = nil
+        refitTask?.cancel()
+        refitTask = nil
+        suspendedForBackground = false
+        resumeAfterBackground = false
+        mounted = false
+        if let cont = loadContinuation {
+            loadContinuation = nil
+            cont.resume(throwing: CancellationError())
+        }
+        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        lifecycleObservers.removeAll()
+        guard let handle = mpv else { return }
+        mpv = nil
+        let keepSurfaceAlive = hostView
+        videoQueue.sync {}
+        var pauseFlag: Int32 = 1
+        _ = mpv_set_property(handle, "pause", MPV_FORMAT_FLAG, &pauseFlag)
+        _ = mpv_set_property_string(handle, "vid", "no")
+        _ = mpv_set_property_string(handle, "vo", "null")
+        Self.runCommand(handle, ["stop"])
+        mpv_wakeup(handle)
+        eventQueue.async {
             mpv_terminate_destroy(handle)
+            DispatchQueue.main.async { _ = keepSurfaceAlive }
         }
     }
 

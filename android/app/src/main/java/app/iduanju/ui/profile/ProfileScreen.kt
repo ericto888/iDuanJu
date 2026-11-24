@@ -165,6 +165,10 @@ fun ProfileScreen(onOpenDetail: (String) -> Unit = {}) {
             Group {
                 ActRow("重置红果设备注册", ProfileIcons.reset, scope, { message = it }) { withContext(Dispatchers.IO) { ia.hongguo.resetDevice() }; "已重置红果设备" }
                 RowDivider()
+                if (adult) {
+                    ActRow("重置黄果访客会话", ProfileIcons.key, scope, { message = it }) { withContext(Dispatchers.IO) { ia.huangguo.resetSession() }; "已清除黄果会话" }
+                    RowDivider()
+                }
                 ActRow("清空封面缓存", ProfileIcons.photos, scope, { message = it }) {
                     coil.Coil.imageLoader(ctx).let { l -> l.memoryCache?.clear(); withContext(Dispatchers.IO) { l.diskCache?.clear() } }; "封面缓存已清空"
                 }

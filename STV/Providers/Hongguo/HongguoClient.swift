@@ -79,7 +79,7 @@ actor HongguoClient {
         HGPlayerDevice.queryPart() + "&ac=wifi&channel=ry_hongguo_offlinestore_04&aid=8662&app_name=novelread" +
         "&version_code=73332&version_name=7.3.3.32&device_platform=android&os=android&ssmix=a&device_type=sdk_gphone64_arm64&device_brand=google" +
         "&language=en&os_api=35&os_version=15&manifest_version_code=73332&resolution=1080*2400&dpi=420&update_version_code=73332" +
-        "&_rticket=\(rt)&&host_abi=arm64-v8a&dragon_device_type=phone&pv_player=73332&compliance_status=0&need_personal_recommend=1" +
+        "&_rticket=\(rt)&host_abi=arm64-v8a&dragon_device_type=phone&pv_player=73332&compliance_status=0&need_personal_recommend=1" +
         "&player_so_load=1&is_android_pad_screen=0&rom_version=sdk_gphone64_arm64-userdebug+15+AE3A.240806.043+12960925+dev-keys" +
         "&cdid=22daeba8-ef23-4742-abbe-c41bc3d6d4c8"
     }
@@ -465,27 +465,41 @@ actor HongguoClient {
         }
         let dir = await dirJ
         let landed = await landedJ
+        var webRes = await webJ
         let info = J.dict(J.dict(dir?["data"])["book_info"])
         if vd.isEmpty {
-            guard let dir else { throw ProviderError.upstream("详情获取失败") }
-            let data = J.dict(dir["data"])
-            var eps: [HGEpisode] = []
-            for (i, raw) in J.arr(data["item_data_list"]).enumerated() {
-                let m = J.dict(raw)
-                let vid = J.firstNonEmpty(J.str(m["item_id"]), J.str(m["vid"]))
-                if vid.isEmpty { continue }
-                let n = J.int(m["chapter_index"])
-                eps.append(HGEpisode(ep: n > 0 ? n : i + 1, vid: vid, duration: 0, title: J.str(m["title"])))
+            if let dir {
+                let data = J.dict(dir["data"])
+                var eps: [HGEpisode] = []
+                for (i, raw) in J.arr(data["item_data_list"]).enumerated() {
+                    let m = J.dict(raw)
+                    let vid = J.firstNonEmpty(J.str(m["item_id"]), J.str(m["vid"]))
+                    if vid.isEmpty { continue }
+                    let n = J.int(m["chapter_index"])
+                    eps.append(HGEpisode(ep: n > 0 ? n : i + 1, vid: vid, duration: 0, title: J.str(m["title"])))
+                }
+                if eps.isEmpty && webRes == nil { webRes = try? await self.webDetail(seriesId: sid) }
+                let title = J.firstNonEmpty(J.str(info["book_name"]), J.str(info["original_book_name"]), webRes?.title ?? "")
+                let cover = J.firstNonEmpty(J.str(info["thumb_url"]), webRes?.cover ?? "")
+                let total = max(J.int(info["serial_count"]), eps.count, webRes?.totalEps ?? 0)
+                if !eps.isEmpty || !title.isEmpty {
+                    let related = await self.loadRelatedSeries(seriesId: sid, title: title, cover: cover, episodeCount: total, videoData: [:], excludeId: sid, landed: landed)
+                    return Self.enrich(HGSeriesDetail(seriesId: sid, title: title,
+                                          cover: cover, desc: J.str(info["abstract"]),
+                                          author: J.str(info["author"]), actors: Self.names(info["roles"], info["role"]),
+                                          onlineTime: Int(J.unix(info["create_time"])), totalEps: total, episodes: eps,
+                                          relatedSeries: related), with: webRes)
+                }
             }
-            let title = J.firstNonEmpty(J.str(info["book_name"]), J.str(info["original_book_name"]))
-            let cover = J.str(info["thumb_url"])
-            let total = max(J.int(info["serial_count"]), eps.count)
-            let related = await self.loadRelatedSeries(seriesId: sid, title: title, cover: cover, episodeCount: total, videoData: [:], excludeId: sid, landed: landed)
-            return Self.enrich(HGSeriesDetail(seriesId: sid, title: title,
-                                  cover: J.str(info["thumb_url"]), desc: J.str(info["abstract"]),
-                                  author: J.str(info["author"]), actors: Self.names(info["roles"], info["role"]),
-                                  onlineTime: Int(J.unix(info["create_time"])), totalEps: max(J.int(info["serial_count"]), eps.count), episodes: eps,
-                                  relatedSeries: related), with: await webJ)
+            if webRes == nil { webRes = try? await self.webDetail(seriesId: sid) }
+            if let w = webRes, !w.episodes.isEmpty || !w.title.isEmpty {
+                let total = max(w.totalEps, w.episodes.count)
+                let related = await self.loadRelatedSeries(seriesId: sid, title: w.title, cover: w.cover, episodeCount: total, videoData: [:], excludeId: sid, landed: landed)
+                return Self.enrich(HGSeriesDetail(seriesId: sid, title: w.title, cover: w.cover, desc: w.intro,
+                                      author: "", actors: w.cast.map(\.name), onlineTime: w.onlineTime,
+                                      totalEps: total, episodes: w.episodes, relatedSeries: related), with: w)
+            }
+            throw ProviderError.upstream("详情获取失败")
         }
         var eps: [HGEpisode] = []
         for e in J.arr(vd["video_list"]) {
@@ -503,7 +517,7 @@ actor HongguoClient {
                               desc: J.firstNonEmpty(J.str(vd["series_intro"]), J.str(info["abstract"])),
                               author: J.firstNonEmpty(J.str(info["author"]), J.str(info["source"])), actors: actors,
                               onlineTime: Int(J.unix(info["create_time"])), totalEps: J.int(vd["episode_cnt"]), episodes: eps,
-                              relatedSeries: related), with: await webJ)
+                              relatedSeries: related), with: webRes)
     }
 
     /// DEBUG: logs how long a 红果 request took since `t0` (one line per call, for latency work).
@@ -515,7 +529,45 @@ actor HongguoClient {
         return v
     }
 
+    private static func isDirOk(_ j: [String: Any]) -> Bool {
+        let code = J.str(j["code"])
+        guard code == "0" || code.uppercased() == "SUCCESS" || J.str(j["message"]).uppercased() == "SUCCESS" else { return false }
+        let data = J.dict(j["data"])
+        return !data.isEmpty && (!J.arr(data["item_data_list"]).isEmpty || !J.dict(data["book_info"]).isEmpty)
+    }
+
     private func bookDirectory(_ sid: String) async throws -> [String: Any] {
+        var lastErr: Error = ProviderError.upstream("directory 请求失败")
+        // 1) Fast unsigned playerQuery path
+        do {
+            let now = Self.nowMs()
+            var req = URLRequest(url: URL(string: Self.urlBookDir + Self.playerQuery(now) + "&book_id=" + sid)!)
+            req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
+            req.setValue("application/json; charset=utf-8,application/x-protobuf", forHTTPHeaderField: "Accept")
+            req.setValue("8662", forHTTPHeaderField: "x-ss-dp")
+            req.setValue(String(now), forHTTPHeaderField: "x-ss-req-ticket")
+            req.setValue(String(now / 1000), forHTTPHeaderField: "x-khronos")
+            req.setValue("2", forHTTPHeaderField: "sdk-version")
+            req.setValue("5051452", forHTTPHeaderField: "passport-sdk-version")
+            let j = try await send(req, retries: 0)
+            if Self.isDirOk(j) { return j }
+            lastErr = ProviderError.upstream("directory code=\(J.str(j["code"]))")
+        } catch {
+            lastErr = error
+            if !Self.hasPurePlayerOverride { _ = HGPlayerDevice.remint() }
+        }
+        // 2) Registered device + full 6-header HGSign fallback
+        do {
+            let d = try await ensureDevice()
+            let u = Self.urlBookDir + Self.listQuery(d, Self.nowMs()) + "&book_id=" + sid
+            let j = try await list(u, signed: true)
+            if Self.isDirOk(j) { return j }
+            lastErr = ProviderError.upstream("directory(signed) code=\(J.str(j["code"]))")
+        } catch {
+            lastErr = error
+        }
+        // 3) Brief backoff + fresh playerQuery retry
+        try await Task.sleep(nanoseconds: 500_000_000)
         let now = Self.nowMs()
         var req = URLRequest(url: URL(string: Self.urlBookDir + Self.playerQuery(now) + "&book_id=" + sid)!)
         req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
@@ -525,12 +577,9 @@ actor HongguoClient {
         req.setValue(String(now / 1000), forHTTPHeaderField: "x-khronos")
         req.setValue("2", forHTTPHeaderField: "sdk-version")
         req.setValue("5051452", forHTTPHeaderField: "passport-sdk-version")
-        let j = try await send(req, retries: 1)
-        let code = J.str(j["code"])
-        guard code == "0" || code.uppercased() == "SUCCESS" || J.str(j["message"]).uppercased() == "SUCCESS" else {
-            throw ProviderError.upstream("directory code=\(code)")
-        }
-        return j
+        let j = try await send(req, retries: 0)
+        if Self.isDirOk(j) { return j }
+        throw lastErr
     }
 
     // MARK: panel / category (gateway category_transport.go)
@@ -1445,6 +1494,7 @@ enum HGContentFilter: String, CaseIterable, Identifiable {
 
 struct HGWebDetail: Hashable {
     var title = ""
+    var cover = ""
     var intro = ""
     var tags: [String] = []
     var cast: [HGCelebrity] = []
@@ -1454,23 +1504,37 @@ struct HGWebDetail: Hashable {
     var rating: Double = 0
     var ratingCount = ""
     var hotText = ""
+    var totalEps = 0
+    var onlineTime = 0
+    var episodes: [HGEpisode] = []
 }
 
 extension HongguoClient {
     private static let webOrigin = "https://hongguoduanju.com"
     private static let webUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-    /// `https://hongguoduanju.com/player/{sid}` embeds `_ROUTER_DATA` with celebrities (ids + avatars + roles), tags, intro.
+    /// `https://hongguoduanju.com/player/{sid}` embeds `_ROUTER_DATA` with celebrities (ids + avatars + roles), tags, intro, and `vid_list`.
     func webDetail(seriesId sid: String) async throws -> HGWebDetail {
         guard Self.looksSID(sid) else { throw ProviderError.invalid("seriesId") }
         var req = URLRequest(url: URL(string: Self.webOrigin + "/player/" + sid)!)
-        req.timeoutInterval = 7
+        req.timeoutInterval = 10
         req.setValue(Self.webUA, forHTTPHeaderField: "User-Agent")
         req.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
         req.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
         req.setValue(Self.webOrigin + "/", forHTTPHeaderField: "Referer")
-        let (data, _) = try await session.data(for: req)
-        let html = String(decoding: data, as: UTF8.self)
+        var html = ""
+        var lastErr: Error = ProviderError.upstream("官网请求失败")
+        for attempt in 0...1 {
+            if attempt > 0 { try await Task.sleep(nanoseconds: 300_000_000) }
+            do {
+                let (data, resp) = try await session.data(for: req)
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                guard (200..<300).contains(code) else { throw ProviderError.upstream("官网 HTTP \(code)") }
+                html = String(decoding: data, as: UTF8.self)
+                if !html.isEmpty { break }
+            } catch { lastErr = error }
+        }
+        guard !html.isEmpty else { throw lastErr }
         guard let router = Self.routerData(html) else { throw ProviderError.upstream("官网页面缺少 _ROUTER_DATA") }
         let ld = J.dict(router["loaderData"])
         let page = J.dict(ld["player_(series_id)/page"] ?? ld["player_(series_id)/(vid)/page"] ?? ld["detail_page"])
@@ -1478,10 +1542,19 @@ extension HongguoClient {
         guard J.str(sd["series_id"]) == sid else { throw ProviderError.upstream("官网返回的剧集不一致") }
         var w = HGWebDetail()
         w.title = J.str(sd["series_name"])
+        w.cover = J.str(sd["series_cover"])
         w.intro = J.str(sd["series_intro"]).trimmingCharacters(in: .whitespacesAndNewlines)
         w.tags = J.arr(sd["tags"]).map { J.str($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         w.episodeLabel = J.str(sd["episode_right_text"]).trimmingCharacters(in: .whitespaces)
         w.seriesGroupId = J.str(J.dict(sd["season_info"])["series_group_id"])
+        w.onlineTime = Int(J.unix(sd["first_visible_time"]))
+        var vids: [HGEpisode] = []
+        for (idx, raw) in J.arr(sd["vid_list"]).enumerated() {
+            let vid = J.str(raw).trimmingCharacters(in: .whitespaces)
+            if Self.looksSID(vid) { vids.append(HGEpisode(ep: idx + 1, vid: vid, duration: 0, title: "第\(idx + 1)集")) }
+        }
+        w.episodes = vids
+        w.totalEps = max(J.int(sd["episode_cnt"]), J.int(J.dict(sd["series_episode_info"])["episode_total_cnt"]), vids.count)
         var seen = Set<String>()
         for e in J.arr(sd["celebrities"]) {
             let m = J.dict(e)
@@ -1529,22 +1602,25 @@ extension HongguoClient {
     /// Merge web-page metadata into an app-side detail (cast with ids, tags, favorites).
     static func enrich(_ d: HGSeriesDetail, with w: HGWebDetail?) -> HGSeriesDetail {
         guard let w else { return d }
-        var out = d
-        out.cast = w.cast
-        out.tags = w.tags
-        out.favoriteCount = w.favoriteCount
-        out.episodeLabel = w.episodeLabel
-        if out.desc.isEmpty { out.desc = w.intro }
-        if !w.cast.isEmpty {
-            // Real performer names beat role names from book_info.roles.
-            out = HGSeriesDetail(source: d.source, seriesId: d.seriesId, title: d.title.isEmpty ? w.title : d.title, cover: d.cover,
-                                 desc: out.desc, author: d.author, actors: w.cast.map(\.name), onlineTime: d.onlineTime,
-                                 totalEps: d.totalEps, episodes: d.episodes, relatedSeries: d.relatedSeries,
-                                 cast: w.cast, tags: w.tags, favoriteCount: w.favoriteCount, episodeLabel: w.episodeLabel)
-        }
-        out.rating = w.rating
-        out.ratingCount = w.ratingCount
-        out.hotText = w.hotText
+        let nextTitle = d.title.isEmpty ? w.title : d.title
+        let nextCover = d.cover.isEmpty ? w.cover : d.cover
+        let nextDesc = d.desc.isEmpty ? w.intro : d.desc
+        let nextActors = !w.cast.isEmpty ? w.cast.map(\.name) : d.actors
+        let nextEps = (d.episodes.isEmpty && !w.episodes.isEmpty) ? w.episodes : d.episodes
+        let nextTotal = max(d.totalEps, w.totalEps, nextEps.count)
+        let nextOnline = d.onlineTime == 0 ? w.onlineTime : d.onlineTime
+        var out = HGSeriesDetail(
+            source: d.source, seriesId: d.seriesId, title: nextTitle, cover: nextCover,
+            desc: nextDesc, author: d.author, actors: nextActors, onlineTime: nextOnline,
+            totalEps: nextTotal, episodes: nextEps, relatedSeries: d.relatedSeries,
+            cast: !w.cast.isEmpty ? w.cast : d.cast,
+            tags: !w.tags.isEmpty ? w.tags : d.tags,
+            favoriteCount: w.favoriteCount > 0 ? w.favoriteCount : d.favoriteCount,
+            episodeLabel: w.episodeLabel.isEmpty ? d.episodeLabel : w.episodeLabel
+        )
+        out.rating = w.rating > 0 ? w.rating : d.rating
+        out.ratingCount = w.ratingCount.isEmpty ? d.ratingCount : w.ratingCount
+        out.hotText = w.hotText.isEmpty ? d.hotText : w.hotText
         return out
     }
 

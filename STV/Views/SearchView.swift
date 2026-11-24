@@ -20,11 +20,15 @@ struct SearchView: View {
     @State private var editingHistory = false
     @Environment(\.layoutMetrics) private var layout
     @ObservedObject private var library = LibraryStore.shared
+    @ObservedObject private var gate = SourceGate.shared
 
     var body: some View {
         VStack(spacing: 10) {
             SearchField(text: $query, onSubmit: submit, onCancel: pushed ? { dismiss() } : (submitted.isEmpty ? nil : { query = ""; submitted = "" }))
                 .padding(.horizontal, 16).padding(.top, 6)
+            if gate.searchSources.count > 1 {
+                TextTabStrip(items: gate.searchSources, selection: $source) { $0.label }
+            }
             ScrollView {
                 if submitted.isEmpty { landing } else { results }
             }
@@ -36,7 +40,13 @@ struct SearchView: View {
             if let q = initialQuery, submitted.isEmpty, !q.isEmpty { query = q; submit() }
             if hot.isEmpty { await loadHot() }
         }
-        .compatOnChange(of: source) { run() }
+        .compatOnChange(of: source) {
+            if !submitted.isEmpty { run() }
+            else if !query.trimmingCharacters(in: .whitespaces).isEmpty { submit() }
+        }
+        .compatOnChange(of: gate.searchSources) {
+            if !gate.searchSources.contains(source) { source = .hongguo }
+        }
     }
 
     // MARK: landing
@@ -95,7 +105,6 @@ struct SearchView: View {
 
     @ViewBuilder private var results: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextTabStrip(items: SourceGate.shared.searchSources, selection: $source) { $0.label }
             if let e = pager.error, pager.items.isEmpty { ErrorStateView(error: e) { run() } }
             else if !pager.isLoading && pager.items.isEmpty {
                 CompatEmptyStateView(title: "无搜索结果", systemImage: "magnifyingglass", description: "没有找到与“\(submitted)”相关的内容")

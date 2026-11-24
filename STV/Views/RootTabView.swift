@@ -17,7 +17,7 @@ struct RootTabView: View {
             let showNav = paths[tab].isEmpty
             HStack(spacing: 0) {
                 if showNav && metrics.useRail && !(tab == 0 && homeChromeHidden) {
-                    GlassNavigationRail(selection: $tab, items: Self.items, searchTag: 4) { i in
+                    GlassNavigationRail(selection: $tab, items: Self.items) { i in
                         if i == tab { paths[i] = NavigationPath() }
                     }
                     .transition(.move(edge: .leading).combined(with: .opacity))
