@@ -253,8 +253,8 @@ struct HomeView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
         }
-        // 首页内容铺到屏幕最底部，避免底部安全区露出系统默认白色背景。
-        .ignoresSafeArea(.container, edges: .bottom)
+        // Match CategoryView: keep the content viewport inside the system safe area;
+        // extend only the page background beneath the Home Indicator.
         .background(STVTheme.bg.ignoresSafeArea())
         .dsAmbient(visible: !pinned)
         .animation(.easeInOut(duration: 0.22), value: headerHidden)
@@ -468,9 +468,7 @@ private struct HomeFeedPage: View {
             .animation(.easeOut(duration: 0.25), value: bottomBarHidden)
             .animation(.easeOut(duration: 0.25), value: heroPicks.isEmpty)
         }
-        // The inner horizontal pager hosts this feed inside a TabView; extend the actual
-        // vertical scroll viewport through the bottom safe area, not only the outer HomeView.
-        .ignoresSafeArea(.container, edges: .bottom)
+        // Match CategoryView's safe-area behavior; only the page background extends below.
         .background(STVTheme.bg.ignoresSafeArea())
         .scrollIndicators(.hidden)
         .coordinateSpace(name: "home.feed.scroll")
