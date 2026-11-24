@@ -1,4 +1,5 @@
 import Foundation
+import CommonCrypto
 
 /// Pure-Swift ports of gateway/internal/provider/hongguo sign.go, sign_helios_ladon.go,
 /// video_model.go (signVideoModelRequest) and spade.go (Unwrap / downloadContentKey).
@@ -134,8 +135,9 @@ enum HGSign {
         ]
     }
 
-    // MARK: video_model/v1 signature (8404401c)
-    static func videoModelHeaders(rawQuery: String, body: [UInt8], now: Date) -> [String: String] {
+    /// Keep the older batch endpoint's 0x8440401c dialect separate from the registered
+    /// GuoApp 7.3.5.32 single-video signer below.
+    static func playerBatchHeaders(rawQuery: String, body: [UInt8], now: Date) -> [String: String] {
         let ts = UInt32(truncatingIfNeeded: Int64(now.timeIntervalSince1970))
         let qh = Bytes.md5(rawQuery), bh = Bytes.md5(body)
         var p = [UInt8](repeating: 0, count: 20)
@@ -155,6 +157,171 @@ enum HGSign {
             "X-SS-STUB": Bytes.hex(bh).uppercased(),
             "X-SS-Req-Ticket": String(Int64(now.timeIntervalSince1970 * 1000))
         ]
+    }
+
+    // MARK: video_model/v1 signature (GuoApp 2.0.0+112 signPlayer)
+    static func videoModelHeaders(rawQuery: String, body: [UInt8], now: Date, deviceId: String) -> [String: String] {
+        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+        let ts = UInt32(truncatingIfNeeded: nowMs / 1000)
+        let qh = Bytes.md5(rawQuery), bh = Bytes.md5(body)
+        var p = [UInt8](repeating: 0, count: 20)
+        for i in 0..<4 { p[i] = qh[i]; p[4 + i] = bh[i] }
+        p[12] = 0; p[13] = 6; p[14] = 11; p[15] = 28
+        let tsb = Bytes.u32BE(ts); for i in 0..<4 { p[16 + i] = tsb[i] }
+        let key: [UInt8] = [0x44, 0xb9, 0xb9, 0xd9, 0xa4, 0xae, 0xf9, 0xfc, 0xa4, 0x93, 0xaa, 0x75, 0x7c, 0xa3, 0xc2, 0xc4, 0xa4, 0x96, 0x93, 0x8f]
+        for i in 0..<20 { p[i] ^= key[i] }
+        for i in 0..<20 {
+            let rot = (p[i] << 4) | (p[i] >> 4)
+            let mixed = rot ^ p[(i + 1) % 20]
+            p[i] = bitReverse(mixed) ^ 0xff ^ 20
+        }
+        let nonce = Bytes.random(11)
+        let aid = "8662"
+        return [
+            "X-Gorgon": Bytes.hex([0x84, 0x04, 0x40, 0x1c, 0, 0] + p),
+            "X-Khronos": String(ts),
+            "X-SS-STUB": Bytes.hex(bh).uppercased(),
+            "X-SS-Req-Ticket": String(nowMs),
+            "X-Argus": playerArgus(rawQuery: rawQuery, body: body, timestamp: ts, deviceId: deviceId, nonce: nonce),
+            "X-Ladon": playerLadon(aid: aid, timestamp: ts, prefix: Array(nonce[2..<6]), suffix: aid)
+        ]
+    }
+
+    private static func playerArgus(rawQuery: String, body: [UInt8], timestamp: UInt32,
+                                    deviceId: String, nonce: [UInt8]) -> String {
+        let bodyHash = HGPlayerSign.sm3(HGPlayerSign.md5(body))
+        let queryHash = HGPlayerSign.sm3(Array(rawQuery.utf8))
+        var counters = [UInt8]()
+        counters += unsignedVarintField(1, 1)
+        counters += unsignedVarintField(2, 1)
+        counters += unsignedVarintField(3, 1)
+        counters += unsignedVarintField(7, 3_348_294_860)
+        var environment = [UInt8]()
+        environment += bytesVarintField(1, Array("25053RT47C".utf8))
+        environment += bytesVarintField(2, Array("16".utf8))
+        environment += bytesVarintField(3, Array("update_64".utf8))
+        environment += unsignedVarintField(4, 2_147_483_648)
+
+        var message = [UInt8]()
+        message += unsignedVarintField(1, 0x20200929 * 2)
+        message += unsignedVarintField(2, 2)
+        message += unsignedVarintField(3, UInt64(HGPlayerSign.rdLE32(nonce, 6) & 0x7fffffff))
+        message += bytesVarintField(4, Array("8662".utf8))
+        message += bytesVarintField(5, Array(deviceId.utf8))
+        message += bytesVarintField(6, Array("1611921764".utf8))
+        message += bytesVarintField(7, Array("7.3.5.32".utf8))
+        message += bytesVarintField(8, Array("v04.07.01-ml-android".utf8))
+        message += unsignedVarintField(9, 135_135_744)
+        message += bytesVarintField(10, [UInt8](repeating: 0, count: 8))
+        message += unsignedVarintField(11, 0)
+        message += unsignedVarintField(12, UInt64(timestamp) * 2)
+        message += bytesVarintField(13, Array(bodyHash.prefix(6)))
+        message += bytesVarintField(14, Array(queryHash.prefix(6)))
+        message += bytesVarintField(15, counters)
+        message += bytesVarintField(16, [])
+        message += bytesVarintField(20, Array("none".utf8))
+        message += unsignedVarintField(21, 738)
+        message += bytesVarintField(23, environment)
+        message += unsignedVarintField(25, 2)
+        return argusSeal(message)
+    }
+
+    private static func unsignedVarintField(_ field: UInt32, _ value: UInt64) -> [UInt8] {
+        HGPlayerSign.pKey(field, 0) + HGPlayerSign.varint(value)
+    }
+
+    private static func bytesVarintField(_ field: UInt32, _ value: [UInt8]) -> [UInt8] {
+        HGPlayerSign.pKey(field, 2) + HGPlayerSign.varint(UInt64(value.count)) + value
+    }
+
+    private static func rotateLeft64(_ value: UInt64, _ bits: Int) -> UInt64 {
+        let shift = ((bits % 64) + 64) % 64
+        return shift == 0 ? value : (value << shift) | (value >> (64 - shift))
+    }
+
+    private static func pad16(_ bytes: [UInt8]) -> [UInt8] {
+        let count = 16 - bytes.count % 16
+        return bytes + [UInt8](repeating: UInt8(count), count: count)
+    }
+
+    private static func argusSeal(_ message: [UInt8]) -> String {
+        let key = HGPlayerSign.hexBytes("ac1adaae95a7af94a5114ab3b3a97dd80050aa0a39314c40528caec95256c28c")
+        let derived = HGPlayerSign.sm3(key + [0x3c, 0xcc, 0x56, 0x7b] + key)
+        var rounds = (0..<4).map { HGPlayerSign.rdLE64(derived, $0 * 8) }
+        let z: UInt64 = 0x3dc94c3a046d678b
+        for index in 4..<72 {
+            var mixed = rotateLeft64(rounds[index - 1], -3) ^ rounds[index - 3]
+            mixed ^= rotateLeft64(mixed, -1)
+            rounds.append((~rounds[index - 4]) ^ mixed ^ ((z >> ((index - 4) % 62)) & 1) ^ 3)
+        }
+        var data = pad16(message)
+        for offset in stride(from: 0, to: data.count, by: 16) {
+            var left = HGPlayerSign.rdLE64(data, offset)
+            var right = HGPlayerSign.rdLE64(data, offset + 8)
+            for round in rounds {
+                let next = left ^ (rotateLeft64(right, 1) & rotateLeft64(right, 8)) ^ rotateLeft64(right, 2) ^ round
+                left = right
+                right = next
+            }
+            data.replaceSubrange(offset..<(offset + 8), with: HGPlayerSign.wrLE64(left))
+            data.replaceSubrange((offset + 8)..<(offset + 16), with: HGPlayerSign.wrLE64(right))
+        }
+        let xor: [UInt8] = [0xd0, 0x4f, 0xfd, 0xff, 0xd0, 0x4f, 0xfd, 0xff]
+        for index in data.indices { data[index] ^= xor[index % 8] }
+        let reversed = Array((xor + data).reversed())
+        let container = pad16([0xa6, 0xe7, 0x83, 0xee, 0x70, 0x01, 0x10, 0x09, 0x18] + reversed + [0x56, 0x7b])
+        let aesKey = HGPlayerSign.md5(Array(key[0..<16]))
+        let iv = HGPlayerSign.md5(Array(key[16..<32]))
+        return Data([0x3c, 0xcc] + aesCBCEncrypt(container, key: aesKey, iv: iv)).base64EncodedString()
+    }
+
+    private static func playerLadon(aid: String, timestamp: UInt32, prefix: [UInt8], suffix: String) -> String {
+        let digest = Array(HGPlayerSign.hexStr(HGPlayerSign.md5(prefix + Array(aid.utf8))).utf8)
+        var left = HGPlayerSign.rdLE64(digest, 0)
+        var right = HGPlayerSign.rdLE64(digest, 8)
+        var queue = [HGPlayerSign.rdLE64(digest, 16), HGPlayerSign.rdLE64(digest, 24)]
+        var keys = [UInt64]()
+        for index in 0..<34 {
+            keys.append(left)
+            let mixed = (rotateLeft64(right, -8) &+ left) ^ UInt64(index)
+            queue.append(mixed)
+            left = mixed ^ rotateLeft64(left, 3)
+            right = queue.removeFirst()
+        }
+        var data = pad16(Array("\(timestamp)-1611921764-\(suffix)".utf8))
+        for offset in stride(from: 0, to: data.count, by: 16) {
+            var blockLeft = HGPlayerSign.rdLE64(data, offset)
+            var blockRight = HGPlayerSign.rdLE64(data, offset + 8)
+            for key in keys {
+                blockRight = key ^ (blockLeft &+ rotateLeft64(blockRight, -8))
+                blockLeft = blockRight ^ rotateLeft64(blockLeft, 3)
+            }
+            data.replaceSubrange(offset..<(offset + 8), with: HGPlayerSign.wrLE64(blockLeft))
+            data.replaceSubrange((offset + 8)..<(offset + 16), with: HGPlayerSign.wrLE64(blockRight))
+        }
+        return Data(prefix + data).base64EncodedString()
+    }
+
+    private static func aesCBCEncrypt(_ input: [UInt8], key: [UInt8], iv: [UInt8]) -> [UInt8] {
+        guard key.count == kCCKeySizeAES128, iv.count == kCCBlockSizeAES128 else { return [] }
+        var output = [UInt8](repeating: 0, count: input.count + kCCBlockSizeAES128)
+        let outputCount = output.count
+        let inputCount = input.count
+        let keyCount = key.count
+        var moved = 0
+        let status = key.withUnsafeBytes { keyBytes in
+            iv.withUnsafeBytes { ivBytes in
+                input.withUnsafeBytes { inputBytes in
+                    output.withUnsafeMutableBytes { outputBytes in
+                        CCCrypt(CCOperation(kCCEncrypt), CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionPKCS7Padding),
+                                keyBytes.baseAddress, keyCount, ivBytes.baseAddress,
+                                inputBytes.baseAddress, inputCount, outputBytes.baseAddress, outputCount, &moved)
+                    }
+                }
+            }
+        }
+        guard status == kCCSuccess else { return [] }
+        return Array(output.prefix(moved))
     }
 
     // MARK: spade_a envelope → 32-hex content key (spade.go)
