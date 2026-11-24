@@ -174,8 +174,15 @@ struct MacCMSProvider: SiteProvider {
 
     /// `vod_play_from` "a$$$b", `vod_play_url` "第1集$url#第2集$url$$$..." → lines of (name, [(epName, url)]).
     static func lines(from: String, urls: String) -> [(name: String, eps: [(String, String)])] {
-        let names = from.components(separatedBy: "$$$")
-        return urls.components(separatedBy: "$$$").enumerated().compactMap { i, chunk in
+        let chunks = urls.components(separatedBy: "$$")
+        var names = from.components(separatedBy: "$$")
+        // 部分采集站（包括 FFZY）在 vod_play_from 中用逗号列出线路名，
+        // 但 vod_play_url 仍按 $$ 分隔；按线路数量对齐，避免线路名错位。
+        if names.count == 1, chunks.count > 1 {
+            let commaNames = from.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if commaNames.count == chunks.count { names = commaNames }
+        }
+        return chunks.enumerated().compactMap { i, chunk in
             let eps: [(String, String)] = chunk.split(separator: "#").enumerated().compactMap { j, e in
                 let parts = e.split(separator: "$", maxSplits: 1).map(String.init)
                 let (n, u) = parts.count == 2 ? (parts[0], parts[1]) : ("第\(j + 1)集", parts.first ?? "")
@@ -215,12 +222,21 @@ struct MacCMSProvider: SiteProvider {
         var desc = PluginOut.s(v["vod_content"], max: 4000)
         desc = desc.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression).replacingOccurrences(of: "&nbsp;", with: " ")
         let meta = [PluginOut.s(v["vod_year"]), PluginOut.s(v["vod_area"]), PluginOut.s(v["vod_remarks"])].filter { !$0.isEmpty }.joined(separator: " · ")
+        let typeName = PluginOut.s(v["type_name"], max: 40).trimmingCharacters(in: .whitespacesAndNewlines)
+        let remarks = PluginOut.s(v["vod_remarks"], max: 80)
+        let lowerType = typeName.lowercased()
+        // “剧情片”等电影分类含“剧”字，必须排除“片”；电视剧/动漫/综艺则走选集。
+        let episodicType = (lowerType.contains("剧") && !lowerType.contains("片"))
+            || ["动漫", "动画", "综艺", "番剧"].contains(where: { lowerType.contains($0) })
+        let episodicRemark = remarks.contains("更新至") || (remarks.contains("集") && remarks.rangeOfCharacter(from: .decimalDigits) != nil)
+        let isLongVideo = !(episodicType || episodicRemark || eps.count > 1)
         return HGSeriesDetail(source: source, seriesId: s.seriesId, title: title, cover: cover.isEmpty ? s.cover : cover,
                               desc: [meta, desc].filter { !$0.isEmpty }.joined(separator: "\n"),
                               author: PluginOut.s(v["vod_director"], max: 60).nilIfEmpty,
                               actors: PluginOut.s(v["vod_actor"], max: 300).split(whereSeparator: { ",，/".contains($0) }).prefix(12).map { $0.trimmingCharacters(in: .whitespaces) },
                               onlineTime: 0, totalEps: eps.count, episodes: eps, tags: tags.filter { !$0.isEmpty },
-                              episodeLabel: eps.count > 1 ? "共\(eps.count)集" : "长视频")
+                              episodeLabel: isLongVideo ? "长视频" : "共\(max(eps.count, 1))集",
+                              isLongVideo: isLongVideo)
     }
 
     static func streams(for ep: HGEpisode) -> [HGStream] {
@@ -241,7 +257,7 @@ struct MacCMSProvider: SiteProvider {
     }
 
     func list(_ c: SiteCategory, page p: Int) async throws -> HGPage {
-        var q = ["ac": "detail", "pg": String(p)]
+        var q = ["ac": "list", "pg": String(p)]
         if !c.id.isEmpty { q["t"] = c.id }
         let o = try await Self.fetch(site.api, q)
         // Only the unfiltered latest page carries the site-wide class list. A category
@@ -254,7 +270,7 @@ struct MacCMSProvider: SiteProvider {
     }
 
     func search(_ q: String, page p: Int) async throws -> HGPage {
-        Self.page(try await Self.fetch(site.api, ["ac": "detail", "wd": q, "pg": String(p)]), source: source, page: p)
+        Self.page(try await Self.fetch(site.api, ["ac": "list", "wd": q, "pg": String(p)]), source: source, page: p)
     }
 
     func detail(_ s: HGSeries) async throws -> HGSeriesDetail {
