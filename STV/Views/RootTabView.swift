@@ -35,15 +35,11 @@ struct RootTabView: View {
                         let hideActiveBar = (tab == 0 && homeBottomBarHidden)
                             || (tab == 2 && categoryBottomBarHidden)
                             || (tab == 3 && profileBottomBarHidden)
-                        GlassTabBar(selection: $tab, items: Self.items, searchTag: 4) { i in
-                            if i == tab { paths[i] = NavigationPath() }
+                        if !hideActiveBar {
+                            GlassTabBar(selection: $tab, items: Self.items, searchTag: 4) { i in
+                                if i == tab { paths[i] = NavigationPath() }
+                            }
                         }
-                        // Keep the bar mounted while hiding it. A full-height downward
-                        // offset prevents the glass material from peeking into the home feed.
-                        .offset(y: hideActiveBar ? 180 : 0)
-                        .opacity(hideActiveBar ? 0 : 1)
-                        .allowsHitTesting(!hideActiveBar)
-                        .accessibilityHidden(hideActiveBar)
                     }
                 }
             }
