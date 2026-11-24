@@ -160,8 +160,33 @@ struct XVProvider: SiteProvider {
                     .init(id: "best", title: "上月最佳", path: "/best/\(m)|/best/\(m)/{p0}", isRank: true),
                     .init(id: "hits", title: "热门", path: "/hits|/hits/{p0}", isRank: true)]
         }
-        return [.init(id: "new", title: "最新", path: "/|/new/{p0}"),
-                .init(id: "best", title: "上月最佳", path: "/best/\(m)|/best/\(m)/{p0}", isRank: true)]
+        // XVideos category directory (mirrors the upstream source module). Keep these after
+        // the two editorial feeds so “上月最佳” remains the final ranking entry.
+        let taxonomy: [(String, String)] = [
+            ("Amateur-65", "业余"),
+            ("Asian_Woman-32", "亚洲女性"),
+            ("Anal-12", "肛交"),
+            ("Big_Tits-23", "大胸"),
+            ("Blowjob-15", "口交"),
+            ("Creampie-40", "内射"),
+            ("Lesbian-26", "女同性恋"),
+            ("Milf-19", "熟女"),
+            ("Ass-14", "臀部"),
+            ("bbw-51", "丰满女性"),
+            ("Latina-16", "拉丁裔"),
+            ("Mature-38", "成熟女性"),
+            ("Stockings-28", "长筒袜"),
+            ("Squinting-56", "潮吹"),
+            ("Solo_and_Masturbation-33", "单人／自慰"),
+            ("Lingerie-83", "情趣内衣"),
+            ("Cuckold-237", "NTR")
+        ]
+        return [
+            .init(id: "new", title: "最新", path: "/|/new/{p0}"),
+            .init(id: "best", title: "上月最佳", path: "/best/\\(m)|/best/\\(m)/{p0}", isRank: true)
+        ] + taxonomy.map { id, title in
+            .init(id: "category-\\(id)", title: title, path: "/c/\\(id)/1|/c/\\(id)/{p}")
+        }
     }
     private func get(_ path: String, ttl: TimeInterval = 120) async throws -> SiteHTTP.Response {
         try await SiteHTTP.shared.get(source, mirrors: [base], path: path, headers: ["User-Agent": TubeFmt.desktopUA], ttl: ttl)
