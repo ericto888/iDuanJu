@@ -253,8 +253,10 @@ struct HomeView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
         }
-        // Match CategoryView: keep the content viewport inside the system safe area;
-        // extend only the page background beneath the Home Indicator.
+        // The feed must run to the physical bottom edge like 找剧: this VStack is the layer whose
+        // parent owns the real bottom safe area, so opt out here first (otherwise the paged host
+        // below can never grow past the Home Indicator and the feed stops 34 pt short).
+        .ignoresSafeArea(.container, edges: .bottom)
         .background(STVTheme.bg.ignoresSafeArea())
         .dsAmbient(visible: !pinned)
         .animation(.easeInOut(duration: 0.22), value: headerHidden)
@@ -434,7 +436,7 @@ private struct HomeFeedPage: View {
 
     var body: some View {
         if case .site(let source) = tab, source.cmsKey != nil || source.pluginID != nil {
-            DynamicSiteFeed(source: source, onHero: onHero, onScrollOffset: onScrollOffset, onScrollInteraction: onScrollInteraction, onScrollMetrics: onScrollMetrics)
+            DynamicSiteFeed(source: source, bottomBarHidden: bottomBarHidden, onHero: onHero, onScrollOffset: onScrollOffset, onScrollInteraction: onScrollInteraction, onScrollMetrics: onScrollMetrics)
         } else {
             rankFeed
         }
@@ -468,7 +470,10 @@ private struct HomeFeedPage: View {
             .animation(.easeOut(duration: 0.25), value: bottomBarHidden)
             .animation(.easeOut(duration: 0.25), value: heroPicks.isEmpty)
         }
-        // Match CategoryView's safe-area behavior; only the page background extends below.
+        // CategoryView's scroll view runs to the physical bottom edge; the paged host above
+        // re-applies the safe area to its pages, so the feed has to opt out here as well or
+        // cards get cut off exactly at the Home Indicator with an empty strip below.
+        .ignoresSafeArea(.container, edges: .bottom)
         .background(STVTheme.bg.ignoresSafeArea())
         .scrollIndicators(.hidden)
         .coordinateSpace(name: "home.feed.scroll")
@@ -584,6 +589,7 @@ private struct HomeFeedPage: View {
 /// CMS / JS plugin home: every returned category is a selectable module, and the selected one pages its own list.
 private struct DynamicSiteFeed: View {
     let source: DramaSource
+    let bottomBarHidden: Bool
     var onHero: (String) -> Void
     var onScrollOffset: (CGFloat) -> Void = { _ in }
     var onScrollInteraction: (Bool) -> Void = { _ in }
@@ -611,10 +617,14 @@ private struct DynamicSiteFeed: View {
                     NumberedGrid(items: pager.items, numbered: false, hasMore: pager.hasMore, loading: pager.isLoading) { pager.loadMore() }
                 }
             }
-            // Fixed tail lets the last grid row scroll clear of the floating navigation.
+            // Fixed tail lets the last grid row scroll clear of the floating navigation; with the
+            // bar hidden there is no tail so the grid ends on the physical screen edge.
             .padding(.top, 8)
-            .padding(.bottom, 96)
+            .padding(.bottom, bottomBarHidden ? 0 : 96)
         }
+        // Same as the ranked feed: keep the grid scrolling to the screen edge, not to the
+        // safe-area line where the paged host would otherwise stop it.
+        .ignoresSafeArea(.container, edges: .bottom)
         .scrollIndicators(.hidden)
         .coordinateSpace(name: "home.feed.scroll")
         .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
