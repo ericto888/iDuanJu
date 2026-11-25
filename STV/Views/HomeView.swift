@@ -849,7 +849,7 @@ private struct DynamicSiteFeed: View {
             let fresh = PluginOut.categories(response["categories"])
             if !fresh.isEmpty {
                 await MainActor.run { PluginStore.shared.cacheCategories(pluginID, fresh) }
-                return [fallback] + fresh.map {
+                return fresh.map {
                     SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank)
                 }
             }
@@ -857,7 +857,7 @@ private struct DynamicSiteFeed: View {
 
         // home() 不可用时仍兼容已有缓存分类及旧插件。
         let categories = provider.categories.filter { !$0.id.isEmpty }
-        return [fallback] + categories
+        return categories.isEmpty ? [fallback] : categories
     }
 }
 
@@ -891,19 +891,17 @@ private struct HuangguaHomeFeed: View {
 
                 if !categories.isEmpty {
                     HomeChannelBar(
-                        items: ["__recommendation"] + categories.map(\.id),
+                        items: categories.map(\.id),
                         selection: Binding(
                             get: { selectedChannelID },
                             set: { id in
                                 selectedChannelID = id
-                                if id == "__recommendation" {
-                                    Task { await loadAll(SiteCategory(id: "browse", title: "推荐", path: "browse")) }
-                                } else if let category = categories.first(where: { $0.id == id }) {
+                                if let category = categories.first(where: { $0.id == id }) {
                                     Task { await loadAll(category) }
                                 }
                             }
                         ),
-                        label: { id in id == "__recommendation" ? "推荐" : (categories.first(where: { $0.id == id })?.title ?? id) },
+                        label: { id in categories.first(where: { $0.id == id })?.title ?? id },
                         ink: STVTheme.text
                     ) {
                         showCategoryList = true
@@ -916,7 +914,7 @@ private struct HuangguaHomeFeed: View {
                     HStack {
                         Button {
                             self.selectedCategory = nil
-                            selectedChannelID = "__recommendation"
+                            selectedChannelID = categories.first(where: { $0.id == "browse" })?.id ?? categories.first?.id ?? ""
                         } label: {
                             Label("返回首页", systemImage: "chevron.left")
                                 .font(.system(size: 14, weight: .medium))
@@ -946,12 +944,12 @@ private struct HuangguaHomeFeed: View {
                                 if picks.indices.contains(index) { onHero(picks[index].cover) }
                             }
 
-                        shelf(title: "推荐", items: recommendation, category: SiteCategory(id: "", title: "推荐", path: ""))
+                        shelf(title: "推荐", items: recommendation, category: categories.first(where: { $0.id == "browse" }) ?? SiteCategory(id: "browse", title: "推荐", path: "browse"))
                     } else if isLoading {
                         loadingGrid
                     }
 
-                    ForEach(categories) { category in
+                    ForEach(categories.filter { $0.id != "browse" }) { category in
                         if let items = categoryItems[category.id], !items.isEmpty {
                             shelf(title: category.title, items: items, category: category)
                         }
@@ -978,20 +976,6 @@ private struct HuangguaHomeFeed: View {
         .sheet(isPresented: $showCategoryList) {
             NavigationStack {
                 List {
-                    Button {
-                        selectedChannelID = "__recommendation"
-                        showCategoryList = false
-                        Task { await loadAll(SiteCategory(id: "browse", title: "推荐", path: "browse")) }
-                    } label: {
-                        HStack {
-                            Text("推荐")
-                            Spacer()
-                            if selectedChannelID == "__recommendation" {
-                                Image(systemName: "checkmark").foregroundStyle(STVTheme.accent)
-                            }
-                        }
-                    }
-                    .foregroundStyle(STVTheme.text)
                     ForEach(categories) { category in
                         Button {
                             selectedChannelID = category.id
@@ -1078,22 +1062,27 @@ private struct HuangguaHomeFeed: View {
             let fresh = PluginOut.categories(home["categories"]).filter { !$0.id.isEmpty }
             PluginStore.shared.cacheCategories(pluginID, fresh)
             categories = fresh.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id) }
-            if selectedChannelID.isEmpty || (selectedChannelID != "__recommendation" && !categories.contains(where: { $0.id == selectedChannelID })) {
-                selectedChannelID = "__recommendation"
+            let browseCategory = categories.first(where: { $0.id == "browse" })
+            if !categories.contains(where: { $0.id == selectedChannelID }) {
+                selectedChannelID = browseCategory?.id ?? categories.first?.id ?? ""
             }
 
-            // 推荐是站源声明的真实分类（黄瓜当前 ID 为 browse），不借用空 ID 推断。
-            do {
-                let rec = try await provider.list(SiteCategory(id: "browse", title: "推荐", path: "browse"), page: 1)
-                recommendation = rec.items
-            } catch {
+            // 仅当站源真实声明 browse 分类时加载推荐，避免凭空制造分类入口。
+            if let browseCategory {
+                do {
+                    let rec = try await provider.list(browseCategory, page: 1)
+                    recommendation = rec.items
+                } catch {
+                    recommendation = []
+                    loadError = error
+                }
+            } else {
                 recommendation = []
-                loadError = error
             }
 
-            // 单个分类失败不能中断其它分类；保留已成功的货架并允许下拉重试。
+            // browse 已由上方推荐区加载一次；其它分类独立加载，单项失败不阻断其余货架。
             var loaded: [String: [HGSeries]] = [:]
-            for category in categories {
+            for category in categories where category.id != "browse" {
                 do {
                     let page = try await provider.list(category, page: 1)
                     loaded[category.id] = page.items
