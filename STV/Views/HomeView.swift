@@ -829,32 +829,6 @@ private struct DynamicSiteFeed: View {
                 .accessibilityIdentifier("home.page.\(source.label)")
                 .refreshable { await refresh() }
 
-                Button {
-                    withAnimation(.easeOut(duration: 0.25)) {
-                        proxy.scrollTo("dynamic.top", anchor: .top)
-                    }
-                    Task { await refresh() }
-                } label: {
-                    Group {
-                        if isRefreshing || pager.isLoading || allPager.isLoading {
-                            ProgressView().tint(STVTheme.text)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(STVTheme.text)
-                        }
-                    }
-                    .frame(width: 44, height: 44)
-                    .background(STVTheme.glass, in: Circle())
-                    .overlay { Circle().strokeBorder(STVTheme.glassBorder, lineWidth: 1) }
-                    .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-                }
-                .buttonStyle(PressScale())
-                .disabled(isRefreshing || pager.isLoading || allPager.isLoading)
-                .padding(.trailing, 18)
-                .padding(.bottom, bottomBarHidden ? 44 : 96)
-                .accessibilityLabel("刷新列表")
-                .accessibilityIdentifier("home.dynamic.refresh")
             }
         }
         .task {
