@@ -16,8 +16,8 @@ permissions:
 jobs:
   ios:
     name: unsigned iOS package
-    # Only package an IPA from main; feature branches run simulator regression only.
-    if: github.ref == 'refs/heads/main'
+    # Package IPA from main and the unified-home feature branch for device testing.
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/unified-plugin-home-layout'
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
