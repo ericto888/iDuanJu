@@ -446,7 +446,9 @@ actor HongguoClient {
     func suggestions(_ keyword: String, limit: Int = 10) async throws -> [HGSeries] {
         let q = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return [] }
-        var components = URLComponents(string: "https://hongguoduanju.com/incent_resource/suggestion")!
+        guard var components = URLComponents(string: Self.webOrigin + "/incent_resource/suggestion") else {
+            throw ProviderError.invalid("红果联想地址无效")
+        }
         components.queryItems = [
             URLQueryItem(name: "app_id", value: "8662"),
             URLQueryItem(name: "query", value: q),
@@ -457,7 +459,7 @@ actor HongguoClient {
         request.httpMethod = "GET"
         request.timeoutInterval = 5
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
-        request.setValue("https://hongguoduanju.com/", forHTTPHeaderField: "Referer")
+        request.setValue(Self.webOrigin + "/", forHTTPHeaderField: "Referer")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
         let (data, response) = try await session.data(for: request)
