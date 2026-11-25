@@ -730,22 +730,7 @@ private struct DynamicSiteFeed: View {
         }
         .sheet(isPresented: $showAllCategories) {
             NavigationStack {
-                List {
-                    Button {
-                        selectedChannelID = "__recommendation"
-                        showCategoryList = false
-                        Task { await loadAll(SiteCategory(id: "browse", title: "推荐", path: "browse")) }
-                    } label: {
-                        HStack {
-                            Text("推荐")
-                            Spacer()
-                            if selectedChannelID == "__recommendation" {
-                                Image(systemName: "checkmark").foregroundStyle(STVTheme.accent)
-                            }
-                        }
-                    }
-                    .foregroundStyle(STVTheme.text)
-                    ForEach(categories) { category in
+                List(categories) { category in
                     Button {
                         selected = category.id
                         showAllCategories = false
@@ -760,7 +745,6 @@ private struct DynamicSiteFeed: View {
                         }
                     }
                     .foregroundStyle(STVTheme.text)
-                    }
                 }
                 .scrollContentBackground(.hidden)
                 .background(STVTheme.surface)
@@ -901,7 +885,7 @@ private struct HuangguaHomeFeed: View {
 
                 if !categories.isEmpty {
                     HomeChannelBar(
-                        items: categories.map(\.id),
+                        items: ["__recommendation"] + categories.map(\.id),
                         selection: Binding(
                             get: { selectedChannelID },
                             set: { id in
@@ -913,7 +897,7 @@ private struct HuangguaHomeFeed: View {
                                 }
                             }
                         ),
-                        label: { id in categories.first(where: { $0.id == id })?.title ?? id },
+                        label: { id in id == "__recommendation" ? "推荐" : (categories.first(where: { $0.id == id })?.title ?? id) },
                         ink: STVTheme.text
                     ) {
                         showCategoryList = true
@@ -987,21 +971,37 @@ private struct HuangguaHomeFeed: View {
         .refreshable { await refresh() }
         .sheet(isPresented: $showCategoryList) {
             NavigationStack {
-                List(categories) { category in
+                List {
                     Button {
-                        selectedChannelID = category.id
+                        selectedChannelID = "__recommendation"
                         showCategoryList = false
-                        Task { await loadAll(category) }
+                        Task { await loadAll(SiteCategory(id: "browse", title: "推荐", path: "browse")) }
                     } label: {
                         HStack {
-                            Text(category.title)
+                            Text("推荐")
                             Spacer()
-                            if selectedChannelID == category.id {
+                            if selectedChannelID == "__recommendation" {
                                 Image(systemName: "checkmark").foregroundStyle(STVTheme.accent)
                             }
                         }
                     }
                     .foregroundStyle(STVTheme.text)
+                    ForEach(categories) { category in
+                        Button {
+                            selectedChannelID = category.id
+                            showCategoryList = false
+                            Task { await loadAll(category) }
+                        } label: {
+                            HStack {
+                                Text(category.title)
+                                Spacer()
+                                if selectedChannelID == category.id {
+                                    Image(systemName: "checkmark").foregroundStyle(STVTheme.accent)
+                                }
+                            }
+                        }
+                        .foregroundStyle(STVTheme.text)
+                    }
                 }
                 .scrollContentBackground(.hidden)
                 .background(STVTheme.surface)
