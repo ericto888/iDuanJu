@@ -9,7 +9,7 @@ final class Pager: ObservableObject {
     @Published private(set) var page = HGPage(items: [], hasMore: true, nextOffset: 0)
     private var fetch: ((HGPage, [HGSeries]) async throws -> HGPage)?
     private var token = UUID()
-    var onSnapshotChanged: (() -> Void)?
+    var onSnapshotChanged: ((Snapshot) -> Void)?
 
     struct Snapshot {
         let items: [HGSeries]
@@ -28,7 +28,7 @@ final class Pager: ObservableObject {
         hasMore = snapshot.hasMore
         isLoading = false
         error = nil
-        onSnapshotChanged?()
+        onSnapshotChanged?(snapshot())
     }
 
     func setFetcher(_ f: @escaping (HGPage, [HGSeries]) async throws -> HGPage) {
