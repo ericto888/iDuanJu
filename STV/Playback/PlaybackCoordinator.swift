@@ -841,7 +841,6 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         let want = chosen[i]
         let preferredId = SitePrefs.preferredStream[series.id]
         let bypass = bypassProxy.contains(i)
-        let viaMPV = PlayerEngineSettings.preferred == .mpv && !mpvFailed.contains(i) && mpv != nil
         let task = Task<Source, Error> { [weak self] in
             if let resolve = self?.sourceResolver {
                 let source = try await resolve(i)
@@ -894,11 +893,19 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
                 }
                 let budget = bypass ? 0 : BufferSettings.budget(for: series.source)
                 if budget > 0, let proxied = await self?.prebuffered(s, budget: budget, index: i) { return proxied }
-                if viaMPV, s.kind != .mp4Clear, s.key.isEmpty {
-                    // Keep our playlist rewriting (ad-strip, headers, SupJav fake-PNG) via the loopback proxy.
+                if !bypass && (s.kind == .hls || s.kind == .hlsAES) {
+                    // Route HLS through loopback HTTP. This avoids the iOS 16 custom-scheme resource-loader crash;
+                    // a pre-resolved AES-128 key is served by the same local route.
                     if LocalHLSProxy.token(of: s.url) != nil, let u = URL(string: s.url) { return .direct(u) }
-                    if let p = LocalHLSProxy.shared.playlistURL(s.url, headers: s.headers, strip: false, budget: 0),
-                       let u = URL(string: p) { return .direct(u) }
+                    let keyData = s.key.isEmpty ? nil : Bytes.fromHex(s.key).map { Data($0) }
+                    if let p = LocalHLSProxy.shared.playlistURL(s.url, headers: s.headers, strip: false, budget: 0, hlsKey: keyData),
+                       let u = URL(string: p) {
+                        if let token = LocalHLSProxy.token(of: p) {
+                            if let old = self?.prefetchTokens[i], old != token { LocalHLSProxy.shared.release(old) }
+                            self?.prefetchTokens[i] = token
+                        }
+                        return .direct(u)
+                    }
                 }
                 return .stream(HLSPlayback(headers: s.headers, keyHex: s.key), s.url)
             }
@@ -920,9 +927,10 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
             return nil
         }
         let proxied: String?
+        let keyData = s.key.isEmpty ? nil : Bytes.fromHex(s.key).map { Data($0) }
         switch s.kind {
         case .hls: proxied = LocalHLSProxy.shared.playlistURL(s.url, headers: s.headers, strip: false, budget: budget)
-        case .hlsAES where s.key.isEmpty: proxied = LocalHLSProxy.shared.playlistURL(s.url, headers: s.headers, strip: false, budget: budget)
+        case .hlsAES: proxied = LocalHLSProxy.shared.playlistURL(s.url, headers: s.headers, strip: false, budget: budget, hlsKey: keyData)
         case .mp4Clear: proxied = LocalHLSProxy.shared.mp4URL(s.url, headers: s.headers, budget: budget)
         default: proxied = nil
         }
