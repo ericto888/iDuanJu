@@ -862,7 +862,7 @@ private struct HuangguaHomeFeed: View {
 
                 if !categories.isEmpty {
                     HomeChannelBar(
-                        items: categories.map(\\.id),
+                        items: categories.map(\.id),
                         selection: Binding(
                             get: { selectedChannelID },
                             set: { id in
