@@ -825,7 +825,7 @@ private struct DynamicSiteFeed: View {
     private static func loadCategories(_ source: DramaSource) async -> [SiteCategory] {
         if let key = source.cmsKey {
             var stored = CMSStore.site(key)?.categories ?? []
-            if let site = CMSStore.site(key), let fresh = try? await MacCMSProvider.fetchCategories(api: site.api), !fresh.isEmpty {
+            if let site = CMSStore.site(key), let fresh = try? await MacCMSProvider.fetchCategories(api: site.api, siteKey: key), !fresh.isEmpty {
                 stored = fresh
                 await MainActor.run { CMSStore.shared.cacheCategories(key, fresh) }
             }
