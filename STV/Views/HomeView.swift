@@ -591,8 +591,14 @@ private struct HomeFeedPage: View {
         }
     }
 
+    /// Prefer the first board that actually returned content. A site's recommendation endpoint
+    /// can be empty while its newest/category feeds are healthy; don't let that suppress TOP5.
+    private var heroBoard: BoardSpec? {
+        boards.first { !(cache.items[$0.id] ?? []).isEmpty }
+    }
+
     private var heroPicks: [HGSeries] {
-        guard let first = boards.first, let items = cache.items[first.id] else { return [] }
+        guard let board = heroBoard, let items = cache.items[board.id] else { return [] }
         return Array(items.prefix(5))
     }
 
@@ -609,7 +615,7 @@ private struct HomeFeedPage: View {
                     if let items = cache.items[b.id], !items.isEmpty {
                         // 第一个榜单一律跳过 hero 里已展示的剧（数据不够时也跳过，只剩标题和「全部」）。
                         let heroIds = Set(heroPicks.map(\.id))
-                        let rest = n == 0 ? items.filter { !heroIds.contains($0.id) } : items
+                        let rest = b.id == heroBoard?.id ? items.filter { !heroIds.contains($0.id) } : items
                         HomeShelf(title: b.title, note: nil, items: Array(rest.prefix(12)), more: b)
                     } else if cache.failed.contains(b.id) {
                         HomeShelf(title: b.title, note: cache.errors[b.id]?.verifyTarget != nil ? "需要验证，点上方「去验证」" : "加载失败，下拉重试", items: [], more: b)
@@ -1041,8 +1047,10 @@ private struct HuangguaHomeFeed: View {
                 selectedChannelID = browseCategory?.id ?? categories.first?.id ?? ""
             }
 
-            // 仅当站源真实声明 browse 分类时加载推荐，避免凭空制造分类入口。
-            if let browseCategory {
+            // 首页 home() 显式返回的 items 优先作为 TOP5；旧插件没有提供 items 时，
+            // 再回退到 browse 分类，避免把普通分类数据误当推荐。
+            recommendation = JSVideoProvider(source: source).featuredItems(from: home)
+            if recommendation.isEmpty, let browseCategory {
                 do {
                     let rec = try await provider.list(browseCategory, page: 1)
                     recommendation = rec.items
@@ -1050,8 +1058,6 @@ private struct HuangguaHomeFeed: View {
                     recommendation = []
                     loadError = error
                 }
-            } else {
-                recommendation = []
             }
 
             // browse 已由上方推荐区加载一次；其它分类独立加载，单项失败不阻断其余货架。
