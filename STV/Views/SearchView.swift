@@ -47,7 +47,12 @@ struct SearchView: View {
             if let q = initialQuery, submitted.isEmpty, !q.isEmpty { query = q; submit() }
             if hot.isEmpty { await loadHot() }
         }
-        .compatOnChange(of: query) { value in updateSuggestions(value) }
+        .compatOnChange(of: query) { value in
+            // After a search is submitted, editing the field starts a fresh suggestion session.
+            // Otherwise `submitted` stays non-empty and updateSuggestions() rejects every later query.
+            if !submitted.isEmpty && value != submitted { submitted = "" }
+            updateSuggestions(value)
+        }
         .compatOnChange(of: source) {
             suggestionTask?.cancel()
             suggestions = []
