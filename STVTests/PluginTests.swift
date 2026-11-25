@@ -38,7 +38,7 @@ final class PluginTests: XCTestCase {
     func testPagerRefreshPreservesPreviouslyLoadedPageDepth() async {
         let pager = Pager()
         let previousItems = (1...3).map {
-            HGSeries(source: .plugin("pager-test"), seriesId: "old-\\($0)", title: "old", cover: "")
+            HGSeries(source: .plugin("pager-test"), seriesId: "old-\($0)", title: "old", cover: "")
         }
         pager.restore(Pager.Snapshot(
             items: previousItems,
@@ -51,7 +51,7 @@ final class PluginTests: XCTestCase {
         let fetcher: (HGPage, [HGSeries]) async throws -> HGPage = { previous, _ in
             let pageNumber = previous.nextOffset ?? 1
             requestedPages.append(pageNumber)
-            let item = HGSeries(source: .plugin("pager-test"), seriesId: "new-\\(pageNumber)",
+            let item = HGSeries(source: .plugin("pager-test"), seriesId: "new-\(pageNumber)",
                                 title: "new", cover: "")
             return HGPage(items: [item], hasMore: pageNumber < 3, nextOffset: pageNumber + 1)
         }
@@ -60,7 +60,7 @@ final class PluginTests: XCTestCase {
 
         XCTAssertEqual(requestedPages, [1, 2, 3])
         XCTAssertEqual(pager.loadedPageCount, 3)
-        XCTAssertEqual(pager.items.map(\\.seriesId), ["new-1", "new-2", "new-3"])
+        XCTAssertEqual(pager.items.map(\.seriesId), ["new-1", "new-2", "new-3"])
         XCTAssertFalse(pager.isLoading)
         XCTAssertFalse(pager.hasMore)
     }
