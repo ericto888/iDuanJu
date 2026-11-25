@@ -116,7 +116,8 @@ final class CMSStore: ObservableObject {
     @discardableResult
     func add(name: String, api raw: String, adult: Bool, origin: String = "manual") async throws -> CMSSite {
         let api = try Self.normalize(raw)
-        let siteKey = CMSSite.key(for: api)\n        let cats = try await MacCMSProvider.fetchCategories(api: api, siteKey: siteKey)
+        let siteKey = CMSSite.key(for: api)
+        let cats = try await MacCMSProvider.fetchCategories(api: api, siteKey: siteKey)
         var site = CMSSite(key: siteKey, name: name.isEmpty ? (URL(string: api)?.host ?? "采集站") : name, api: api,
                            adult: adult, categories: cats, origin: origin)
         if let i = sites.firstIndex(where: { $0.key == site.key }) { site.enabled = sites[i].enabled; sites[i] = site } else { sites.append(site) }
@@ -183,7 +184,8 @@ struct MacCMSProvider: SiteProvider {
                 if let fu = finalURL.host, fu != host, NetGuard.resolvesToBlocked(fu) { throw ProviderError.invalid("跳转到内网地址") }
                 data = d
             }
-            guard (200..<300).contains(status) else { throw ProviderError.upstream("采集站 HTTP \\(status) · \\(host)") }\n            guard data.count < 8 << 20, let o = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? CMSXML.decode(data) else {
+            guard (200..<300).contains(status) else { throw ProviderError.upstream("采集站 HTTP \(status) · \(host)") }
+            guard data.count < 8 << 20, let o = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? CMSXML.decode(data) else {
                 throw ProviderError.upstream("采集站没有返回有效的 CMS JSON / XML")
             }
             if let code = o["code"], PluginOut.s(code) != "1" {
@@ -207,8 +209,8 @@ struct MacCMSProvider: SiteProvider {
         }
     }
 
-    static func fetchCategories(api: String) async throws -> [PluginCategory] {
-        let o = try await fetch(api, ["ac": "list"])
+    static func fetchCategories(api: String, siteKey: String? = nil) async throws -> [PluginCategory] {
+        let o = try await fetch(api, ["ac": "list"], siteKey: siteKey, stage: "分类验证")
         guard o["list"] != nil || o["class"] != nil else { throw ProviderError.upstream("不像苹果 CMS 接口（缺少 list/class 字段）") }
         return parseCategories(o)
     }
@@ -329,11 +331,15 @@ struct MacCMSProvider: SiteProvider {
             let k = site.key
             await MainActor.run { CMSStore.shared.cacheCategories(k, cats) }
         }
-        let result = Self.page(o, source: source, page: p)\n        CMSLog.add(site.key, "ℹ 列表解析完成：\(result.items.count) 条，封面地址：\(result.items.prefix(5).map { URL(string: $0.cover).map(CMSLog.safeURL) ?? "无" }.joined(separator: " | "))")\n        return result
+        let result = Self.page(o, source: source, page: p)
+        CMSLog.add(site.key, "ℹ 列表解析完成：\(result.items.count) 条，封面地址：\(result.items.prefix(5).map { URL(string: $0.cover).map(CMSLog.safeURL) ?? "无" }.joined(separator: " | "))")
+        return result
     }
 
     func search(_ q: String, page p: Int) async throws -> HGPage {
-        let result = Self.page(try await Self.fetch(site.api, ["ac": "list", "wd": q, "pg": String(p)], siteKey: site.key, stage: "搜索"), source: source, page: p)\n        CMSLog.add(site.key, "ℹ 搜索结果解析：\(result.items.count) 条")\n        return result
+        let result = Self.page(try await Self.fetch(site.api, ["ac": "list", "wd": q, "pg": String(p)], siteKey: site.key, stage: "搜索"), source: source, page: p)
+        CMSLog.add(site.key, "ℹ 搜索结果解析：\(result.items.count) 条")
+        return result
     }
 
     func detail(_ s: HGSeries) async throws -> HGSeriesDetail {
@@ -341,13 +347,15 @@ struct MacCMSProvider: SiteProvider {
     }
 
     func resolve(_ s: HGSeries, _ ep: HGEpisode) async throws -> HGResolvedVideo {
-        CMSLog.add(site.key, "▶ 播放解析：\(s.title) · 第\(ep.ep)集 · media=\(ep.media == nil ? "缺失" : "存在")")\n        var st = Self.streams(for: ep)
+        CMSLog.add(site.key, "▶ 播放解析：\(s.title) · 第\(ep.ep)集 · media=\(ep.media == nil ? "缺失" : "存在")")
+        var st = Self.streams(for: ep)
         if st.isEmpty {
             // Episode objects restored from history may lack `media`; refetch detail.
             let d = try await detail(s)
             if let e = d.episodes.first(where: { $0.vid == ep.vid }) ?? d.episodes.first(where: { $0.ep == ep.ep }) { st = Self.streams(for: e) }
         }
-        guard let first = st.first else { CMSLog.add(site.key, "✕ 播放解析失败：没有可播放线路"); throw ProviderError.unsupported("没有可播放的线路") }\n        CMSLog.add(site.key, "✓ 播放地址已解析：\(first.quality) · \(URL(string: first.url).map(CMSLog.safeURL) ?? "invalid URL") · headers=User-Agent（播放器实际 HTTP 响应由播放器内核处理，当前层无法读取）")
+        guard let first = st.first else { CMSLog.add(site.key, "✕ 播放解析失败：没有可播放线路"); throw ProviderError.unsupported("没有可播放的线路") }
+        CMSLog.add(site.key, "✓ 播放地址已解析：\(first.quality) · \(URL(string: first.url).map(CMSLog.safeURL) ?? "invalid URL") · headers=User-Agent（播放器实际 HTTP 响应由播放器内核处理，当前层无法读取）")
         return HGResolvedVideo(vid: ep.vid, url: first.url, key: nil, duration: nil, expiresAt: nil, err: nil, streams: st)
     }
 }
