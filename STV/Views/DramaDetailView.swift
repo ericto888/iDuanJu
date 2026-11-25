@@ -167,7 +167,7 @@ struct DramaDetailView: View {
         .compatOnChange(of: detail?.episodes.count) { selectResumeGroup() }
         .task(id: detail?.seriesId) {
             guard let d = detail else { return }
-            if d.isLongVideo ?? series.source.isLongVideo {
+            if series.source.isLongVideo {
                 await loadSources(d)
             } else {
                 seasons = await SeasonStore.seasons(for: d, series: series)
@@ -210,7 +210,7 @@ struct DramaDetailView: View {
 
     private var playTitle: String {
         guard let r = library.progress(for: series) else { return "开始播放" }
-        return (detail?.isLongVideo ?? series.source.isLongVideo) ? "继续 " + Fmt.clock(Int(r.seconds)) : "继续第 \(r.episodeNumber) 集"
+        return series.source.isLongVideo ? "继续 " + Fmt.clock(Int(r.seconds)) : "继续第 \(r.episodeNumber) 集"
     }
 
     private func heart(_ size: CGFloat) -> some View {
@@ -393,7 +393,7 @@ struct DramaDetailView: View {
         }
         if !d.desc.isEmpty { intro(d.desc).padding(.top, 14) }
 
-        if d.isLongVideo ?? series.source.isLongVideo {
+        if series.source.isLongVideo {
             VStack(alignment: .leading, spacing: 0) { sourcesSection }.padding(.top, 22)
         } else {
             VStack(alignment: .leading, spacing: 0) { episodes(d) }.padding(.top, 22)
