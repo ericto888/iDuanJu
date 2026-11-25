@@ -763,7 +763,13 @@ private struct DynamicSiteFeed: View {
     private var chips: some View {
         HomeChannelBar(
             items: categories.map(\.id),
-            selection: $selected,
+            selection: Binding(
+                get: { selected },
+                set: { id in
+                    selected = id
+                    reload(id)
+                }
+            ),
             label: { id in categories.first(where: { $0.id == id })?.title ?? id },
             ink: STVTheme.text
         ) {
