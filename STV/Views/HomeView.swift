@@ -671,8 +671,7 @@ private struct DynamicSiteFeed: View {
                         if categories.count > 1 { chips }
                         if let e = pager.error, pager.items.isEmpty {
                             ErrorStateView(error: e) { reload(selected) }
-                        } else if pager.items.isEmpty && (pager.isLoading || pager.hasMore) {
-                            // 分类加载 / 首页第一页请求期间也显示骨架，避免切回来源时先闪一帧空白。
+                        } else if pager.items.isEmpty && pager.isLoading {
                             cardsSkeleton.padding(.horizontal, 16)
                         } else if pager.items.isEmpty {
                             CompatEmptyStateView(title: "该分类暂无内容", systemImage: "rectangle.stack", description: "部分采集站的父分类不直接提供资源，请选择动作片、国产剧等具体分类。")
@@ -810,8 +809,7 @@ private struct DynamicSiteFeed: View {
                 if let cover = page.items.first?.cover, !cover.isEmpty {
                     await MainActor.run { heroCover = cover }
                 }
-                // 插件与采集站的分类都可能在首屏请求里刷新，首屏返回后再更新分类条。
-                if source.isDynamic {
+                if source.pluginID != nil {
                     let latestCats = provider.categories
                     if !latestCats.isEmpty {
                         await MainActor.run {
@@ -826,15 +824,10 @@ private struct DynamicSiteFeed: View {
 
     private static func loadCategories(_ source: DramaSource) async -> [SiteCategory] {
         if let key = source.cmsKey {
-            // 与内置站源一致：先用已保存的分类立即出首屏，分类校验放到后台，不阻塞第一页。
-            let stored = CMSStore.site(key)?.categories ?? []
-            if let site = CMSStore.site(key) {
-                Task {
-                    guard let fresh = try? await MacCMSProvider.fetchCategories(api: site.api),
-                          !fresh.isEmpty,
-                          (CMSStore.site(key)?.categories ?? []).map(\.id) != fresh.map(\.id) else { return }
-                    await MainActor.run { CMSStore.shared.cacheCategories(key, fresh) }
-                }
+            var stored = CMSStore.site(key)?.categories ?? []
+            if let site = CMSStore.site(key), let fresh = try? await MacCMSProvider.fetchCategories(api: site.api), !fresh.isEmpty {
+                stored = fresh
+                await MainActor.run { CMSStore.shared.cacheCategories(key, fresh) }
             }
             let latest = SiteCategory(id: "", title: "最新", path: "")
             return [latest] + stored.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id) }
