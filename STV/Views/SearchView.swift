@@ -3,6 +3,7 @@ import SwiftUI
 struct SearchView: View {
     var pushed = false
     var initialQuery: String? = nil
+    var initialSource: DramaSource? = nil
     var startEditingHistory = false
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -41,6 +42,7 @@ struct SearchView: View {
         .background(STVTheme.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .task {
+            if let initialSource, gate.searchSources.contains(initialSource) { source = initialSource }
             if startEditingHistory { editingHistory = true }
             if let q = initialQuery, submitted.isEmpty, !q.isEmpty { query = q; submit() }
             if hot.isEmpty { await loadHot() }
