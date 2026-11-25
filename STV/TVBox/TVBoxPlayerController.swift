@@ -4,9 +4,8 @@ import SwiftUI
 import UIKit
 
 /// Shared playback controller for TVBox VOD & Live streams.
-/// Uses `MPVPlayerEngine` (libmpv + FFmpeg + MoltenVK + libdovi) by default so HTTP-FLV, raw MPEG-TS,
-/// RTMP/RTSP, MKV, non-standard HLS, Dolby Vision, and DTS/AC3/TrueHD streams all play reliably on device,
-/// with automatic fallback to `AVPlayerEngine`.
+/// Uses system `AVPlayerEngine` by default for native Picture-in-Picture and lower power draw.
+/// MPVKit remains available when explicitly selected in playback settings, with AVPlayer fallback.
 @MainActor
 final class TVBoxPlayerController: ObservableObject {
     @Published private(set) var isPlaying = false
@@ -38,13 +37,10 @@ final class TVBoxPlayerController: ObservableObject {
     var surface: UIView { activeEngine.surface }
 
     init() {
+        // Keep TVBox aligned with PlayerEngineSettings: AVPlayer is the default.
+        // MPVKit is created lazily only when the user explicitly selects it.
         activeEngine = av
-        if let m = mpv {
-            activeEngine = m
-            engineKind = .mpv
-        } else {
-            engineKind = .avplayer
-        }
+        engineKind = .avplayer
         startTick()
     }
 
