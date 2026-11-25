@@ -846,6 +846,8 @@ private struct HuangguaHomeFeed: View {
     @State private var recommendation: [HGSeries] = []
     @State private var categoryItems: [String: [HGSeries]] = [:]
     @State private var selectedCategory: SiteCategory?
+    @State private var selectedChannelID = ""
+    @State private var showCategoryList = false
     @StateObject private var allPager = Pager()
     @State private var isLoading = false
     @State private var loadError: Error?
@@ -858,12 +860,34 @@ private struct HuangguaHomeFeed: View {
                     Color.clear.preference(key: HomeFeedScrollOffsetKey.self, value: proxy.frame(in: .named("home.feed.scroll")).minY)
                 }.frame(height: 0)
 
+                if !categories.isEmpty {
+                    HomeChannelBar(
+                        items: categories.map(\\.id),
+                        selection: Binding(
+                            get: { selectedChannelID },
+                            set: { id in
+                                selectedChannelID = id
+                                if let category = categories.first(where: { $0.id == id }) {
+                                    Task { await loadAll(category) }
+                                }
+                            }
+                        ),
+                        label: { id in categories.first(where: { $0.id == id })?.title ?? id },
+                        ink: STVTheme.text
+                    ) {
+                        showCategoryList = true
+                    }
+                    .padding(.horizontal, 12)
+                    .accessibilityIdentifier("home.huanggua.categoryBar")
+                }
+
                 if let selectedCategory {
                     HStack {
                         Button {
                             self.selectedCategory = nil
+                            selectedChannelID = ""
                         } label: {
-                            Label("返回黄瓜首页", systemImage: "chevron.left")
+                            Label("返回首页", systemImage: "chevron.left")
                                 .font(.system(size: 14, weight: .medium))
                         }.buttonStyle(.plain)
                         Spacer()
@@ -920,6 +944,35 @@ private struct HuangguaHomeFeed: View {
         .compatOnScrollMetrics { onScrollMetrics($0) }
         .accessibilityIdentifier("home.page.黄瓜短剧")
         .refreshable { await refresh() }
+        .sheet(isPresented: $showCategoryList) {
+            NavigationStack {
+                List(categories) { category in
+                    Button {
+                        selectedChannelID = category.id
+                        showCategoryList = false
+                        Task { await loadAll(category) }
+                    } label: {
+                        HStack {
+                            Text(category.title)
+                            Spacer()
+                            if selectedChannelID == category.id {
+                                Image(systemName: "checkmark").foregroundStyle(STVTheme.accent)
+                            }
+                        }
+                    }
+                    .foregroundStyle(STVTheme.text)
+                }
+                .scrollContentBackground(.hidden)
+                .background(STVTheme.surface)
+                .navigationTitle("全部分类")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("完成") { showCategoryList = false }
+                    }
+                }
+            }
+        }
         .task { if recommendation.isEmpty { await refresh() } }
         .compatOnChange(of: recommendation.count) { _ in
             if let cover = recommendation.first?.cover, !cover.isEmpty { onHero(cover) }
@@ -975,18 +1028,33 @@ private struct HuangguaHomeFeed: View {
             guard let pluginID = source.pluginID,
                   let provider = Sites.provider(source) else { throw ProviderError.unsupported("黄瓜短剧插件未启用") }
             let home = try await PluginRuntime.call(pluginID, "home", [:]) as? [String: Any] ?? [:]
-            let fresh = PluginOut.categories(home["categories"]).filter { $0.id != "browse" }
+            let fresh = PluginOut.categories(home["categories"]).filter { !$0.id.isEmpty }
             PluginStore.shared.cacheCategories(pluginID, fresh)
             categories = fresh.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id) }
+            if !categories.contains(where: { $0.id == selectedChannelID }) {
+                selectedChannelID = categories.first?.id ?? ""
+            }
 
-            let rec = try await provider.list(SiteCategory(id: "", title: "推荐", path: ""), page: 1)
-            recommendation = rec.items
+            // 推荐是站源声明的真实分类（黄瓜当前 ID 为 browse），不借用空 ID 推断。
+            do {
+                let rec = try await provider.list(SiteCategory(id: "browse", title: "推荐", path: "browse"), page: 1)
+                recommendation = rec.items
+            } catch {
+                recommendation = []
+                loadError = error
+            }
+
+            // 单个分类失败不能中断其它分类；保留已成功的货架并允许下拉重试。
             var loaded: [String: [HGSeries]] = [:]
             for category in categories {
-                let page = try await provider.list(category, page: 1)
-                loaded[category.id] = page.items
+                do {
+                    let page = try await provider.list(category, page: 1)
+                    loaded[category.id] = page.items
+                } catch {
+                    if loadError == nil { loadError = error }
+                }
+                categoryItems = loaded
             }
-            categoryItems = loaded
         } catch {
             loadError = error
         }
