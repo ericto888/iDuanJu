@@ -123,6 +123,15 @@ struct HGSeriesDetail: Hashable {
     var rating: Double = 0
     var ratingCount: String = ""
     var hotText: String = ""
+    /// 站源提供的详情信息条（上线日期、出品、更新状态、播放次数、单集片长、题材类型等）。
+    var facts: [HGDetailFact] = []
+}
+
+/// A single label/value row shown in the detail page's fact grid.
+struct HGDetailFact: Hashable, Identifiable {
+    var label: String
+    var value: String
+    var id: String { label + "\u{1}" + value }
 }
 
 /// A hongguo celebrity (actor). `id` is the numeric celebrity_id used by the homepage / works APIs.

@@ -80,9 +80,14 @@ class PluginVideo(val inst: PluginInstance, private val extraDomains: List<Strin
             val eid = PluginOut.s(e.opt("id"), 2000); if (eid.isEmpty()) null
             else HGEpisode(i + 1, epVid(pid, id, eid), e.optInt("duration"), PluginOut.s(e.opt("name"), 80).ifEmpty { "第${i + 1}集" }, page = lineName)
         }.mapIndexed { i, e -> e.copy(ep = i + 1) }
+        val facts = PluginOut.objs(o.opt("facts"), 10).mapNotNull { f ->
+            val label = PluginOut.s(f.opt("label"), 20)
+            val value = PluginOut.s(f.opt("value"), 160)
+            if (label.isEmpty() || value.isEmpty()) null else HGDetailFact(label, value)
+        }
         return HGSeriesDetail(seriesId = seriesSid, title = title, cover = cover(PluginOut.url(o.opt("cover")), PluginOut.headers(o.opt("coverHeaders"))), desc = org.jsoup.parser.Parser.unescapeEntities(PluginOut.s(o.opt("desc"), 4000), false).replace(Regex("[\\s\\u00a0]+"), " ").trim(),
-            author = PluginOut.s(o.opt("director"), 80), actors = PluginOut.strings(o.opt("actors")), totalEps = eps.size, episodes = eps, tags = tags,
-            episodeLabel = if (eps.size > 1) "共${eps.size}集" else "长视频", source = m.name)
+            author = PluginOut.s(o.opt("director"), 80), actors = PluginOut.strings(o.opt("actors")), onlineTime = o.optLong("onlineTime"), totalEps = eps.size, episodes = eps, tags = tags,
+            episodeLabel = if (eps.size > 1) "共${eps.size}集" else "长视频", source = m.name, facts = facts)
     }
 
     fun resolve(ep: HGEpisode): HGResolvedVideo {

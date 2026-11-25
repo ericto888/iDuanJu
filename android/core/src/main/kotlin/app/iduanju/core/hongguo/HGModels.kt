@@ -43,7 +43,12 @@ data class HGSeriesDetail(
     var ratingCount: String = "",
     var hotText: String = "",
     var source: String = "红果短剧",
+    /** 详情信息条：上线日期、出品、更新状态、播放次数、单集片长、题材类型等。 */
+    var facts: List<HGDetailFact> = emptyList(),
 )
+
+/** 详情页信息条的一行。 */
+data class HGDetailFact(val label: String = "", val value: String = "")
 
 data class HGPage(
     val items: List<HGSeries>,
