@@ -228,7 +228,7 @@ struct MacCMSProvider: SiteProvider {
             let typeName = PluginOut.s(v["type_name"], max: 30)
             let total = Int(PluginOut.s(v["vod_total"])) ?? 0
             let eps = lines(from: PluginOut.s(v["vod_play_from"], max: 1000),
-                            urls: (v["vod_play_url"] as? String) ?? "").map(\.eps.count).max() ?? 0
+                            urls: (v["vod_play_url"] as? String) ?? "").map { $0.eps.count }.max() ?? 0
             // 电影 / 连续剧区分：接口给的总集数、线路集数、备注与分类名共同判断。
             let episodic = isEpisodic(typeName: typeName, remarks: remarks, total: total, episodeCount: eps)
             return HGSeries(source: source, seriesId: id, title: title, cover: cover, subtitle: remarks.nilIfEmpty,
