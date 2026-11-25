@@ -281,14 +281,12 @@ struct NovelReaderView: View {
     // MARK: Layout
 
     private func layoutKey(_ geo: GeometryProxy) -> String {
-        let maxWidth = layout.readerMaxWidth ?? geo.size.width
-        return "\(prefs.fontSize)-\(prefs.lineSpacing)-\(prefs.margin)-\(prefs.fontID)-\(prefs.indent)-\(prefs.theme.rawValue)-\(fonts.revision)-\(Int(geo.size.width))x\(Int(geo.size.height))-\(Int(geo.safeAreaInsets.top))-\(Int(geo.safeAreaInsets.bottom))-\(Int(maxWidth))"
+        "\(prefs.fontSize)-\(prefs.lineSpacing)-\(prefs.margin)-\(prefs.fontID)-\(prefs.indent)-\(prefs.theme.rawValue)-\(fonts.revision)-\(Int(geo.size.width))x\(Int(geo.size.height))-\(Int(geo.safeAreaInsets.top))-\(Int(geo.safeAreaInsets.bottom))-\(Int(layout.readerMaxWidth ?? 0))"
     }
 
     private func pageStyle(_ geo: GeometryProxy) -> NovelPageStyle {
         let p = pal
-        let maxWidth = layout.readerMaxWidth ?? geo.size.width
-        let pageW = min(geo.size.width, maxWidth) - 2 * hMargin
+        let pageW = (layout.readerMaxWidth.map { min(geo.size.width, $0) } ?? geo.size.width) - 2 * hMargin
         return NovelPageStyle(size: CGSize(width: max(1, pageW), height: max(1, geo.size.height - 62)),
             fontSize: prefs.fontSize, lineSpacing: prefs.lineSpacing, indent: prefs.indent, fontID: prefs.fontID,
             text: p.text, secondary: UIColor(p.secondary), background: UIColor(p.bg),
