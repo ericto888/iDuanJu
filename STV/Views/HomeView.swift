@@ -547,9 +547,12 @@ private struct HomeFeedPage: View {
             heroIndex = 0
             if case .huangguo(.legacy) = tab, legacyChannels.isEmpty { await loadLegacy() }
         }
-        .onAppear { boards.prefix(1).forEach { cache.load($0) }; reportHero() }
-        .compatOnChange(of: tab) { boards.prefix(1).forEach { cache.load($0) } }
+        .onAppear { loadHomeBoards(); reportHero() }
+        .compatOnChange(of: tab) { loadHomeBoards() }
         .compatOnChange(of: heroKey) { reportHero() }
+        .compatOnChange(of: heroPicks.count) { count in
+            if heroIndex >= count { heroIndex = 0 }
+        }
     }
 
     private var heroKey: String { (heroPicks.indices.contains(heroIndex) ? heroPicks[heroIndex].cover : "") + "\(heroIndex)" }
@@ -594,7 +597,19 @@ private struct HomeFeedPage: View {
     /// Prefer the first board that actually returned content. A site's recommendation endpoint
     /// can be empty while its newest/category feeds are healthy; don't let that suppress TOP5.
     private var heroBoard: BoardSpec? {
-        boards.first { !(cache.items[$0.id] ?? []).isEmpty }
+        let loaded = boards.filter { !(cache.items[$0.id] ?? []).isEmpty }
+        return loaded.first { (cache.items[$0.id]?.count ?? 0) >= 5 } ?? loaded.first
+    }
+
+    private func loadHomeBoards() {
+        // Huangguo AI/video need a fallback when the first recommendation endpoint is empty.
+        // Load their category candidates so the TOP5 carousel can use the first healthy feed.
+        switch tab {
+        case .huangguo(.ai), .huangguo(.video):
+            boards.forEach { cache.load($0) }
+        default:
+            boards.prefix(1).forEach { cache.load($0) }
+        }
     }
 
     private var heroPicks: [HGSeries] {
