@@ -488,12 +488,10 @@ private struct HomeFeedPage: View {
     }
 
     var body: some View {
-        if case .site(let source) = tab, source.pluginID == "com.eric.idj.huanggua" {
-            HuangguaHomeFeed(source: source, bottomBarHidden: bottomBarHidden,
-                             onHero: onHero, onScrollOffset: onScrollOffset,
-                             onScrollInteraction: onScrollInteraction, onScrollMetrics: onScrollMetrics)
-        } else if case .site(let source) = tab, source.cmsKey != nil || source.pluginID != nil {
-            DynamicSiteFeed(source: source, bottomBarHidden: bottomBarHidden, onHero: onHero, onScrollOffset: onScrollOffset, onScrollInteraction: onScrollInteraction, onScrollMetrics: onScrollMetrics)
+        if case .site(let source) = tab, source.cmsKey != nil || source.pluginID != nil {
+            DynamicSiteFeed(source: source, bottomBarHidden: bottomBarHidden, onHero: onHero,
+                            onScrollOffset: onScrollOffset, onScrollInteraction: onScrollInteraction,
+                            onScrollMetrics: onScrollMetrics)
         } else {
             rankFeed
         }
@@ -701,7 +699,55 @@ private struct SiteCategoryChipBar: View {
     }
 }
 
+@MainActor
+final class SourceHomeCache {
+    static let shared = SourceHomeCache()
+
+    struct Snapshot {
+        var categories: [SiteCategory]
+        var selected: String
+        var featuredItems: [HGSeries]
+        var featuredIndex: Int
+        var shelfItems: [String: [HGSeries]]
+        var shelfLoaded: Set<String>
+        var selectedCategoryID: String?
+        var heroCover: String?
+        var selectedPager: Pager.Snapshot
+        var allPager: Pager.Snapshot
+    }
+
+    private var values: [String: Snapshot] = [:]
+
+    func remove(pluginID: String, overrides: [String] = []) {
+        values.removeValue(forKey: DramaSource.plugin(pluginID).rawValue)
+        for id in overrides { values.removeValue(forKey: id) }
+    }
+
+    private func key(_ source: DramaSource) -> String {
+        source.rawValue
+    }
+
+    func snapshot(for source: DramaSource) -> Snapshot? {
+        values[key(source)]
+    }
+
+    func save(_ snapshot: Snapshot, for source: DramaSource) {
+        values[key(source)] = snapshot
+    }
+
+    func updateSelectedPager(_ snapshot: Pager.Snapshot, for source: DramaSource) {
+        values[key(source)]?.selectedPager = snapshot
+    }
+
+    func updateAllPager(_ snapshot: Pager.Snapshot, for source: DramaSource) {
+        values[key(source)]?.allPager = snapshot
+    }
+}
+
 /// CMS / JS plugin home: every returned category is a selectable module, and the selected one pages its own list.
+/// One renderer for every CMS / JavaScript video source.
+/// The site supplies categories and optional homeFeatures; refresh, paging and category loading
+/// stay identical for XVideos and every plugin. No source-ID-specific home view exists.
 private struct DynamicSiteFeed: View {
     let source: DramaSource
     let bottomBarHidden: Bool
@@ -709,52 +755,69 @@ private struct DynamicSiteFeed: View {
     var onScrollOffset: (CGFloat) -> Void = { _ in }
     var onScrollInteraction: (Bool) -> Void = { _ in }
     var onScrollMetrics: (CompatScrollMetrics) -> Void = { _ in }
+
     @State private var categories: [SiteCategory] = []
     @State private var selected = ""
     @StateObject private var pager = Pager()
-    @State private var heroCover: String?
+    @StateObject private var allPager = Pager()
     @State private var featuredItems: [HGSeries] = []
     @State private var featuredIndex = 0
+    @State private var shelfItems: [String: [HGSeries]] = [:]
+    @State private var shelfLoaded: Set<String> = []
+    @State private var shelfLoading: Set<String> = []
+    @State private var shelfRequestTokens: [String: UUID] = [:]
+    @State private var shelfErrors: [String: Error] = [:]
+    @State private var selectedCategory: SiteCategory?
+    @State private var heroCover: String?
     @State private var didLoad = false
+    @State private var isRefreshing = false
+
+    private var features: Set<String> {
+        guard let id = source.pluginID else { return [] }
+        return Set(PluginStore.snapshot(id)?.manifest.homeFeatures ?? [])
+    }
+    private var usesCategoryShelves: Bool { features.contains("categoryShelves") }
 
     var body: some View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: 18) {
                         GeometryReader { g in
-                            Color.clear.preference(key: HomeFeedScrollOffsetKey.self, value: g.frame(in: .named("home.feed.scroll")).minY)
+                            Color.clear.preference(key: HomeFeedScrollOffsetKey.self,
+                                                   value: g.frame(in: .named("home.feed.scroll")).minY)
                         }
                         .frame(height: 0)
                         .id("dynamic.top")
-                        if categories.count > 1 { chips }
-                        if !featuredItems.isEmpty {
+
+                        if selectedCategory == nil && !categories.isEmpty {
+                            categoryBar(proxy)
+                        }
+
+                        if selectedCategory == nil && !featuredItems.isEmpty {
                             PosterHero(board: source.label, picks: featuredItems, index: $featuredIndex)
                                 .padding(.horizontal, 16)
-                                .padding(.top, 8)
+                                .padding(.top, 4)
                                 .compatOnChange(of: featuredIndex) { index in
                                     if featuredItems.indices.contains(index) {
                                         onHero(featuredItems[index].cover)
                                     }
                                 }
                         }
-                        if let e = pager.error, pager.items.isEmpty {
-                            ErrorStateView(error: e) { reload(selected) }
-                        } else if pager.items.isEmpty && pager.isLoading {
-                            cardsSkeleton.padding(.horizontal, 16)
-                        } else if pager.items.isEmpty {
-                            CompatEmptyStateView(title: "该分类暂无内容", systemImage: "rectangle.stack", description: "部分采集站的父分类不直接提供资源，请选择动作片、国产剧等具体分类。")
+
+                        if let selectedCategory {
+                            allCategoryView(selectedCategory)
+                        } else if usesCategoryShelves {
+                            ForEach(categories) { category in
+                                categoryShelf(category)
+                            }
                         } else {
-                            NumberedGrid(items: pager.items, numbered: false, hasMore: pager.hasMore, loading: pager.isLoading) { pager.loadMore() }
+                            selectedCategoryFeed
                         }
                     }
-                    // Fixed tail lets the last grid row scroll clear of the floating navigation; with the
-                    // bar hidden there is no tail so the grid ends on the physical screen edge.
                     .padding(.top, 8)
                     .padding(.bottom, bottomBarHidden ? 0 : 96)
                 }
-                // Same as the ranked feed: keep the grid scrolling to the screen edge, not to the
-                // safe-area line where the paged host would otherwise stop it.
                 .ignoresSafeArea(.container, edges: .bottom)
                 .scrollIndicators(.hidden)
                 .coordinateSpace(name: "home.feed.scroll")
@@ -767,14 +830,18 @@ private struct DynamicSiteFeed: View {
                 .refreshable { await refresh() }
 
                 Button {
-                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("dynamic.top", anchor: .top) }
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo("dynamic.top", anchor: .top)
+                    }
                     Task { await refresh() }
                 } label: {
                     Group {
-                        if pager.isLoading {
+                        if isRefreshing || pager.isLoading || allPager.isLoading {
                             ProgressView().tint(STVTheme.text)
                         } else {
-                            Image(systemName: "arrow.clockwise").font(.system(size: 16, weight: .semibold)).foregroundStyle(STVTheme.text)
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(STVTheme.text)
                         }
                     }
                     .frame(width: 44, height: 44)
@@ -783,28 +850,129 @@ private struct DynamicSiteFeed: View {
                     .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
                 }
                 .buttonStyle(PressScale())
-                .disabled(pager.isLoading)
+                .disabled(isRefreshing || pager.isLoading || allPager.isLoading)
                 .padding(.trailing, 18)
-                // Clear the floating tab bar (and the Home Indicator when it is hidden).
                 .padding(.bottom, bottomBarHidden ? 44 : 96)
                 .accessibilityLabel("刷新列表")
                 .accessibilityIdentifier("home.dynamic.refresh")
             }
         }
         .task {
+            pager.onSnapshotChanged = { snapshot in
+                SourceHomeCache.shared.updateSelectedPager(snapshot, for: source)
+            }
+            allPager.onSnapshotChanged = { snapshot in
+                SourceHomeCache.shared.updateAllPager(snapshot, for: source)
+            }
             guard !didLoad else { return }
             didLoad = true
+            if let cached = SourceHomeCache.shared.snapshot(for: source) {
+                categories = cached.categories
+                selected = cached.selected
+                featuredItems = cached.featuredItems
+                featuredIndex = min(cached.featuredIndex, max(0, cached.featuredItems.count - 1))
+                shelfItems = cached.shelfItems
+                shelfLoaded = cached.shelfLoaded
+                selectedCategory = cached.selectedCategoryID.flatMap { id in
+                    cached.categories.first(where: { $0.id == id })
+                }
+                heroCover = cached.heroCover
+                pager.setFetcher(selectedFetcher(for: cached.selected))
+                pager.restore(cached.selectedPager)
+                if let category = selectedCategory {
+                    allPager.setFetcher(allFetcher(for: category))
+                    allPager.restore(cached.allPager)
+                }
+                if let cover = cached.heroCover, !cover.isEmpty { onHero(cover) }
+                return
+            }
             await refresh()
         }
         .compatOnChange(of: heroCover) { cover in if let cover { onHero(cover) } }
+        .compatOnChange(of: selected) { _ in saveMemory() }
+        .compatOnChange(of: selectedCategory?.id) { _ in saveMemory() }
     }
 
-    private var chips: some View {
-        SiteCategoryChipBar(categories: categories, selection: $selected) { category in
-            reload(category.id)
+    @ViewBuilder
+    private func categoryBar(_ proxy: ScrollViewProxy) -> some View {
+        if !categories.isEmpty {
+            SiteCategoryChipBar(categories: categories, selection: $selected) { category in
+                if usesCategoryShelves {
+                    withAnimation(.compatSnappy) {
+                        proxy.scrollTo(shelfAnchor(category), anchor: .top)
+                    }
+                } else {
+                    reload(category.id)
+                }
+            }
+            .padding(.bottom, 4)
+            .accessibilityIdentifier("home.dynamic.categoryBar")
         }
-        .padding(.bottom, 4)
-        .accessibilityIdentifier("home.dynamic.categoryBar")
+    }
+
+    private var selectedCategoryFeed: some View {
+        Group {
+            if let e = pager.error, pager.items.isEmpty {
+                ErrorStateView(error: e) { reload(selected) }
+            } else if pager.items.isEmpty && pager.isLoading {
+                cardsSkeleton.padding(.horizontal, 16)
+            } else if pager.items.isEmpty {
+                CompatEmptyStateView(title: "该分类暂无内容", systemImage: "rectangle.stack",
+                                     description: "该站点当前分类没有内容，请选择其他分类或下拉刷新。")
+            } else {
+                NumberedGrid(items: pager.items, numbered: false, hasMore: pager.hasMore,
+                             loading: pager.isLoading) { pager.loadMore() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func categoryShelf(_ category: SiteCategory) -> some View {
+        let rawItems = shelfItems[category.id] ?? []
+        let isRecommendation = category.title.trimmingCharacters(in: .whitespacesAndNewlines) == "推荐"
+        let heroIDs = Set(featuredItems.map(\.id))
+        let visibleItems = isRecommendation && !heroIDs.isEmpty
+            ? rawItems.filter { !heroIDs.contains($0.id) }
+            : rawItems
+
+        Group {
+            if !visibleItems.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    DSSectionHeader(title: category.title) {
+                        Button { showAll(category) } label: { MoreLabel() }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("home.more.\(category.title)")
+                    }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: 12) {
+                            ForEach(visibleItems.prefix(12)) { series in
+                                NavigationLink(value: Route.series(series)) {
+                                    HomePosterCard(series: series).frame(width: source.isLongVideo ? 200 : 112)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                    .compatScrollBounceBasedOnSize(axes: .horizontal)
+                }
+            } else if shelfLoading.contains(category.id) || !shelfLoaded.contains(category.id) {
+                VStack(alignment: .leading, spacing: 12) {
+                    DSSectionHeader(title: category.title)
+                    cardsSkeleton.padding(.horizontal, 16)
+                }
+            } else if let error = shelfErrors[category.id] {
+                VStack(alignment: .leading, spacing: 8) {
+                    DSSectionHeader(title: category.title)
+                    ErrorStateView(error: error) { Task { await loadShelf(category, force: true) } }
+                }
+            }
+        }
+        .id(shelfAnchor(category))
+        .onAppear { Task { await loadShelf(category) } }
+    }
+    private func shelfAnchor(_ category: SiteCategory) -> String {
+        "home.shelf.\(category.id)"
     }
 
     private var cardsSkeleton: some View {
@@ -819,42 +987,169 @@ private struct DynamicSiteFeed: View {
         }
     }
 
+    private func allCategoryView(_ category: SiteCategory) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Button {
+                    selectedCategory = nil
+                    allPager.reset { _, _ in HGPage(items: [], hasMore: false, nextOffset: nil) }
+                } label: {
+                    Label("返回首页", systemImage: "chevron.left")
+                        .font(.system(size: 14, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                Text(category.title).font(.system(size: 17, weight: .semibold))
+            }
+            .padding(.horizontal, 16)
+            if allPager.items.isEmpty && allPager.isLoading {
+                cardsSkeleton.padding(.horizontal, 16)
+            } else if let error = allPager.error, allPager.items.isEmpty {
+                ErrorStateView(error: error) { reloadAll(category) }
+            } else {
+                NumberedGrid(items: allPager.items, numbered: false,
+                             hasMore: allPager.hasMore, loading: allPager.isLoading) {
+                    allPager.loadMore()
+                }
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    @MainActor
+    private func loadShelf(_ category: SiteCategory, force: Bool = false) async {
+        guard force || (!shelfLoading.contains(category.id) && !shelfLoaded.contains(category.id)) else { return }
+        guard let provider = Sites.provider(source) else { return }
+        let requestToken = UUID()
+        shelfRequestTokens[category.id] = requestToken
+        shelfLoading.insert(category.id)
+        shelfErrors[category.id] = nil
+        defer {
+            if shelfRequestTokens[category.id] == requestToken {
+                shelfLoading.remove(category.id)
+                shelfRequestTokens[category.id] = nil
+            }
+        }
+        do {
+            let page = try await provider.list(category, page: 1)
+            guard shelfRequestTokens[category.id] == requestToken else { return }
+            shelfItems[category.id] = page.items
+            shelfLoaded.insert(category.id)
+            shelfErrors[category.id] = nil
+        } catch {
+            guard shelfRequestTokens[category.id] == requestToken else { return }
+            shelfErrors[category.id] = error
+        }
+        saveMemory()
+    }
+
+    @MainActor
     private func refresh() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        let previousAllCategoryID = selectedCategory?.id
+        let previousSelectedID = selected
+        let previousLoadedShelves = shelfLoaded
         let home = await Self.loadHome(source)
         categories = home.categories
         featuredItems = home.featured
         featuredIndex = 0
+        shelfErrors = [:]
+
         if let cover = featuredItems.first?.cover, !cover.isEmpty {
             heroCover = cover
             onHero(cover)
         }
-        let loaded = home.categories
-        let id = loaded.contains { $0.id == selected } ? selected : (loaded.first?.id ?? "")
+
+        let id = categories.contains { $0.id == previousSelectedID }
+            ? previousSelectedID
+            : (categories.first?.id ?? "")
         selected = id
-        reload(id)
+        selectedCategory = previousAllCategoryID.flatMap { oldID in
+            categories.first(where: { $0.id == oldID })
+        }
+
+        if usesCategoryShelves {
+            // Refresh only shelves already visited; the rest remain lazy-loaded as they enter view.
+            for category in categories where previousLoadedShelves.contains(category.id) {
+                await loadShelf(category, force: true)
+            }
+        }
+
+        if let allCategory = selectedCategory {
+            await allPager.refreshPreservingDepth(allFetcher(for: allCategory))
+        } else if !usesCategoryShelves {
+            await pager.refreshPreservingDepth(selectedFetcher(for: id))
+        }
+        saveMemory()
     }
 
-    private func reload(_ id: String) {
+    @MainActor
+    private func saveMemory() {
+        SourceHomeCache.shared.save(
+            .init(categories: categories, selected: selected, featuredItems: featuredItems,
+                  featuredIndex: featuredIndex, shelfItems: shelfItems, shelfLoaded: shelfLoaded,
+                  selectedCategoryID: selectedCategory?.id, heroCover: heroCover,
+                  selectedPager: pager.snapshot(), allPager: allPager.snapshot()),
+            for: source
+        )
+    }
+
+    private func selectedFetcher(for id: String) -> (HGPage, [HGSeries]) async throws -> HGPage {
         let source = source
-        pager.reset { prev, _ in
-            guard let provider = Sites.provider(source) else { throw ProviderError.unsupported(source.label) }
+        return { previous, _ in
+            guard let provider = Sites.provider(source) else {
+                throw ProviderError.unsupported(source.label)
+            }
             let category = SiteCategory(id: id, title: "", path: id)
-            let page = try await provider.list(category, page: max(1, prev.nextOffset ?? 1))
-            if (prev.nextOffset ?? 1) <= 1 {
+            let pageNumber = max(1, previous.nextOffset ?? 1)
+            let page = try await provider.list(category, page: pageNumber)
+            if pageNumber == 1 {
                 if featuredItems.isEmpty, let cover = page.items.first?.cover, !cover.isEmpty {
                     await MainActor.run { heroCover = cover }
                 }
                 if source.pluginID != nil {
-                    let latestCats = provider.categories
-                    if !latestCats.isEmpty {
+                    let latestCategories = provider.categories
+                    if !latestCategories.isEmpty {
                         await MainActor.run {
-                            if categories.map(\.id) != latestCats.map(\.id) { categories = latestCats }
+                            if categories.map(\.id) != latestCategories.map(\.id) {
+                                categories = latestCategories
+                            }
                         }
                     }
                 }
             }
             return page
         }
+    }
+
+    private func allFetcher(for category: SiteCategory) -> (HGPage, [HGSeries]) async throws -> HGPage {
+        let source = source
+        return { previous, _ in
+            guard let provider = Sites.provider(source) else {
+                throw ProviderError.unsupported(source.label)
+            }
+            let pageNumber = max(1, previous.nextOffset ?? 1)
+            return try await provider.list(category, page: pageNumber)
+        }
+    }
+
+    private func reload(_ id: String) {
+        pager.reset(selectedFetcher(for: id))
+    }
+
+    @MainActor
+    private func showAll(_ category: SiteCategory) {
+        selectedCategory = category
+        saveMemory()
+        reloadAll(category)
+    }
+
+    @MainActor
+    private func reloadAll(_ category: SiteCategory) {
+        allPager.reset(allFetcher(for: category))
     }
 
     private struct DynamicHomeData {
@@ -865,19 +1160,26 @@ private struct DynamicSiteFeed: View {
     private static func loadHome(_ source: DramaSource) async -> DynamicHomeData {
         if let key = source.cmsKey {
             var stored = CMSStore.site(key)?.categories ?? []
-            if let site = CMSStore.site(key), let fresh = try? await MacCMSProvider.fetchCategories(api: site.api, siteKey: key), !fresh.isEmpty {
+            if let site = CMSStore.site(key),
+               let fresh = try? await MacCMSProvider.fetchCategories(api: site.api, siteKey: key),
+               !fresh.isEmpty {
                 stored = fresh
                 await MainActor.run { CMSStore.shared.cacheCategories(key, fresh) }
             }
             let latest = SiteCategory(id: "", title: "最新", path: "")
-            return DynamicHomeData(categories: [latest] + stored.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id) }, featured: [])
+            return DynamicHomeData(
+                categories: [latest] + stored.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id) },
+                featured: []
+            )
         }
-        let fallback = SiteCategory(id: "", title: "推荐", path: "")
+
+        let fallback = SiteCategory(id: JSVideoProvider.homeID, title: "推荐", path: JSVideoProvider.homeID)
         guard let provider = Sites.provider(source) else {
             return DynamicHomeData(categories: [fallback], featured: [])
         }
 
-        // JS 视频插件的分类和首页数据统一从一次 home() 调用取得。
+        // Prefer real categories from home(). Only synthesize the host recommendation entry
+        // when home() is unavailable or returned no categories, matching the upstream no-duplicate rule.
         if let pluginID = source.pluginID,
            let response = try? await PluginRuntime.call(pluginID, "home", [:]) as? [String: Any] {
             let fresh = PluginOut.categories(response["categories"])
@@ -896,214 +1198,8 @@ private struct DynamicSiteFeed: View {
             return DynamicHomeData(categories: cached.isEmpty ? [fallback] : cached, featured: featured)
         }
 
-        // home() 不可用时仍兼容已有缓存分类及旧插件；没有能力声明时不推断推荐内容。
         let categories = provider.categories.filter { !$0.id.isEmpty }
         return DynamicHomeData(categories: categories.isEmpty ? [fallback] : categories, featured: [])
-    }
-}
-
-/// 黄瓜短剧专属首页：TOP 1-5 轮播 → 推荐横向卡片 → 各站点分类横向卡片。
-/// “全部”进入对应分类的完整网格，不再把分类只放在页面顶部的筛选条里。
-private struct HuangguaHomeFeed: View {
-    let source: DramaSource
-    let bottomBarHidden: Bool
-    var onHero: (String) -> Void
-    var onScrollOffset: (CGFloat) -> Void = { _ in }
-    var onScrollInteraction: (Bool) -> Void = { _ in }
-    var onScrollMetrics: (CompatScrollMetrics) -> Void = { _ in }
-
-    @State private var categories: [SiteCategory] = []
-    @State private var recommendation: [HGSeries] = []
-    @State private var categoryItems: [String: [HGSeries]] = [:]
-    @State private var selectedCategory: SiteCategory?
-    @State private var selectedChannelID = ""
-    @StateObject private var allPager = Pager()
-    @State private var isLoading = false
-    @State private var loadError: Error?
-    @State private var heroIndex = 0
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                GeometryReader { proxy in
-                    Color.clear.preference(key: HomeFeedScrollOffsetKey.self, value: proxy.frame(in: .named("home.feed.scroll")).minY)
-                }.frame(height: 0)
-
-                if !categories.isEmpty {
-                    SiteCategoryChipBar(categories: categories, selection: $selectedChannelID) { category in
-                        Task { await loadAll(category) }
-                    }
-                    .accessibilityIdentifier("home.huanggua.categoryBar")
-                }
-
-                if let selectedCategory {
-                    HStack {
-                        Button {
-                            self.selectedCategory = nil
-                            selectedChannelID = categories.first(where: { $0.id == "browse" })?.id ?? categories.first?.id ?? ""
-                        } label: {
-                            Label("返回首页", systemImage: "chevron.left")
-                                .font(.system(size: 14, weight: .medium))
-                        }.buttonStyle(.plain)
-                        Spacer()
-                        Text(selectedCategory.title).font(.system(size: 17, weight: .semibold))
-                    }.padding(.horizontal, 16).padding(.top, 8)
-
-                    if allPager.items.isEmpty && allPager.isLoading {
-                        loadingGrid
-                    } else if let error = allPager.error, allPager.items.isEmpty {
-                        ErrorStateView(error: error) { reloadAll(selectedCategory) }
-                    } else {
-                        NumberedGrid(items: allPager.items, numbered: false,
-                                     hasMore: allPager.hasMore, loading: allPager.isLoading) {
-                            allPager.loadMore()
-                        }
-                        .padding(.horizontal, 16)
-                    }
-                } else {
-                    if !recommendation.isEmpty {
-                        PosterHero(board: "黄瓜短剧", picks: Array(recommendation.prefix(5)), index: $heroIndex)
-                            .padding(.horizontal, 16)
-                            .padding(.top, 8)
-                            .compatOnChange(of: heroIndex) { index in
-                                let picks = Array(recommendation.prefix(5))
-                                if picks.indices.contains(index) { onHero(picks[index].cover) }
-                            }
-
-                        shelf(title: "推荐", items: recommendation, category: categories.first(where: { $0.id == "browse" }) ?? SiteCategory(id: "browse", title: "推荐", path: "browse"))
-                    } else if isLoading {
-                        loadingGrid
-                    }
-
-                    ForEach(categories.filter { $0.id != "browse" }) { category in
-                        if let items = categoryItems[category.id], !items.isEmpty {
-                            shelf(title: category.title, items: items, category: category)
-                        }
-                    }
-
-                    if let loadError, recommendation.isEmpty {
-                        ErrorStateView(error: loadError) { Task { await refresh() } }
-                    }
-                }
-            }
-            .padding(.bottom, bottomBarHidden ? 0 : 96)
-        }
-        .ignoresSafeArea(.container, edges: .bottom)
-        .background(STVTheme.bg.ignoresSafeArea())
-        .scrollIndicators(.hidden)
-        .coordinateSpace(name: "home.feed.scroll")
-        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
-            if #unavailable(iOS 18.0) { onScrollOffset(offset) }
-        }
-        .compatOnScrollInteraction { onScrollInteraction($0) }
-        .compatOnScrollMetrics { onScrollMetrics($0) }
-        .accessibilityIdentifier("home.page.黄瓜短剧")
-        .refreshable { await refresh() }
-        .task { if recommendation.isEmpty { await refresh() } }
-        .compatOnChange(of: recommendation.count) { _ in
-            if let cover = recommendation.first?.cover, !cover.isEmpty { onHero(cover) }
-        }
-    }
-
-    @ViewBuilder private func shelf(title: String, items: [HGSeries], category: SiteCategory) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            DSSectionHeader(title: title) {
-                Button {
-                    Task { await loadAll(category) }
-                } label: {
-                    HStack(spacing: 3) {
-                        Text("全部")
-                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
-                    }.font(.system(size: 12, weight: .medium)).foregroundStyle(STVTheme.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("home.more.黄瓜.\(title)")
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(items.prefix(12)) { series in
-                        NavigationLink(value: Route.series(series)) {
-                            HomePosterCard(series: series).frame(width: 112)
-                        }.buttonStyle(.plain)
-                    }
-                }.padding(.horizontal, 16)
-            }
-            .compatScrollBounceBasedOnSize(axes: .horizontal)
-        }
-        .padding(.top, 2)
-    }
-
-    private var loadingGrid: some View {
-        LazyVGrid(columns: HomeSection.columns(landscape: false), spacing: 16) {
-            ForEach(0..<6, id: \.self) { _ in
-                VStack(alignment: .leading, spacing: 8) {
-                    ShimmerBlock().aspectRatio(3/4, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    ShimmerBlock().frame(height: 12).frame(maxWidth: 90)
-                }
-            }
-        }.padding(.horizontal, 16)
-    }
-
-    @MainActor private func refresh() async {
-        guard !isLoading else { return }
-        isLoading = true
-        loadError = nil
-        defer { isLoading = false }
-        do {
-            guard let pluginID = source.pluginID,
-                  let provider = Sites.provider(source) else { throw ProviderError.unsupported("黄瓜短剧插件未启用") }
-            let home = try await PluginRuntime.call(pluginID, "home", [:]) as? [String: Any] ?? [:]
-            let fresh = PluginOut.categories(home["categories"]).filter { !$0.id.isEmpty }
-            PluginStore.shared.cacheCategories(pluginID, fresh)
-            categories = fresh.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id) }
-            let browseCategory = categories.first(where: { $0.id == "browse" })
-            if !categories.contains(where: { $0.id == selectedChannelID }) {
-                selectedChannelID = browseCategory?.id ?? categories.first?.id ?? ""
-            }
-
-            // 首页 home() 显式返回的 items 优先作为 TOP5；旧插件没有提供 items 时，
-            // 再回退到 browse 分类，避免把普通分类数据误当推荐。
-            recommendation = JSVideoProvider(source: source).featuredItems(from: home)
-            if recommendation.isEmpty, let browseCategory {
-                do {
-                    let rec = try await provider.list(browseCategory, page: 1)
-                    recommendation = rec.items
-                } catch {
-                    recommendation = []
-                    loadError = error
-                }
-            }
-
-            // browse 已由上方推荐区加载一次；其它分类独立加载，单项失败不阻断其余货架。
-            var loaded: [String: [HGSeries]] = [:]
-            for category in categories where category.id != "browse" {
-                do {
-                    let page = try await provider.list(category, page: 1)
-                    loaded[category.id] = page.items
-                } catch {
-                    if loadError == nil { loadError = error }
-                }
-                categoryItems = loaded
-            }
-        } catch {
-            loadError = error
-        }
-    }
-
-    @MainActor private func loadAll(_ category: SiteCategory) async {
-        selectedCategory = category
-        reloadAll(category)
-    }
-
-    /// Use the shared host Pager for every plugin category. The source owns URL construction,
-    /// page parsing and hasMore; the app only requests the next page through SiteProvider.
-    @MainActor private func reloadAll(_ category: SiteCategory) {
-        guard let provider = Sites.provider(source) else { return }
-        allPager.reset { previous, _ in
-            let requestedPage = max(1, previous.nextOffset ?? 1)
-            return try await provider.list(category, page: requestedPage)
-        }
     }
 }
 

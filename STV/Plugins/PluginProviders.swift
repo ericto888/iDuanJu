@@ -295,14 +295,20 @@ struct JSVideoProvider: SiteProvider {
     var pluginID: String { overridePluginID ?? source.pluginID ?? "" }
     static let homeID = "__home"
 
-    var categories: [SiteCategory] {
-        // “推荐”由宿主统一提供；过滤站源缓存中的同名分类，避免旧缓存或站源重复声明时出现两个推荐入口。
-        let cached = PluginStore.snapshot(pluginID)?.cachedCategories ?? []
-        let sourceCategories = cached.filter {
-            $0.id != Self.homeID && $0.name.trimmingCharacters(in: .whitespacesAndNewlines) != "推荐"
+    /// Use real categories as-is. The synthetic host "推荐" entry is only a fallback
+    /// when the plugin has no cached categories, matching upstream v1.6b34.
+    static func homeCategories(from cached: [PluginCategory]) -> [SiteCategory] {
+        let sourceCategories = cached.filter { $0.id != Self.homeID }
+        guard !sourceCategories.isEmpty else {
+            return [SiteCategory(id: Self.homeID, title: "推荐", path: Self.homeID)]
         }
-        return [SiteCategory(id: Self.homeID, title: "推荐", path: Self.homeID)]
-            + sourceCategories.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }
+        return sourceCategories.map {
+            SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank)
+        }
+    }
+
+    var categories: [SiteCategory] {
+        Self.homeCategories(from: PluginStore.snapshot(pluginID)?.cachedCategories ?? [])
     }
 
     private func series(_ o: [String: Any]) -> HGSeries? {
