@@ -14,7 +14,7 @@ final class TVBoxPlayerController: ObservableObject {
     @Published private(set) var positionSec: Double = 0
     @Published private(set) var durationSec: Double = 0
     @Published private(set) var errorMsg: String?
-    @Published private(set) var engineKind: PlayerEngineKind = .mpv
+    @Published private(set) var engineKind: PlayerEngineKind = .avplayer
     @Published var fill: Bool = false {
         didSet { activeEngine.fill = fill }
     }
