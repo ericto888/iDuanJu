@@ -910,7 +910,7 @@ private struct HuangguaHomeFeed: View {
                     HStack {
                         Button {
                             self.selectedCategory = nil
-                            selectedChannelID = ""
+                            selectedChannelID = "__recommendation"
                         } label: {
                             Label("返回首页", systemImage: "chevron.left")
                                 .font(.system(size: 14, weight: .medium))
