@@ -131,6 +131,7 @@ final class PluginStore: ObservableObject {
     // MARK: Install / update
 
     func commit(_ p: PendingInstall) throws {
+        let previousOverrides = p.existing?.manifest.overrides ?? []
         let targets = Set(p.manifest.overrides ?? [])
         let conflicts = plugins.filter { $0.id != p.manifest.id && $0.enabled && !targets.isDisjoint(with: $0.manifest.overrides ?? []) }
         if let conflict = conflicts.first, let target = targets.intersection(conflict.manifest.overrides ?? []).sorted().first {
@@ -154,6 +155,7 @@ final class PluginStore: ObservableObject {
         plugins.removeAll { $0.id == rec.id }
         plugins.append(rec)
         save()
+        SourceHomeCache.shared.remove(pluginID: rec.id, overrides: Array(Set(previousOverrides + (rec.manifest.overrides ?? []))))
         PluginRuntime.unload(rec.id)
         PluginLog.add(rec.id, p.existing == nil ? "安装 \(p.manifest.version)（来源 \(p.origin)）" : "更新到 \(p.manifest.version)")
     }
@@ -161,6 +163,7 @@ final class PluginStore: ObservableObject {
     func uninstall(_ id: String) {
         guard let rec = plugin(id) else { return }
         PluginRuntime.unload(id)
+        SourceHomeCache.shared.remove(pluginID: id, overrides: rec.manifest.overrides ?? [])
         PluginSecrets.removeAll(id, keys: (rec.manifest.settings ?? []).map(\.key))
         try? FileManager.default.removeItem(at: PluginPaths.dir(id))
         Task { await PluginCF.removeStore(id) }
@@ -177,7 +180,9 @@ final class PluginStore: ObservableObject {
                 return
             }
         }
+        let overrides = plugin(id)?.manifest.overrides ?? []
         mutate(id) { $0.enabled = on; if on { $0.failures = 0; $0.disabledReason = nil } }
+        if !on { SourceHomeCache.shared.remove(pluginID: id, overrides: overrides) }
         PluginRuntime.unload(id)
     }
 
@@ -226,7 +231,11 @@ final class PluginStore: ObservableObject {
                 $0.failures = n
                 if n >= 3 { $0.enabled = false; $0.disabledReason = "连续 \(n) 次超时或内存超限，已自动停用" }
             }
-            if n >= 3 { PluginRuntime.unload(id); PluginLog.add(id, "⛔︎ 连续 \(n) 次超时/内存超限，已自动停用") }
+            if n >= 3 {
+                SourceHomeCache.shared.remove(pluginID: id, overrides: rec.manifest.overrides ?? [])
+                PluginRuntime.unload(id)
+                PluginLog.add(id, "⛔︎ 连续 \(n) 次超时/内存超限，已自动停用")
+            }
         } else if rec.failures != 0 {
             mutate(id) { $0.failures = 0 }
         }
