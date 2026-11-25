@@ -664,7 +664,7 @@ private struct SiteCategoryChipBar: View {
                         }
                         .buttonStyle(ToneChipStyle(on: selection == category.id, neutral: true))
                         .id(category.id)
-                        .accessibilityIdentifier("home.siteCategory.\\(category.id)")
+                        .accessibilityIdentifier("home.siteCategory.\(category.id)")
                         .accessibilityAddTraits(selection == category.id ? .isSelected : [])
                     }
                 }
