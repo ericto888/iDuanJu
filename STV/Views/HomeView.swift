@@ -643,6 +643,43 @@ private struct HomeFeedPage: View {
     }
 }
 
+/// Shared compact category navigation for CMS and JS-plugin site feeds.
+/// Uses the same chip treatment as long-video board navigation, while keeping each site's
+/// category IDs, order, and loading behavior independent.
+private struct SiteCategoryChipBar: View {
+    let categories: [SiteCategory]
+    @Binding var selection: String
+    var onSelect: (SiteCategory) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(categories, id: \.id) { category in
+                        Button {
+                            withAnimation(.compatSnappy) { selection = category.id }
+                            onSelect(category)
+                        } label: {
+                            Text(category.title)
+                        }
+                        .buttonStyle(ToneChipStyle(on: selection == category.id, neutral: true))
+                        .id(category.id)
+                        .accessibilityIdentifier("home.siteCategory.\\(category.id)")
+                        .accessibilityAddTraits(selection == category.id ? .isSelected : [])
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            .compatScrollBounceBasedOnSize(axes: .horizontal)
+            .mask(FadeMask())
+            .onAppear { proxy.scrollTo(selection, anchor: .center) }
+            .compatOnChange(of: selection) { id in
+                withAnimation(.compatSnappy) { proxy.scrollTo(id, anchor: .center) }
+            }
+        }
+    }
+}
+
 /// CMS / JS plugin home: every returned category is a selectable module, and the selected one pages its own list.
 private struct DynamicSiteFeed: View {
     let source: DramaSource
@@ -656,7 +693,6 @@ private struct DynamicSiteFeed: View {
     @StateObject private var pager = Pager()
     @State private var heroCover: String?
     @State private var didLoad = false
-    @State private var showAllCategories = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -727,54 +763,13 @@ private struct DynamicSiteFeed: View {
             didLoad = true
             await refresh()
         }
-        .sheet(isPresented: $showAllCategories) {
-            NavigationStack {
-                List(categories) { category in
-                    Button {
-                        selected = category.id
-                        showAllCategories = false
-                        reload(category.id)
-                    } label: {
-                        HStack {
-                            Text(category.title)
-                            Spacer()
-                            if selected == category.id {
-                                Image(systemName: "checkmark").foregroundStyle(STVTheme.accent)
-                            }
-                        }
-                    }
-                    .foregroundStyle(STVTheme.text)
-                }
-                .scrollContentBackground(.hidden)
-                .background(STVTheme.surface)
-                .navigationTitle("全部分类")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("完成") { showAllCategories = false }
-                    }
-                }
-            }
-        }
         .compatOnChange(of: heroCover) { cover in if let cover { onHero(cover) } }
     }
 
     private var chips: some View {
-        HomeChannelBar(
-            items: categories.map(\.id),
-            selection: Binding(
-                get: { selected },
-                set: { id in
-                    selected = id
-                    reload(id)
-                }
-            ),
-            label: { id in categories.first(where: { $0.id == id })?.title ?? id },
-            ink: STVTheme.text
-        ) {
-            showAllCategories = true
+        SiteCategoryChipBar(categories: categories, selection: $selected) { category in
+            reload(category.id)
         }
-        .padding(.horizontal, 12)
         .padding(.bottom, 4)
         .accessibilityIdentifier("home.dynamic.categoryBar")
     }
@@ -869,7 +864,6 @@ private struct HuangguaHomeFeed: View {
     @State private var categoryItems: [String: [HGSeries]] = [:]
     @State private var selectedCategory: SiteCategory?
     @State private var selectedChannelID = ""
-    @State private var showCategoryList = false
     @StateObject private var allPager = Pager()
     @State private var isLoading = false
     @State private var loadError: Error?
@@ -883,23 +877,9 @@ private struct HuangguaHomeFeed: View {
                 }.frame(height: 0)
 
                 if !categories.isEmpty {
-                    HomeChannelBar(
-                        items: categories.map(\.id),
-                        selection: Binding(
-                            get: { selectedChannelID },
-                            set: { id in
-                                selectedChannelID = id
-                                if let category = categories.first(where: { $0.id == id }) {
-                                    Task { await loadAll(category) }
-                                }
-                            }
-                        ),
-                        label: { id in categories.first(where: { $0.id == id })?.title ?? id },
-                        ink: STVTheme.text
-                    ) {
-                        showCategoryList = true
+                    SiteCategoryChipBar(categories: categories, selection: $selectedChannelID) { category in
+                        Task { await loadAll(category) }
                     }
-                    .padding(.horizontal, 12)
                     .accessibilityIdentifier("home.huanggua.categoryBar")
                 }
 
@@ -966,37 +946,6 @@ private struct HuangguaHomeFeed: View {
         .compatOnScrollMetrics { onScrollMetrics($0) }
         .accessibilityIdentifier("home.page.黄瓜短剧")
         .refreshable { await refresh() }
-        .sheet(isPresented: $showCategoryList) {
-            NavigationStack {
-                List {
-                    ForEach(categories) { category in
-                        Button {
-                            selectedChannelID = category.id
-                            showCategoryList = false
-                            Task { await loadAll(category) }
-                        } label: {
-                            HStack {
-                                Text(category.title)
-                                Spacer()
-                                if selectedChannelID == category.id {
-                                    Image(systemName: "checkmark").foregroundStyle(STVTheme.accent)
-                                }
-                            }
-                        }
-                        .foregroundStyle(STVTheme.text)
-                    }
-                }
-                .scrollContentBackground(.hidden)
-                .background(STVTheme.surface)
-                .navigationTitle("全部分类")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("完成") { showCategoryList = false }
-                    }
-                }
-            }
-        }
         .task { if recommendation.isEmpty { await refresh() } }
         .compatOnChange(of: recommendation.count) { _ in
             if let cover = recommendation.first?.cover, !cover.isEmpty { onHero(cover) }
