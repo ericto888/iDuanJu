@@ -700,8 +700,8 @@ private struct SiteCategoryChipBar: View {
 }
 
 @MainActor
-private final class DynamicSiteFeedMemory {
-    static let shared = DynamicSiteFeedMemory()
+private final class SourceHomeCache {
+    static let shared = SourceHomeCache()
 
     struct Snapshot {
         var categories: [SiteCategory]
@@ -712,12 +712,14 @@ private final class DynamicSiteFeedMemory {
         var shelfLoaded: Set<String>
         var selectedCategoryID: String?
         var heroCover: String?
+        var selectedPager: Pager.Snapshot
+        var allPager: Pager.Snapshot
     }
 
     private var values: [String: Snapshot] = [:]
 
     private func key(_ source: DramaSource) -> String {
-        source.pluginID ?? source.cmsKey ?? source.label
+        source.rawValue
     }
 
     func snapshot(for source: DramaSource) -> Snapshot? {
@@ -726,6 +728,14 @@ private final class DynamicSiteFeedMemory {
 
     func save(_ snapshot: Snapshot, for source: DramaSource) {
         values[key(source)] = snapshot
+    }
+
+    func updateSelectedPager(_ snapshot: Pager.Snapshot, for source: DramaSource) {
+        values[key(source)]?.selectedPager = snapshot
+    }
+
+    func updateAllPager(_ snapshot: Pager.Snapshot, for source: DramaSource) {
+        values[key(source)]?.allPager = snapshot
     }
 }
 
@@ -842,9 +852,15 @@ private struct DynamicSiteFeed: View {
             }
         }
         .task {
+            pager.onSnapshotChanged = { snapshot in
+                SourceHomeCache.shared.updateSelectedPager(snapshot, for: source)
+            }
+            allPager.onSnapshotChanged = { snapshot in
+                SourceHomeCache.shared.updateAllPager(snapshot, for: source)
+            }
             guard !didLoad else { return }
             didLoad = true
-            if let cached = DynamicSiteFeedMemory.shared.snapshot(for: source) {
+            if let cached = SourceHomeCache.shared.snapshot(for: source) {
                 categories = cached.categories
                 selected = cached.selected
                 featuredItems = cached.featuredItems
@@ -855,6 +871,12 @@ private struct DynamicSiteFeed: View {
                     cached.categories.first(where: { $0.id == id })
                 }
                 heroCover = cached.heroCover
+                pager.setFetcher(selectedFetcher(for: cached.selected))
+                pager.restore(cached.selectedPager)
+                if let category = selectedCategory {
+                    allPager.setFetcher(allFetcher(for: category))
+                    allPager.restore(cached.allPager)
+                }
                 if let cover = cached.heroCover, !cover.isEmpty { onHero(cover) }
                 return
             }
@@ -1042,17 +1064,18 @@ private struct DynamicSiteFeed: View {
 
     @MainActor
     private func saveMemory() {
-        DynamicSiteFeedMemory.shared.save(
+        SourceHomeCache.shared.save(
             .init(categories: categories, selected: selected, featuredItems: featuredItems,
                   featuredIndex: featuredIndex, shelfItems: shelfItems, shelfLoaded: shelfLoaded,
-                  selectedCategoryID: selectedCategory?.id, heroCover: heroCover),
+                  selectedCategoryID: selectedCategory?.id, heroCover: heroCover,
+                  selectedPager: pager.snapshot(), allPager: allPager.snapshot()),
             for: source
         )
     }
 
-    private func reload(_ id: String) {
+    private func selectedFetcher(for id: String) -> (HGPage, [HGSeries]) async throws -> HGPage {
         let source = source
-        pager.reset { previous, _ in
+        return { previous, _ in
             guard let provider = Sites.provider(source) else {
                 throw ProviderError.unsupported(source.label)
             }
@@ -1078,6 +1101,21 @@ private struct DynamicSiteFeed: View {
         }
     }
 
+    private func allFetcher(for category: SiteCategory) -> (HGPage, [HGSeries]) async throws -> HGPage {
+        let source = source
+        return { previous, _ in
+            guard let provider = Sites.provider(source) else {
+                throw ProviderError.unsupported(source.label)
+            }
+            let pageNumber = max(1, previous.nextOffset ?? 1)
+            return try await provider.list(category, page: pageNumber)
+        }
+    }
+
+    private func reload(_ id: String) {
+        pager.reset(selectedFetcher(for: id))
+    }
+
     @MainActor
     private func showAll(_ category: SiteCategory) {
         selectedCategory = category
@@ -1087,11 +1125,7 @@ private struct DynamicSiteFeed: View {
 
     @MainActor
     private func reloadAll(_ category: SiteCategory) {
-        guard let provider = Sites.provider(source) else { return }
-        allPager.reset { previous, _ in
-            let pageNumber = max(1, previous.nextOffset ?? 1)
-            return try await provider.list(category, page: pageNumber)
-        }
+        allPager.reset(allFetcher(for: category))
     }
 
     private struct DynamicHomeData {
