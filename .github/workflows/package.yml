@@ -3,6 +3,8 @@ name: package
 # Device IPA packaging and simulator regression tests run independently.
 # A slow simulator test suite must never block delivery of the unsigned IPA.
 on:
+  # IPA 构建必须由人员在 Actions 中手动确认触发；push 永不自动打包 IPA。
+  workflow_dispatch:
   push:
     branches:
       - feat/online-source-store
@@ -15,8 +17,8 @@ permissions:
 jobs:
   ios:
     name: unsigned iOS package
-    # Package IPA from main and the unified-home feature branch for device testing.
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/unified-plugin-home-layout'
+    # IPA 仅允许通过 GitHub Actions 的 Run workflow 人工触发。
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
@@ -76,6 +78,8 @@ jobs:
 
   simulator-regression:
     name: iOS Simulator regression tests
+    # Push 仅运行模拟器回归，不构建 IPA；手动构建时不重复跑测试。
+    if: github.event_name == 'push'
     runs-on: macos-15-intel
     timeout-minutes: 75
     steps:
