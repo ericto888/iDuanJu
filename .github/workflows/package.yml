@@ -17,6 +17,8 @@ permissions:
 jobs:
   ios:
     name: unsigned iOS package
+    # IPA 只在手动 Run workflow 时构建；push 到 main 只跑模拟器回归测试，保证编译检查。
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
@@ -58,6 +60,15 @@ jobs:
           name: ios-build-logs
           path: ${{ runner.temp }}/dist/logs/*.log
           if-no-files-found: ignore
+      - name: Publish build errors
+        if: failure()
+        run: |
+          {
+            echo '### Build errors'
+            echo '```'
+            grep -hE "(error:|fatal error:|BUILD FAILED|The following build commands failed)" "$RUNNER_TEMP"/dist/logs/*.log 2>/dev/null | tail -n 80 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
@@ -109,3 +120,12 @@ jobs:
             ${{ runner.temp }}/ios-validation-logs/*.log
             DerivedDataValidation/Logs/Test/*.xcresult
           if-no-files-found: ignore
+      - name: Publish build and test errors
+        if: failure()
+        run: |
+          {
+            echo '### Build and test errors'
+            echo '```'
+            grep -hE "(error:|fatal error:|BUILD FAILED|The following build commands failed|failed on|XCTAssert)" "$RUNNER_TEMP"/ios-validation-logs/*.log 2>/dev/null | tail -n 120 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
