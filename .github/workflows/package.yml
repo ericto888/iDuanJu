@@ -7,6 +7,7 @@ on:
     branches:
       - feat/online-source-store
       - feat/plugin-builtin-source-overrides
+      - feat/unified-plugin-home-layout
       - main
 
 permissions:
