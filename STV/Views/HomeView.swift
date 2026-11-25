@@ -861,43 +861,42 @@ private struct DynamicSiteFeed: View {
             ? rawItems.filter { !heroIDs.contains($0.id) }
             : rawItems
 
-        if !visibleItems.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-                DSSectionHeader(title: category.title) {
-                    Button { showAll(category) } label: { MoreLabel() }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("home.more.\(category.title)")
-                }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(alignment: .top, spacing: 12) {
-                        ForEach(visibleItems.prefix(12)) { series in
-                            NavigationLink(value: Route.series(series)) {
-                                HomePosterCard(series: series).frame(width: source.isLongVideo ? 200 : 112)
-                            }
+        Group {
+            if !visibleItems.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    DSSectionHeader(title: category.title) {
+                        Button { showAll(category) } label: { MoreLabel() }
                             .buttonStyle(.plain)
-                        }
+                            .accessibilityIdentifier("home.more.\(category.title)")
                     }
-                    .padding(.horizontal, 16)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: 12) {
+                            ForEach(visibleItems.prefix(12)) { series in
+                                NavigationLink(value: Route.series(series)) {
+                                    HomePosterCard(series: series).frame(width: source.isLongVideo ? 200 : 112)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                    .compatScrollBounceBasedOnSize(axes: .horizontal)
                 }
-                .compatScrollBounceBasedOnSize(axes: .horizontal)
+            } else if shelfLoading.contains(category.id) || !shelfLoaded.contains(category.id) {
+                VStack(alignment: .leading, spacing: 12) {
+                    DSSectionHeader(title: category.title)
+                    cardsSkeleton.padding(.horizontal, 16)
+                }
+            } else if let error = shelfErrors[category.id] {
+                VStack(alignment: .leading, spacing: 8) {
+                    DSSectionHeader(title: category.title)
+                    ErrorStateView(error: error) { Task { await loadShelf(category, force: true) } }
+                }
             }
-            .id(shelfAnchor(category))
-        } else if shelfLoading.contains(category.id) {
-            VStack(alignment: .leading, spacing: 12) {
-                DSSectionHeader(title: category.title)
-                cardsSkeleton.padding(.horizontal, 16)
-            }
-            .id(shelfAnchor(category))
-        } else if let error = shelfErrors[category.id] {
-            VStack(alignment: .leading, spacing: 8) {
-                DSSectionHeader(title: category.title)
-                ErrorStateView(error: error) { Task { await loadShelf(category, force: true) } }
-            }
-            .id(shelfAnchor(category))
         }
+        .id(shelfAnchor(category))
         .onAppear { Task { await loadShelf(category) } }
     }
-
     private func shelfAnchor(_ category: SiteCategory) -> String {
         "home.shelf.\(category.id)"
     }
