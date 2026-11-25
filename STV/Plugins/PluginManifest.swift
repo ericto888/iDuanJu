@@ -58,7 +58,7 @@ struct PluginManifest: Codable, Hashable {
     var icon: String?
     var permissions: Permissions
     var capabilities: [String]
-    /// Optional UI features supported by the plugin's home() response (e.g. featured).
+    /// Optional UI features supported by the plugin's home() response (e.g. featured, categoryShelves).
     var homeFeatures: [String]?
     var settings: [Setting]?
     var update: Update?
@@ -111,7 +111,7 @@ struct PluginManifest: Codable, Hashable {
         }
         if let homeFeatures {
             if Set(homeFeatures).count != homeFeatures.count { p.append("homeFeatures 不能包含重复能力") }
-            for feature in homeFeatures where feature != "featured" { p.append("不支持的首页能力：\(feature)") }
+            for feature in homeFeatures where !["featured", "categoryShelves"].contains(feature) { p.append("不支持的首页能力：\(feature)") }
             if !homeFeatures.isEmpty && !capabilities.contains("home") { p.append("声明 homeFeatures 必须实现 home() 并在 capabilities 中声明 home") }
         }
         for s in settings ?? [] {
