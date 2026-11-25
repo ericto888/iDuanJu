@@ -34,6 +34,37 @@ final class PluginTests: XCTestCase {
         catch { XCTAssertEqual(code(error), want, "\(error)", file: file, line: line) }
     }
 
+    @MainActor
+    func testPagerRefreshPreservesPreviouslyLoadedPageDepth() async {
+        let pager = Pager()
+        let previousItems = (1...3).map {
+            HGSeries(source: .plugin("pager-test"), seriesId: "old-\\($0)", title: "old", cover: "")
+        }
+        pager.restore(Pager.Snapshot(
+            items: previousItems,
+            page: HGPage(items: previousItems, hasMore: true, nextOffset: 4),
+            hasMore: true,
+            loadedPageCount: 3
+        ))
+
+        var requestedPages: [Int] = []
+        let fetcher: (HGPage, [HGSeries]) async throws -> HGPage = { previous, _ in
+            let pageNumber = previous.nextOffset ?? 1
+            requestedPages.append(pageNumber)
+            let item = HGSeries(source: .plugin("pager-test"), seriesId: "new-\\(pageNumber)",
+                                title: "new", cover: "")
+            return HGPage(items: [item], hasMore: pageNumber < 3, nextOffset: pageNumber + 1)
+        }
+
+        await pager.refreshPreservingDepth(fetcher)
+
+        XCTAssertEqual(requestedPages, [1, 2, 3])
+        XCTAssertEqual(pager.loadedPageCount, 3)
+        XCTAssertEqual(pager.items.map(\\.seriesId), ["new-1", "new-2", "new-3"])
+        XCTAssertFalse(pager.isLoading)
+        XCTAssertFalse(pager.hasMore)
+    }
+
     static func fixture(_ path: String) -> Data {
         (try? Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/Plugins/" + path))) ?? Data()
     }
