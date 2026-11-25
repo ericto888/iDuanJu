@@ -641,43 +641,77 @@ private struct DynamicSiteFeed: View {
     @State private var selected = ""
     @StateObject private var pager = Pager()
     @State private var heroCover: String?
+    @State private var didLoad = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                GeometryReader { proxy in
-                    Color.clear.preference(key: HomeFeedScrollOffsetKey.self, value: proxy.frame(in: .named("home.feed.scroll")).minY)
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        GeometryReader { g in
+                            Color.clear.preference(key: HomeFeedScrollOffsetKey.self, value: g.frame(in: .named("home.feed.scroll")).minY)
+                        }
+                        .frame(height: 0)
+                        .id("dynamic.top")
+                        if categories.count > 1 { chips }
+                        if let e = pager.error, pager.items.isEmpty {
+                            ErrorStateView(error: e) { reload(selected) }
+                        } else if pager.items.isEmpty && pager.isLoading {
+                            cardsSkeleton.padding(.horizontal, 16)
+                        } else if pager.items.isEmpty {
+                            CompatEmptyStateView(title: "该分类暂无内容", systemImage: "rectangle.stack", description: "部分采集站的父分类不直接提供资源，请选择动作片、国产剧等具体分类。")
+                        } else {
+                            NumberedGrid(items: pager.items, numbered: false, hasMore: pager.hasMore, loading: pager.isLoading) { pager.loadMore() }
+                        }
+                    }
+                    // Fixed tail lets the last grid row scroll clear of the floating navigation; with the
+                    // bar hidden there is no tail so the grid ends on the physical screen edge.
+                    .padding(.top, 8)
+                    .padding(.bottom, bottomBarHidden ? 0 : 96)
                 }
-                .frame(height: 0)
-                if categories.count > 1 { chips }
-                if let e = pager.error, pager.items.isEmpty {
-                    ErrorStateView(error: e) { reload(selected) }
-                } else if pager.items.isEmpty && pager.isLoading {
-                    cardsSkeleton.padding(.horizontal, 16)
-                } else if pager.items.isEmpty {
-                    CompatEmptyStateView(title: "该分类暂无内容", systemImage: "rectangle.stack", description: "部分采集站的父分类不直接提供资源，请选择动作片、国产剧等具体分类。")
-                } else {
-                    NumberedGrid(items: pager.items, numbered: false, hasMore: pager.hasMore, loading: pager.isLoading) { pager.loadMore() }
+                // Same as the ranked feed: keep the grid scrolling to the screen edge, not to the
+                // safe-area line where the paged host would otherwise stop it.
+                .ignoresSafeArea(.container, edges: .bottom)
+                .scrollIndicators(.hidden)
+                .coordinateSpace(name: "home.feed.scroll")
+                .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
+                    if #unavailable(iOS 18.0) { onScrollOffset(offset) }
                 }
+                .compatOnScrollInteraction { onScrollInteraction($0) }
+                .compatOnScrollMetrics { onScrollMetrics($0) }
+                .accessibilityIdentifier("home.page.\(source.label)")
+                .refreshable { await refresh() }
+
+                Button {
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("dynamic.top", anchor: .top) }
+                    Task { await refresh() }
+                } label: {
+                    Group {
+                        if pager.isLoading {
+                            ProgressView().tint(STVTheme.text)
+                        } else {
+                            Image(systemName: "arrow.clockwise").font(.system(size: 16, weight: .semibold)).foregroundStyle(STVTheme.text)
+                        }
+                    }
+                    .frame(width: 44, height: 44)
+                    .background(STVTheme.glass, in: Circle())
+                    .overlay { Circle().strokeBorder(STVTheme.glassBorder, lineWidth: 1) }
+                    .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+                }
+                .buttonStyle(PressScale())
+                .disabled(pager.isLoading)
+                .padding(.trailing, 18)
+                // Clear the floating tab bar (and the Home Indicator when it is hidden).
+                .padding(.bottom, bottomBarHidden ? 44 : 96)
+                .accessibilityLabel("刷新列表")
+                .accessibilityIdentifier("home.dynamic.refresh")
             }
-            // Fixed tail lets the last grid row scroll clear of the floating navigation; with the
-            // bar hidden there is no tail so the grid ends on the physical screen edge.
-            .padding(.top, 8)
-            .padding(.bottom, bottomBarHidden ? 0 : 96)
         }
-        // Same as the ranked feed: keep the grid scrolling to the screen edge, not to the
-        // safe-area line where the paged host would otherwise stop it.
-        .ignoresSafeArea(.container, edges: .bottom)
-        .scrollIndicators(.hidden)
-        .coordinateSpace(name: "home.feed.scroll")
-        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
-            if #unavailable(iOS 18.0) { onScrollOffset(offset) }
+        .task {
+            guard !didLoad else { return }
+            didLoad = true
+            await refresh()
         }
-        .compatOnScrollInteraction { onScrollInteraction($0) }
-        .compatOnScrollMetrics { onScrollMetrics($0) }
-        .accessibilityIdentifier("home.page.\(source.label)")
-        .refreshable { await refresh() }
-        .task { await refresh() }
         .compatOnChange(of: heroCover) { cover in if let cover { onHero(cover) } }
     }
 
@@ -728,8 +762,18 @@ private struct DynamicSiteFeed: View {
             guard let provider = Sites.provider(source) else { throw ProviderError.unsupported(source.label) }
             let category = SiteCategory(id: id, title: "", path: id)
             let page = try await provider.list(category, page: max(1, prev.nextOffset ?? 1))
-            if (prev.nextOffset ?? 1) <= 1, let cover = page.items.first?.cover, !cover.isEmpty {
-                await MainActor.run { heroCover = cover }
+            if (prev.nextOffset ?? 1) <= 1 {
+                if let cover = page.items.first?.cover, !cover.isEmpty {
+                    await MainActor.run { heroCover = cover }
+                }
+                if source.pluginID != nil {
+                    let latestCats = provider.categories
+                    if !latestCats.isEmpty {
+                        await MainActor.run {
+                            if categories.map(\.id) != latestCats.map(\.id) { categories = latestCats }
+                        }
+                    }
+                }
             }
             return page
         }

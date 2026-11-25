@@ -26,6 +26,7 @@ data class HGProtocolConfig(
     val tabPath: String,
     val tabDeviceLevel: Int,
     val fallbackIdentity: HGOneShotDevice.Identity?,
+    val preferFallbackIdentity: Boolean = true,
 ) {
     companion object {
         const val SCHEMA = 1
@@ -40,7 +41,7 @@ data class HGProtocolConfig(
         private val UUID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
         val builtin = HGProtocolConfig(
-            configVersion = 1,
+            configVersion = 2,
             field21 = 312,
             appQuery = listOf(
                 "aid" to "8662", "app_name" to "novelread", "version_code" to "74532", "version_name" to "7.4.5.32",
@@ -109,6 +110,7 @@ data class HGProtocolConfig(
             HGProtocolConfig(
                 version, f21, query, hosts(pre.optJSONArray("hosts")) ?: return null, path(pre.optString("path", "")) ?: return null, dr, pl,
                 hosts(tab.optJSONArray("hosts")) ?: return null, path(tab.optString("path", "")) ?: return null, tl, fb,
+                j.optBoolean("preferFallbackIdentity", true),
             )
         } catch (_: Exception) { null }
         }

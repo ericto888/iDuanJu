@@ -168,8 +168,21 @@ fun PluginsScreen(onBack: () -> Unit) {
         }
         val bundled = remember { store.bundledManifests() }
         val visibleBundled = bundled.filter { !it.second.adult || adult }
+        val missingBundled = visibleBundled.filter { (_, m) -> store.plugins.none { it.id == m.id } }
         if (bundled.isNotEmpty()) Group("推荐插件（App 内置）",
-            footer = if (visibleBundled.isEmpty()) "App 内置了 ${bundled.size} 个漫画插件（成人内容），在「片源管理」打开成人内容后显示。" else null) {
+            footer = if (visibleBundled.isEmpty()) "App 内置了 ${bundled.size} 个成人视频与漫画插件（成人内容），在「片源管理」打开成人内容后显示。" else null) {
+            if (missingBundled.size > 1) {
+                LinkRow("一键安装全部推荐（${missingBundled.size}）", ProfileIcons.add) {
+                    if (!busy) run {
+                        var ok = 0
+                        for ((file, _) in missingBundled) {
+                            runCatching { store.install(store.bundledText(file), "内置") }.onSuccess { ok++ }
+                        }
+                        "已安装 $ok 个推荐插件"
+                    }
+                }
+                RowDivider()
+            }
             visibleBundled.forEachIndexed { i, (file, m) ->
                 if (i > 0) RowDivider()
                 val inst = store.plugins.firstOrNull { it.id == m.id }

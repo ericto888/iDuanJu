@@ -969,6 +969,14 @@ class HongguoClient(
             playerRegisteredAt = saved.registeredAt
             return saved
         }
+        if (HGProtocol.current.preferFallbackIdentity) {
+            val fb = fallbackIdentity()
+            if (fb.isUsable && fb.did !in playerRejected && fb.did != failedID) {
+                playerIdentity = fb
+                playerRegisteredAt = 0L
+                return fb
+            }
+        }
         if (System.currentTimeMillis() < playerBlockedUntil) throw ProviderException.upstream("播放器设备注册冷却中，请稍后重试")
         val id = HGOneShotDevice.registerV5(playerHttp) ?: run {
             playerBlockedUntil = System.currentTimeMillis() + 20_000

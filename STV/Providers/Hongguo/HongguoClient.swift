@@ -1007,6 +1007,13 @@ actor HongguoClient {
             playerIdentity = saved
             return saved
         }
+        if HGProtocol.shared.current.preferFallbackIdentity {
+            let fb = Self.fallbackIdentity()
+            if fb.isUsable, !playerRejected.contains(fb.deviceId), fb.deviceId != failedID {
+                playerIdentity = fb
+                return fb
+            }
+        }
         if let task = playerRegistering { return try await task.value }
         if let until = playerBlockedUntil, Date() < until { throw ProviderError.upstream("播放器设备注册冷却中，请稍后重试") }
         let session = playerSession

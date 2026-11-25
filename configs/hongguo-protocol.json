@@ -1,7 +1,8 @@
 {
   "schema": 1,
-  "configVersion": 1,
-  "notes": "7.4.5.32 profile, medusa field21=312 (real app value; 377 is rejected since 2026-11-23), preload/v1 primary, video_tab GET secondary",
+  "configVersion": 2,
+  "notes": "7.4.5.32 profile, medusa field21=312 (real app value; 377 is rejected since 2026-11-23), preload/v1 primary, video_tab GET secondary, preferFallbackIdentity=true (fresh anonymous devices currently soft-rejected)",
+  "preferFallbackIdentity": true,
   "medusa": { "field21": 312 },
   "appQuery": [
     "aid=8662",

@@ -881,7 +881,9 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
                 // Downloaded (offline) Telegram video.
                 guard let u = URL(string: s.url) else { throw ProviderError.upstream("文件地址无效") }
                 return .file(u)
-            case .mp4Clear where bypass:
+            case .mp4Clear where bypass || series.source.pluginID != nil:
+                // Plugin progressive MP4s play directly (single connection) so rate-limited CDNs
+                // aren't hit by LocalHLSProxy's bytes=0-1 probe + 3-way concurrent prefetcher.
                 guard let u = URL(string: s.url) else { throw ProviderError.invalid(s.url) }
                 return .remote(u, s.headers)
             case .mp4Clear, .hls, .hlsAES:

@@ -19,6 +19,7 @@ struct HGProtocolConfig: Equatable {
     var tabPath: String
     var tabDeviceLevel: Int
     var fallbackIdentity: HGPlayerIdentity?
+    var preferFallbackIdentity: Bool = true
 
     static let schema = 1
     private static let maxBytes = 64 * 1024
@@ -29,7 +30,7 @@ struct HGProtocolConfig: Equatable {
     ]
 
     static let builtin = HGProtocolConfig(
-        configVersion: 1, field21: 312,
+        configVersion: 2, field21: 312,
         appQuery: [
             ("aid", "8662"), ("app_name", "novelread"), ("version_code", "74532"), ("version_name", "7.4.5.32"),
             ("update_version_code", "74532"), ("manifest_version_code", "74532"), ("os", "android"), ("ssmix", "a"),
@@ -97,9 +98,11 @@ struct HGProtocolConfig: Equatable {
                   matches(cdid, "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"), matches(ou, "[0-9a-f]{16}") else { return nil }
             fb = HGPlayerIdentity(deviceId: did, iid: iid, cdid: cdid, openudid: ou, registeredAt: 0)
         }
+        let preferFallback = (j["preferFallbackIdentity"] as? Bool) ?? true
         return HGProtocolConfig(configVersion: J.int(j["configVersion"]), field21: f21, appQuery: query,
                                 preloadHosts: ph, preloadPath: pp, preloadDrScene: dr, preloadDeviceLevel: pl,
-                                tabHosts: th, tabPath: tp, tabDeviceLevel: tl, fallbackIdentity: fb)
+                                tabHosts: th, tabPath: tp, tabDeviceLevel: tl, fallbackIdentity: fb,
+                                preferFallbackIdentity: preferFallback)
     }
 }
 

@@ -1,6 +1,7 @@
 package app.iduanju.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -10,15 +11,20 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -152,38 +158,63 @@ fun FeedGrid(key: String, cats: List<Pair<String, String>>, load: (String, Int) 
     val nearEnd by remember { derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= grid.layoutInfo.totalItemsCount - 6 } }
     LaunchedEffect(nearEnd, items.size) { if (nearEnd && items.isNotEmpty()) more() }
 
-    PullToRefreshBox(
-        isRefreshing = refreshing,
-        onRefresh = { scope.launch { more(reset = true) } },
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        LazyVerticalGrid(GridCells.Fixed(app.iduanju.ui.components.LocalLayoutMetrics.current.posterCols), state = grid, modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 120.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 4.dp)) {
-                    itemsIndexed(cats) { i, (_, name) ->
-                        val on = i == sel
-                        Box(Modifier.height(32.dp).clip(RoundedCornerShape(50)).background(if (on) c.text else c.text.copy(0.08f))
-                            .clickable {
-                                sel = i
-                                FeedGridCache.selectedTab[key] = i
-                            }.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
-                            Text(name, color = if (on) c.bg else c.text.copy(0.85f), fontSize = 14.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal)
+    Box(Modifier.fillMaxSize()) {
+        PullToRefreshBox(
+            isRefreshing = refreshing,
+            onRefresh = { scope.launch { more(reset = true) } },
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            LazyVerticalGrid(GridCells.Fixed(app.iduanju.ui.components.LocalLayoutMetrics.current.posterCols), state = grid, modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 120.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 4.dp)) {
+                        itemsIndexed(cats) { i, (_, name) ->
+                            val on = i == sel
+                            Box(Modifier.height(32.dp).clip(RoundedCornerShape(50)).background(if (on) c.text else c.text.copy(0.08f))
+                                .clickable {
+                                    sel = i
+                                    FeedGridCache.selectedTab[key] = i
+                                }.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
+                                Text(name, color = if (on) c.bg else c.text.copy(0.85f), fontSize = 14.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal)
+                            }
+                        }
+                    }
+                }
+                items(items, key = { it.seriesId }) { HomePosterCard(it, onOpen) }
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                        when {
+                            loading && !refreshing -> CircularProgressIndicator(color = c.secondary, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+                            verify != null -> app.iduanju.huangguo.VerifyRequiredState(verify!!) { scope.launch { more() } }
+                            error != null -> Text(error!! + " · 点击重试", color = c.secondary, fontSize = 13.sp, modifier = Modifier.clickable { scope.launch { more() } })
+                            items.isEmpty() && !loading -> Text("该分类暂无内容，请尝试具体子分类", color = c.secondary, fontSize = 13.sp)
                         }
                     }
                 }
             }
-            items(items, key = { it.seriesId }) { HomePosterCard(it, onOpen) }
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                    when {
-                        loading && !refreshing -> CircularProgressIndicator(color = c.secondary, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
-                        verify != null -> app.iduanju.huangguo.VerifyRequiredState(verify!!) { scope.launch { more() } }
-                        error != null -> Text(error!! + " · 点击重试", color = c.secondary, fontSize = 13.sp, modifier = Modifier.clickable { scope.launch { more() } })
-                        items.isEmpty() && !loading -> Text("该分类暂无内容，请尝试具体子分类", color = c.secondary, fontSize = 13.sp)
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 18.dp, bottom = 92.dp)
+                .size(44.dp)
+                .shadow(6.dp, CircleShape)
+                .clip(CircleShape)
+                .background(c.surface.copy(alpha = 0.92f))
+                .border(1.dp, c.hairline, CircleShape)
+                .clickable(enabled = !loading) {
+                    scope.launch {
+                        grid.animateScrollToItem(0)
+                        more(reset = true)
                     }
-                }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            if (refreshing) {
+                CircularProgressIndicator(color = c.text, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+            } else {
+                Icon(Icons.Rounded.Refresh, contentDescription = "刷新列表", tint = c.text, modifier = Modifier.size(20.dp))
             }
         }
     }
