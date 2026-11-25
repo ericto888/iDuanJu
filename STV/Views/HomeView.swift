@@ -902,7 +902,7 @@ private struct DynamicSiteFeed: View {
         "home.shelf.\(category.id)"
     }
 
-    private func cardsSkeleton: some View {
+    private var cardsSkeleton: some View {
         LazyVGrid(columns: HomeSection.columns(landscape: source.isLongVideo), spacing: 16) {
             ForEach(0..<(source.isLongVideo ? 2 : 3), id: \.self) { _ in
                 VStack(alignment: .leading, spacing: 8) {
@@ -971,8 +971,7 @@ private struct DynamicSiteFeed: View {
         categories = home.categories
         featuredItems = home.featured
         featuredIndex = 0
-        shelfItems = [:]
-        shelfLoaded = []
+        let previouslyLoaded = shelfLoaded
         shelfErrors = [:]
 
         if let cover = featuredItems.first?.cover, !cover.isEmpty {
@@ -986,13 +985,17 @@ private struct DynamicSiteFeed: View {
         selected = id
         selectedCategory = nil
 
-        if !usesCategoryShelves {
+        if usesCategoryShelves {
+            // Refresh only shelves already visited; the rest remain lazy-loaded as they enter view.
+            for category in categories where previouslyLoaded.contains(category.id) {
+                await loadShelf(category, force: true)
+            }
+        } else {
             reload(id)
         }
     }
 
     private func reload(_ id: String) {
-        guard !id.isEmpty else { return }
         let source = source
         pager.reset { previous, _ in
             guard let provider = Sites.provider(source) else {
