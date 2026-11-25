@@ -692,6 +692,8 @@ private struct DynamicSiteFeed: View {
     @State private var selected = ""
     @StateObject private var pager = Pager()
     @State private var heroCover: String?
+    @State private var featuredItems: [HGSeries] = []
+    @State private var featuredIndex = 0
     @State private var didLoad = false
 
     var body: some View {
@@ -705,6 +707,16 @@ private struct DynamicSiteFeed: View {
                         .frame(height: 0)
                         .id("dynamic.top")
                         if categories.count > 1 { chips }
+                        if !featuredItems.isEmpty {
+                            PosterHero(board: source.label, picks: featuredItems, index: $featuredIndex)
+                                .padding(.horizontal, 16)
+                                .padding(.top, 8)
+                                .compatOnChange(of: featuredIndex) { index in
+                                    if featuredItems.indices.contains(index) {
+                                        onHero(featuredItems[index].cover)
+                                    }
+                                }
+                        }
                         if let e = pager.error, pager.items.isEmpty {
                             ErrorStateView(error: e) { reload(selected) }
                         } else if pager.items.isEmpty && pager.isLoading {
@@ -787,8 +799,15 @@ private struct DynamicSiteFeed: View {
     }
 
     private func refresh() async {
-        let loaded = await Self.loadCategories(source)
-        categories = loaded
+        let home = await Self.loadHome(source)
+        categories = home.categories
+        featuredItems = home.featured
+        featuredIndex = 0
+        if let cover = featuredItems.first?.cover, !cover.isEmpty {
+            heroCover = cover
+            onHero(cover)
+        }
+        let loaded = home.categories
         let id = loaded.contains { $0.id == selected } ? selected : (loaded.first?.id ?? "")
         selected = id
         reload(id)
@@ -801,7 +820,7 @@ private struct DynamicSiteFeed: View {
             let category = SiteCategory(id: id, title: "", path: id)
             let page = try await provider.list(category, page: max(1, prev.nextOffset ?? 1))
             if (prev.nextOffset ?? 1) <= 1 {
-                if let cover = page.items.first?.cover, !cover.isEmpty {
+                if featuredItems.isEmpty, let cover = page.items.first?.cover, !cover.isEmpty {
                     await MainActor.run { heroCover = cover }
                 }
                 if source.pluginID != nil {
@@ -817,7 +836,12 @@ private struct DynamicSiteFeed: View {
         }
     }
 
-    private static func loadCategories(_ source: DramaSource) async -> [SiteCategory] {
+    private struct DynamicHomeData {
+        var categories: [SiteCategory]
+        var featured: [HGSeries]
+    }
+
+    private static func loadHome(_ source: DramaSource) async -> DynamicHomeData {
         if let key = source.cmsKey {
             var stored = CMSStore.site(key)?.categories ?? []
             if let site = CMSStore.site(key), let fresh = try? await MacCMSProvider.fetchCategories(api: site.api, siteKey: key), !fresh.isEmpty {
@@ -825,27 +849,31 @@ private struct DynamicSiteFeed: View {
                 await MainActor.run { CMSStore.shared.cacheCategories(key, fresh) }
             }
             let latest = SiteCategory(id: "", title: "最新", path: "")
-            return [latest] + stored.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id) }
+            return DynamicHomeData(categories: [latest] + stored.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id) }, featured: [])
         }
         let fallback = SiteCategory(id: "", title: "推荐", path: "")
-        guard let provider = Sites.provider(source) else { return [fallback] }
+        guard let provider = Sites.provider(source) else {
+            return DynamicHomeData(categories: [fallback], featured: [])
+        }
 
-        // JS 视频插件的分类由 home() 动态提供。不能只读 cachedCategories：
-        // 首次进入时缓存通常为空，而此前只有点击“推荐”后才可能触发 home()，形成循环依赖。
+        // JS 视频插件的分类和首页数据统一从一次 home() 调用取得。
         if let pluginID = source.pluginID,
            let response = try? await PluginRuntime.call(pluginID, "home", [:]) as? [String: Any] {
             let fresh = PluginOut.categories(response["categories"])
             if !fresh.isEmpty {
                 await MainActor.run { PluginStore.shared.cacheCategories(pluginID, fresh) }
-                return fresh.map {
+                let categories = fresh.map {
                     SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank)
                 }
+                let supportsFeatured = PluginStore.snapshot(pluginID)?.manifest.homeFeatures?.contains("featured") == true
+                let featured = supportsFeatured ? JSVideoProvider(source: source).featuredItems(from: response) : []
+                return DynamicHomeData(categories: categories, featured: featured)
             }
         }
 
-        // home() 不可用时仍兼容已有缓存分类及旧插件。
+        // home() 不可用时仍兼容已有缓存分类及旧插件；没有能力声明时不推断推荐内容。
         let categories = provider.categories.filter { !$0.id.isEmpty }
-        return categories.isEmpty ? [fallback] : categories
+        return DynamicHomeData(categories: categories.isEmpty ? [fallback] : categories, featured: [])
     }
 }
 
