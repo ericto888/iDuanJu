@@ -45,7 +45,6 @@ jobs:
             -configuration Debug \
             -destination 'platform=iOS Simulator,name=iPhone 17' \
             -derivedDataPath DerivedDataDebugLogs \
-            -disableAutomaticPackageResolution \
             CODE_SIGNING_ALLOWED=NO \
             -parallel-testing-enabled NO \
             -only-testing:STVTests/PerSourceDebugLogTests \
