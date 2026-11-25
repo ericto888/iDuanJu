@@ -183,7 +183,7 @@ struct MacCMSProvider: SiteProvider {
                 if let fu = finalURL.host, fu != host, NetGuard.resolvesToBlocked(fu) { throw ProviderError.invalid("跳转到内网地址") }
                 data = d
             }
-            guard data.count < 8 << 20, let o = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? CMSXML.decode(data) else {
+            guard (200..<300).contains(status) else { throw ProviderError.upstream("采集站 HTTP \\(status) · \\(host)") }\n            guard data.count < 8 << 20, let o = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? CMSXML.decode(data) else {
                 throw ProviderError.upstream("采集站没有返回有效的 CMS JSON / XML")
             }
             if let code = o["code"], PluginOut.s(code) != "1" {
@@ -329,11 +329,11 @@ struct MacCMSProvider: SiteProvider {
             let k = site.key
             await MainActor.run { CMSStore.shared.cacheCategories(k, cats) }
         }
-        return Self.page(o, source: source, page: p)
+        let result = Self.page(o, source: source, page: p)\n        CMSLog.add(site.key, "ℹ 列表解析完成：\(result.items.count) 条，封面地址：\(result.items.prefix(5).map { URL(string: $0.cover).map(CMSLog.safeURL) ?? "无" }.joined(separator: " | "))")\n        return result
     }
 
     func search(_ q: String, page p: Int) async throws -> HGPage {
-        Self.page(try await Self.fetch(site.api, ["ac": "list", "wd": q, "pg": String(p)], siteKey: site.key, stage: "搜索"), source: source, page: p)
+        let result = Self.page(try await Self.fetch(site.api, ["ac": "list", "wd": q, "pg": String(p)], siteKey: site.key, stage: "搜索"), source: source, page: p)\n        CMSLog.add(site.key, "ℹ 搜索结果解析：\(result.items.count) 条")\n        return result
     }
 
     func detail(_ s: HGSeries) async throws -> HGSeriesDetail {
