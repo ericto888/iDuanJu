@@ -1,0 +1,59 @@
+name: per-source debug log tests
+
+on:
+  push:
+    branches:
+      - feature/per-source-debug-logs
+    paths:
+      - "STV/Plugins/MacCMS.swift"
+      - "STV/Views/PluginViews.swift"
+      - "STV/Plugins/PluginRuntime.swift"
+      - "STVTests/**"
+      - "project.yml"
+      - ".github/workflows/per-source-debug-log-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: per-source-debug-log-tests
+  cancel-in-progress: true
+
+jobs:
+  ios-simulator-tests:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.3"
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install --quiet xcodegen
+          fi
+          xcodegen --version
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Run per-source debug log unit tests (Simulator only)
+        run: |
+          set -o pipefail
+          xcodebuild -project STV.xcodeproj \
+            -scheme STV \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -derivedDataPath DerivedDataDebugLogs \
+            -disableAutomaticPackageResolution \
+            CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO \
+            -only-testing:STVTests/PerSourceDebugLogTests \
+            test 2>&1 | tee "$RUNNER_TEMP/per-source-debug-log-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: per-source-debug-log-test-results
+          path: |
+            ${{ runner.temp }}/per-source-debug-log-tests.log
+            DerivedDataDebugLogs/Logs/Test/*.xcresult
