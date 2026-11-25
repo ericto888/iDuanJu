@@ -61,7 +61,7 @@ final class Pager: ObservableObject {
             }
             if t == token {
                 isLoading = false
-                onSnapshotChanged?()
+                onSnapshotChanged?(snapshot())
             }
         }
     }
