@@ -32,6 +32,7 @@ manga18fx/
 | `permissions.storage` | | `true` = 可用 `host.storage`（每插件 1MB，互相看不到） |
 | `permissions.login` | | `true` = 可以请用户在 App 的独立浏览器里登录这个站（cookie 只进本插件） |
 | `capabilities` | ✓ | 实现了哪些函数。video/shortdrama 至少 `detail`+`play`；comic 至少 `detail`+`pages` |
+| `homeFeatures` | | 可选首页 UI 能力声明；当前支持 `[`featured`]`，表示 `home()` 返回的 `items` 可用于首页 TOP5 轮播；声明时必须同时在 `capabilities` 中声明 `home` |
 | `settings` | | 让用户填的配置项，如镜像地址、API key：`[{ "key": "mirror", "name": "镜像", "type": "text\|select\|secret", "default": "..." }]`。`secret` 类型脚本只拿到句柄，见安全说明 |
 | `update.url` | | 新版 manifest 的地址。必须是 https |
 | `overrides` | | 可选，`video` 插件接管的内置视频站源 ID 数组，如 `["xvideos"]`。接管后沿用内置站源入口/开关/历史身份，解析由插件执行；插件停用或卸载后自动恢复内置实现。同一内置站源同一时间只能由一个插件接管 |
