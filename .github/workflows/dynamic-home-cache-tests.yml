@@ -1,0 +1,46 @@
+name: dynamic home cache tests
+
+on:
+  push:
+    branches:
+      - feat/unified-plugin-home-layout
+    paths:
+      - "STV/Views/HomeView.swift"
+      - "STV/Views/Pager.swift"
+      - "STV/Plugins/PluginStore.swift"
+      - "STVTests/PluginTests.swift"
+      - ".github/workflows/dynamic-home-cache-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  dynamic-home-cache:
+    name: Dynamic home cache simulator test
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.3"
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install --quiet xcodegen
+          fi
+          xcodegen --version
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Run dynamic pager refresh test (Simulator only)
+        run: |
+          set -o pipefail
+          xcodebuild -project STV.xcodeproj \
+            -scheme STV \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -derivedDataPath DerivedDataDynamicHome \
+            CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO \
+            -only-testing:STVTests/PluginTests/testPagerRefreshPreservesPreviouslyLoadedPageDepth \
+            test
