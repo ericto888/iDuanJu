@@ -182,7 +182,9 @@ struct SearchView: View {
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
             let result = try? await HongguoClient.shared.suggestions(q)
-            guard !Task.isCancelled, query.trimmingCharacters(in: .whitespacesAndNewlines) == q, submitted.isEmpty, source == .hongguo else { return }
+            guard !Task.isCancelled,
+                  query.trimmingCharacters(in: .whitespacesAndNewlines) == q,
+                  submitted.isEmpty, source == .hongguo else { return }
             suggestions = result ?? []
         }
     }
