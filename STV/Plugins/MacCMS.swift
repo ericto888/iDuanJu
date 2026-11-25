@@ -47,6 +47,7 @@ enum CMSLog {
     }
 }
 
+
 /// 苹果 CMS (maccms v10) 采集接口: built-in generic adapter, no JS needed.
 struct CMSSite: Codable, Hashable, Identifiable {
     var key: String
@@ -224,39 +225,11 @@ struct MacCMSProvider: SiteProvider {
             var cover = PluginOut.s(v["vod_pic"], max: 2000)
             if cover.hasPrefix("//") { cover = "https:" + cover }
             if cover.hasPrefix("http://") { cover = "https://" + cover.dropFirst(7) }
-            let remarks = PluginOut.s(v["vod_remarks"], max: 40)
-            let typeName = PluginOut.s(v["type_name"], max: 30)
-            let total = Int(PluginOut.s(v["vod_total"])) ?? 0
-            let eps = lines(from: PluginOut.s(v["vod_play_from"], max: 1000),
-                            urls: (v["vod_play_url"] as? String) ?? "").map { $0.eps.count }.max() ?? 0
-            // 电影 / 连续剧区分：接口给的总集数、线路集数、备注与分类名共同判断。
-            let episodic = isEpisodic(typeName: typeName, remarks: remarks, total: total, episodeCount: eps)
-            return HGSeries(source: source, seriesId: id, title: title, cover: cover, subtitle: remarks.nilIfEmpty,
+            return HGSeries(source: source, seriesId: id, title: title, cover: cover, subtitle: PluginOut.s(v["vod_remarks"], max: 40).nilIfEmpty,
                             author: PluginOut.s(v["vod_director"], max: 60).nilIfEmpty,
                             actors: PluginOut.s(v["vod_actor"], max: 200).split(whereSeparator: { ",，/ ".contains($0) }).prefix(6).map(String.init),
-                            episodeCount: episodic ? max(total, eps, Self.episodeCount(fromRemarks: remarks)) : 0,
                             orientation: "portrait", tags: tags)
         }
-    }
-
-    /// 只靠 type_name 会误判（“剧情片”是电影、“综艺片”是综艺），所以同时看总集数、
-    /// 线路集数和“更新至/全 N 集”这类备注；明确是“片”的分类优先按电影处理，
-    /// 避免把上下集 / 多版本的单片误判成连续剧。
-    static func isEpisodic(typeName: String, remarks: String, total: Int, episodeCount: Int) -> Bool {
-        let lower = typeName.lowercased()
-        let episodicType = (lower.contains("剧") && !lower.contains("片"))
-            || ["动漫", "动画", "综艺", "番剧"].contains(where: { lower.contains($0) })
-        let episodicRemark = remarks.contains("更新至")
-            || (remarks.contains("集") && remarks.rangeOfCharacter(from: .decimalDigits) != nil)
-        let movieType = lower.contains("片") && !lower.contains("剧") && !episodicType
-        if movieType { return total > 1 || episodicRemark || episodeCount > 2 }
-        return episodicType || episodicRemark || total > 1 || episodeCount > 1
-    }
-
-    /// “更新至第07集”、“全40集”、“共 24 集” → 集数。
-    static func episodeCount(fromRemarks r: String) -> Int {
-        guard r.contains("集") else { return 0 }
-        return r.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }.last ?? 0
     }
 
     static func page(_ o: [String: Any], source: DramaSource, page p: Int) -> HGPage {
@@ -267,15 +240,8 @@ struct MacCMSProvider: SiteProvider {
 
     /// `vod_play_from` "a$$$b", `vod_play_url` "第1集$url#第2集$url$$$..." → lines of (name, [(epName, url)]).
     static func lines(from: String, urls: String) -> [(name: String, eps: [(String, String)])] {
-        let chunks = urls.components(separatedBy: "$$$")
-        var names = from.components(separatedBy: "$$$")
-        // 部分采集站（包括 FFZY）在 vod_play_from 中用逗号列出线路名，
-        // 但 vod_play_url 仍按 $$$ 分隔；按线路数量对齐，避免线路名错位。
-        if names.count == 1, chunks.count > 1 {
-            let commaNames = from.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            if commaNames.count == chunks.count { names = commaNames }
-        }
-        return chunks.enumerated().compactMap { i, chunk in
+        let names = from.components(separatedBy: "$$$")
+        return urls.components(separatedBy: "$$$").enumerated().compactMap { i, chunk in
             let eps: [(String, String)] = chunk.split(separator: "#").enumerated().compactMap { j, e in
                 let parts = e.split(separator: "$", maxSplits: 1).map(String.init)
                 let (n, u) = parts.count == 2 ? (parts[0], parts[1]) : ("第\(j + 1)集", parts.first ?? "")
@@ -315,18 +281,12 @@ struct MacCMSProvider: SiteProvider {
         var desc = PluginOut.s(v["vod_content"], max: 4000)
         desc = desc.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression).replacingOccurrences(of: "&nbsp;", with: " ")
         let meta = [PluginOut.s(v["vod_year"]), PluginOut.s(v["vod_area"]), PluginOut.s(v["vod_remarks"])].filter { !$0.isEmpty }.joined(separator: " · ")
-        let typeName = PluginOut.s(v["type_name"], max: 40).trimmingCharacters(in: .whitespacesAndNewlines)
-        let remarks = PluginOut.s(v["vod_remarks"], max: 80)
-        let total = Int(PluginOut.s(v["vod_total"])) ?? 0
-        // 电影 / 连续剧统一走同一个判定：分类名 + 备注 + 总集数 + 线路集数。
-        let isLongVideo = !isEpisodic(typeName: typeName, remarks: remarks, total: total, episodeCount: eps.count)
         return HGSeriesDetail(source: source, seriesId: s.seriesId, title: title, cover: cover.isEmpty ? s.cover : cover,
                               desc: [meta, desc].filter { !$0.isEmpty }.joined(separator: "\n"),
                               author: PluginOut.s(v["vod_director"], max: 60).nilIfEmpty,
                               actors: PluginOut.s(v["vod_actor"], max: 300).split(whereSeparator: { ",，/".contains($0) }).prefix(12).map { $0.trimmingCharacters(in: .whitespaces) },
                               onlineTime: 0, totalEps: eps.count, episodes: eps, tags: tags.filter { !$0.isEmpty },
-                              episodeLabel: isLongVideo ? "长视频" : "共\(max(eps.count, 1))集",
-                              isLongVideo: isLongVideo)
+                              episodeLabel: eps.count > 1 ? "共\(eps.count)集" : "长视频")
     }
 
     static func streams(for ep: HGEpisode) -> [HGStream] {
@@ -347,94 +307,28 @@ struct MacCMSProvider: SiteProvider {
     }
 
     func list(_ c: SiteCategory, page p: Int) async throws -> HGPage {
-        var q = ["pg": String(p)]
+        var q = ["ac": "detail", "pg": String(p)]
         if !c.id.isEmpty { q["t"] = c.id }
-        let o = try await Self.fetchPage(site.api, q, siteKey: site.key,
-                                         stage: c.id.isEmpty ? "首页/列表" : "分类列表", page: p)
+        let o = try await Self.fetch(site.api, q, siteKey: site.key, stage: c.id.isEmpty ? "首页/列表" : "分类列表")
         // Only the unfiltered latest page carries the site-wide class list. A category
         // response can contain a partial class array and must not replace the home modules.
         if c.id.isEmpty, p == 1, case let cats = Self.parseCategories(o), !cats.isEmpty {
             let k = site.key
             await MainActor.run { CMSStore.shared.cacheCategories(k, cats) }
         }
-        var result = Self.page(o, source: source, page: p)
-        await Self.fillMissingCovers(&result, site: site, source: source)
+        let result = Self.page(o, source: source, page: p)
         CMSLog.add(site.key, "ℹ 列表解析完成：\(result.items.count) 条，封面地址：\(result.items.prefix(5).map { URL(string: $0.cover).map(CMSLog.safeURL) ?? "无" }.joined(separator: " | "))")
         return result
     }
 
     func search(_ q: String, page p: Int) async throws -> HGPage {
-        let o = try await Self.fetchPage(site.api, ["wd": q, "pg": String(p)], siteKey: site.key, stage: "搜索", page: p)
-        var result = Self.page(o, source: source, page: p)
-        await Self.fillMissingCovers(&result, site: site, source: source)
+        let result = Self.page(try await Self.fetch(site.api, ["ac": "detail", "wd": q, "pg": String(p)], siteKey: site.key, stage: "搜索"), source: source, page: p)
         CMSLog.add(site.key, "ℹ 搜索结果解析：\(result.items.count) 条")
         return result
     }
 
-    /// 浏览列表优先用 `ac=detail`：一页一个请求就带回封面、类型与总集数，和其它内置站源
-    /// 一样按页懒加载；不支持分页（忽略 pg）或字段不全时退回 `ac=list` 并用详情补封面。
-    /// 同时兼容 maccms v8 的 `ac=videolist`。
-    private static func fetchPage(_ api: String, _ extra: [String: String], siteKey: String, stage: String, page p: Int) async throws -> [String: Any] {
-        var lastError: Error?
-        for ac in ["detail", "videolist", "list"] {
-            do {
-                var q = extra
-                q["ac"] = ac
-                let o = try await fetch(api, q, siteKey: siteKey, stage: "\(stage)·\(ac)")
-                guard o["list"] is [[String: Any]] else { throw ProviderError.upstream("采集站没有返回列表") }
-                if ac != "list" {
-                    // 部分站点忽略 pg 直接返回全量；页号缺失或对不上就换下一种模式。
-                    // 父分类没有直属内容时接口会返回空 list + pagecount=0，但 page 仍在，属于正常空结果。
-                    guard let returned = Int(PluginOut.s(o["page"])), returned == p else {
-                        throw ProviderError.upstream("采集站该模式不支持分页（\(ac)）")
-                    }
-                }
-                return o
-            } catch {
-                lastError = error
-            }
-        }
-        throw lastError ?? ProviderError.upstream("采集站请求失败")
-    }
-
-    /// `ac=list` 只返回精简字段，多数采集站（如 FFZY）不返回 `vod_pic`，首页卡片因此没有海报。
-    /// 对缺少封面的条目用一次详情请求补齐当前页，失败时保留原样、不影响列表。
-    private static func fillMissingCovers(_ page: inout HGPage, site: CMSSite, source: DramaSource) async {
-        let missing = page.items.filter { $0.cover.isEmpty }.map(\.seriesId)
-        guard !missing.isEmpty else { return }
-        let ids = missing.joined(separator: ",")
-        var detail: [String: Any]?
-        for ac in ["detail", "videolist"] {
-            if let o = try? await fetch(site.api, ["ac": ac, "ids": ids], siteKey: site.key, stage: "封面补齐·\(ac)") {
-                detail = o
-                break
-            }
-        }
-        guard let o = detail else {
-            CMSLog.add(site.key, "⚠ 封面补齐失败：\(missing.count) 条无封面")
-            return
-        }
-        let covers = Dictionary(parseItems(o, source: source).map { ($0.seriesId, $0.cover) }, uniquingKeysWith: { first, _ in first })
-        var filled = 0
-        page.items = page.items.map { item in
-            guard item.cover.isEmpty, let cover = covers[item.seriesId], !cover.isEmpty else { return item }
-            var fixed = item
-            fixed.cover = cover
-            filled += 1
-            return fixed
-        }
-        CMSLog.add(site.key, "ℹ 封面补齐：\(filled)/\(missing.count) 条")
-    }
-
     func detail(_ s: HGSeries) async throws -> HGSeriesDetail {
-        let o: [String: Any]
-        do {
-            o = try await Self.fetch(site.api, ["ac": "detail", "ids": s.seriesId], siteKey: site.key, stage: "详情")
-        } catch {
-            // maccms v8 用 ac=videolist 取详情。
-            o = try await Self.fetch(site.api, ["ac": "videolist", "ids": s.seriesId], siteKey: site.key, stage: "详情·videolist")
-        }
-        return try Self.parseDetail(o, series: s, source: source)
+        try Self.parseDetail(try await Self.fetch(site.api, ["ac": "detail", "ids": s.seriesId], siteKey: site.key, stage: "详情"), series: s, source: source)
     }
 
     func resolve(_ s: HGSeries, _ ep: HGEpisode) async throws -> HGResolvedVideo {
