@@ -321,6 +321,13 @@ struct JSVideoProvider: SiteProvider {
         return HGPage(items: Array(items), hasMore: (o["hasMore"] as? Bool ?? false) && !items.isEmpty, nextOffset: p + 1)
     }
 
+    /// Converts the plugin's explicit home() items into the shared featured carousel.
+    /// The manifest must opt in with homeFeatures: ["featured"]; ordinary category items
+    /// are never promoted to featured content implicitly.
+    func featuredItems(from home: [String: Any]) -> [HGSeries] {
+        Array(((home["items"] as? [[String: Any]]) ?? []).prefix(5).compactMap(series))
+    }
+
     func list(_ c: SiteCategory, page p: Int) async throws -> HGPage {
         if c.id == Self.homeID || c.id.isEmpty {
             if p > 1 { return HGPage(items: [], hasMore: false) }
