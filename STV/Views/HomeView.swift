@@ -860,7 +860,9 @@ private struct DynamicSiteFeed: View {
         if let pluginID = source.pluginID,
            let response = try? await PluginRuntime.call(pluginID, "home", [:]) as? [String: Any] {
             let fresh = PluginOut.categories(response["categories"])
-            await MainActor.run { PluginStore.shared.cacheCategories(pluginID, fresh) }
+            if !fresh.isEmpty {
+                await MainActor.run { PluginStore.shared.cacheCategories(pluginID, fresh) }
+            }
             let categories = fresh.map {
                 SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank)
             }
