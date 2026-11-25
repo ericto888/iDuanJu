@@ -28,7 +28,7 @@ final class Pager: ObservableObject {
         hasMore = snapshot.hasMore
         isLoading = false
         error = nil
-        onSnapshotChanged?(snapshot())
+        onSnapshotChanged?(self.snapshot())
     }
 
     func setFetcher(_ f: @escaping (HGPage, [HGSeries]) async throws -> HGPage) {
@@ -38,7 +38,7 @@ final class Pager: ObservableObject {
     func reset(_ f: @escaping (HGPage, [HGSeries]) async throws -> HGPage) {
         fetch = f; items = []; hasMore = true; error = nil; isLoading = false
         page = HGPage(items: [], hasMore: true, nextOffset: 0); token = UUID()
-        onSnapshotChanged?()
+        onSnapshotChanged?(snapshot())
         loadMore()
     }
 
