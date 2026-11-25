@@ -64,7 +64,7 @@ final class Pager: ObservableObject {
             do {
                 let next = try await f(page, items)
                 guard t == token else { return }
-                var ids = Set(items.map(\\.id))
+                var ids = Set(items.map(\.id))
                 items += next.items.filter { ids.insert($0.id).inserted }
                 page = next
                 loadedPageCount += 1
