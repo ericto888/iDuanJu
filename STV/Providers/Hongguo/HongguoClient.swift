@@ -441,6 +441,54 @@ actor HongguoClient {
         throw lastErr
     }
 
+    /// Live title suggestions from Hongguo's official web suggestion endpoint.
+    /// This is intentionally separate from full search: it is lightweight and only used while typing.
+    func suggestions(_ keyword: String, limit: Int = 10) async throws -> [HGSeries] {
+        let q = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return [] }
+        var components = URLComponents(string: "https://hongguoduanju.com/incent_resource/suggestion")!
+        components.queryItems = [
+            URLQueryItem(name: "app_id", value: "8662"),
+            URLQueryItem(name: "query", value: q),
+            URLQueryItem(name: "count", value: String(min(max(limit, 1), 20)))
+        ]
+        guard let url = components.url else { throw ProviderError.invalid("红果联想地址无效") }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 5
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        request.setValue("https://hongguoduanju.com/", forHTTPHeaderField: "Referer")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ProviderError.upstream("红果搜索联想请求失败")
+        }
+        let json = try JSONSerialization.jsonObject(with: data)
+        let root = J.dict(json)
+        let payload = J.dict(root["data"])
+        let records = (root["suggest_list"] as? [Any]) ?? (payload["suggest_list"] as? [Any]) ?? []
+        var seen = Set<String>()
+        var results: [HGSeries] = []
+        for value in records {
+            let record = J.dict(value)
+            guard J.str(record["word_type"]) == "short_play_name" else { continue }
+            let video = J.dict(record["video_data"])
+            var series = Self.parseVideoData(video)
+            if series.seriesId.isEmpty {
+                series.seriesId = Self.firstID(video, "series_id_str", "series_id", "album_id_str", "book_id")
+            }
+            if series.title.isEmpty {
+                series.title = J.firstNonEmpty(J.str(record["name"]), J.str(record["keyword"]))
+            }
+            guard Self.looksSID(series.seriesId), !series.title.isEmpty, !seen.contains(series.seriesId) else { continue }
+            seen.insert(series.seriesId)
+            results.append(series)
+            if results.count >= limit { break }
+        }
+        return results
+    }
+
     private static func contentFilterOf(_ vd: [String: Any]) -> HGContentFilter? {
         let det = J.dict(vd["video_detail"])
         switch J.firstPositive(vd["content_type"], det["content_type"]) {

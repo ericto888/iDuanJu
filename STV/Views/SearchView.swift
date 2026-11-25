@@ -3,6 +3,7 @@ import SwiftUI
 struct SearchView: View {
     var pushed = false
     var initialQuery: String? = nil
+    var initialSource: DramaSource? = nil
     var startEditingHistory = false
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -14,6 +15,8 @@ struct SearchView: View {
         return .hongguo
     }()
     @StateObject private var pager = Pager()
+    @State private var suggestions: [HGSeries] = []
+    @State private var suggestionTask: Task<Void, Never>?
     @State private var hot: [HGSeries] = []
     @State private var hotError: Error?
     @State private var discoverSeed = 0
@@ -24,8 +27,11 @@ struct SearchView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            SearchField(text: $query, onSubmit: submit, onCancel: pushed ? { dismiss() } : (submitted.isEmpty ? nil : { query = ""; submitted = "" }))
+            SearchField(text: $query, placeholder: "搜索\(source.label)短剧", onSubmit: submit, onCancel: pushed ? { dismiss() } : (submitted.isEmpty ? nil : { query = ""; submitted = "" }))
                 .padding(.horizontal, 16).padding(.top, 6)
+            if submitted.isEmpty && source == .hongguo && !suggestions.isEmpty {
+                suggestionList
+            }
             if gate.searchSources.count > 1 {
                 TextTabStrip(items: gate.searchSources, selection: $source) { $0.label }
             }
@@ -36,11 +42,20 @@ struct SearchView: View {
         .background(STVTheme.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .task {
+            if let initialSource, gate.searchSources.contains(initialSource) { source = initialSource }
             if startEditingHistory { editingHistory = true }
             if let q = initialQuery, submitted.isEmpty, !q.isEmpty { query = q; submit() }
             if hot.isEmpty { await loadHot() }
         }
+        .compatOnChange(of: query) { value in
+            // After a search is submitted, editing the field starts a fresh suggestion session.
+            // Otherwise `submitted` stays non-empty and updateSuggestions() rejects every later query.
+            if !submitted.isEmpty && value != submitted { submitted = "" }
+            updateSuggestions(value)
+        }
         .compatOnChange(of: source) {
+            suggestionTask?.cancel()
+            suggestions = []
             if !submitted.isEmpty { run() }
             else if !query.trimmingCharacters(in: .whitespaces).isEmpty { submit() }
         }
@@ -114,9 +129,46 @@ struct SearchView: View {
         }.padding(.vertical, 8)
     }
 
+    @ViewBuilder private var suggestionList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(suggestions, id: \.id) { item in
+                NavigationLink(value: Route.series(item)) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(STVTheme.secondary)
+                        Text(item.title).font(.subheadline).foregroundStyle(STVTheme.text).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Image(systemName: "arrow.up.left").font(.caption2).foregroundStyle(STVTheme.secondary)
+                    }
+                    .padding(.horizontal, 18).padding(.vertical, 11)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if item.id != suggestions.last?.id { Divider().overlay(STVTheme.glassBorder).padding(.leading, 44) }
+            }
+        }
+        .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(STVTheme.glassBorder) }
+        .padding(.horizontal, 16)
+    }
+
+    private func updateSuggestions(_ value: String) {
+        suggestionTask?.cancel()
+        suggestions = []
+        let q = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard source == .hongguo, submitted.isEmpty, !q.isEmpty else { return }
+        suggestionTask = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            let result = try? await HongguoClient.shared.suggestions(q)
+            guard !Task.isCancelled, query.trimmingCharacters(in: .whitespacesAndNewlines) == q, submitted.isEmpty, source == .hongguo else { return }
+            suggestions = result ?? []
+        }
+    }
+
     private func pick(_ t: String) { query = t; submit() }
     private func submit() {
         let q = query.trimmingCharacters(in: .whitespaces); guard !q.isEmpty else { return }
+        suggestionTask?.cancel(); suggestions = []
         library.addSearch(q); submitted = q; run()
     }
     private func run() {
