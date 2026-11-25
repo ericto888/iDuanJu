@@ -287,6 +287,20 @@ final class PluginTests: XCTestCase {
         XCTAssertTrue(diff.needsConsent)
     }
 
+    func testPluginHomeCategoriesUseFallbackOnlyWhenNoRealCategoriesExist() {
+        let real = [
+            PluginCategory(id: "browse", name: "推荐"),
+            PluginCategory(id: "latest", name: "最新")
+        ]
+        let categories = JSVideoProvider.homeCategories(from: real)
+        XCTAssertEqual(categories.map(\.id), ["browse", "latest"])
+        XCTAssertEqual(categories.map(\.title), ["推荐", "最新"])
+
+        let fallback = JSVideoProvider.homeCategories(from: [])
+        XCTAssertEqual(fallback.map(\.id), [JSVideoProvider.homeID])
+        XCTAssertEqual(fallback.map(\.title), ["推荐"])
+    }
+
     func testBundledPluginsValidate() throws {
         let b = PluginInstaller.bundled()
         XCTAssertEqual(Set(b.map(\.manifest.id)), ["com.idj.bundled.manga18fx", "com.idj.bundled.komikindo", "com.idj.bundled.jm18comic"])
