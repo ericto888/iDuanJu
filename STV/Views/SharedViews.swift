@@ -14,8 +14,14 @@ enum Fmt {
     /// Short meta line, e.g. "剧 / 80集" or "1.2万播放".
     static func meta(_ s: HGSeries) -> String {
         if s.source.isLongVideo {
-            return [s.duration > 0 ? clock(s.duration) : nil, s.playCount > 0 ? count(s.playCount) + "观看" : nil]
+            let measured = [s.duration > 0 ? clock(s.duration) : nil, s.playCount > 0 ? count(s.playCount) + "观看" : nil]
                 .compactMap { $0 }.joined(separator: " · ")
+            if !measured.isEmpty { return measured }
+            // 采集站同一个源里混有电影与连续剧：优先显示“更新至/全 N 集”，其次集数，最后备注。
+            guard s.source.cmsKey != nil else { return measured }
+            if let sub = s.subtitle, sub.contains("更新至") || sub.hasPrefix("全") { return sub }
+            if s.episodeCount > 0 { return "\(s.episodeCount)集" }
+            return s.subtitle ?? ""
         }
         if s.episodeCount > 0 && s.playCount > 0 { return "\(s.episodeCount)集 · \(count(s.playCount))热度" }
         if s.episodeCount > 0 { return "\(s.episodeCount)集" }

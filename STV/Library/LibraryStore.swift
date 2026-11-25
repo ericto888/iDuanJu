@@ -11,7 +11,10 @@ struct WatchProgress: Codable, Hashable, Identifiable {
     var id: String { series.id }
     var fraction: Double { duration > 0 ? min(1, seconds / duration) : 0 }
     /// "看到第3集" for dramas, "看到 41:12" for single long videos.
-    var resumeLabel: String { series.source.isLongVideo ? "看到 " + Fmt.clock(Int(seconds)) : "看到第\(episodeNumber)集" }
+    /// 采集站同一个源里既有电影也有连续剧：有集数信息时按连续剧显示。
+    var resumeLabel: String {
+        (series.source.isLongVideo && series.episodeCount == 0) ? "看到 " + Fmt.clock(Int(seconds)) : "看到第\(episodeNumber)集"
+    }
 }
 
 /// Local-only watch history + favorites, persisted as JSON in UserDefaults.
