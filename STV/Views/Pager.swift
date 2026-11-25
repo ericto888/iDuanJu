@@ -9,10 +9,36 @@ final class Pager: ObservableObject {
     @Published private(set) var page = HGPage(items: [], hasMore: true, nextOffset: 0)
     private var fetch: ((HGPage, [HGSeries]) async throws -> HGPage)?
     private var token = UUID()
+    var onSnapshotChanged: (() -> Void)?
+
+    struct Snapshot {
+        let items: [HGSeries]
+        let page: HGPage
+        let hasMore: Bool
+    }
+
+    func snapshot() -> Snapshot {
+        Snapshot(items: items, page: page, hasMore: hasMore)
+    }
+
+    func restore(_ snapshot: Snapshot) {
+        token = UUID()
+        items = snapshot.items
+        page = snapshot.page
+        hasMore = snapshot.hasMore
+        isLoading = false
+        error = nil
+        onSnapshotChanged?()
+    }
+
+    func setFetcher(_ f: @escaping (HGPage, [HGSeries]) async throws -> HGPage) {
+        fetch = f
+    }
 
     func reset(_ f: @escaping (HGPage, [HGSeries]) async throws -> HGPage) {
         fetch = f; items = []; hasMore = true; error = nil; isLoading = false
         page = HGPage(items: [], hasMore: true, nextOffset: 0); token = UUID()
+        onSnapshotChanged?()
         loadMore()
     }
 
@@ -33,7 +59,10 @@ final class Pager: ObservableObject {
                 guard t == token else { return }
                 self.error = error
             }
-            if t == token { isLoading = false }
+            if t == token {
+                isLoading = false
+                onSnapshotChanged?()
+            }
         }
     }
 }
