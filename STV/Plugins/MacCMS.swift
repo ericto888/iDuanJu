@@ -240,13 +240,16 @@ struct MacCMSProvider: SiteProvider {
     }
 
     /// 只靠 type_name 会误判（“剧情片”是电影、“综艺片”是综艺），所以同时看总集数、
-    /// 线路集数和“更新至/全 N 集”这类备注。
+    /// 线路集数和“更新至/全 N 集”这类备注；明确是“片”的分类优先按电影处理，
+    /// 避免把上下集 / 多版本的单片误判成连续剧。
     static func isEpisodic(typeName: String, remarks: String, total: Int, episodeCount: Int) -> Bool {
         let lower = typeName.lowercased()
         let episodicType = (lower.contains("剧") && !lower.contains("片"))
             || ["动漫", "动画", "综艺", "番剧"].contains(where: { lower.contains($0) })
         let episodicRemark = remarks.contains("更新至")
             || (remarks.contains("集") && remarks.rangeOfCharacter(from: .decimalDigits) != nil)
+        let movieType = lower.contains("片") && !lower.contains("剧") && !episodicType
+        if movieType { return total > 1 || episodicRemark || episodeCount > 2 }
         return episodicType || episodicRemark || total > 1 || episodeCount > 1
     }
 
@@ -380,12 +383,10 @@ struct MacCMSProvider: SiteProvider {
                 let o = try await fetch(api, q, siteKey: siteKey, stage: "\(stage)·\(ac)")
                 guard o["list"] is [[String: Any]] else { throw ProviderError.upstream("采集站没有返回列表") }
                 if ac != "list" {
-                    // 部分站点忽略 pg 直接返回全量，或该模式返回空壳；页号/页数对不上就换下一种模式。
-                    let returned = Int(PluginOut.s(o["page"])) ?? p
-                    let pages = Int(PluginOut.s(o["pagecount"])) ?? 0
-                    let rows = (o["list"] as? [[String: Any]])?.count ?? 0
-                    if returned != p || (rows == 0 && pages == 0) {
-                        throw ProviderError.upstream("采集站不支持该模式（\(ac)）")
+                    // 部分站点忽略 pg 直接返回全量；页号缺失或对不上就换下一种模式。
+                    // 父分类没有直属内容时接口会返回空 list + pagecount=0，但 page 仍在，属于正常空结果。
+                    guard let returned = Int(PluginOut.s(o["page"])), returned == p else {
+                        throw ProviderError.upstream("采集站该模式不支持分页（\(ac)）")
                     }
                 }
                 return o
