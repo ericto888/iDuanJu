@@ -458,7 +458,6 @@ struct PlayerScreen: View {
                     }
             )
             .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in feedScrollY = y }
-            .compatSelectionFeedback(trigger: co.manualSelectionFeedback)
             .compatOnChange(of: co.readyIndex) { releaseHeldIfSettled() }
             .onScrollPhaseChange { _, phase in feedSettled = phase == .idle; releaseHeldIfSettled() }
             .accessibilityIdentifier("player.feed")
@@ -505,7 +504,6 @@ struct PlayerScreen: View {
                     if let new { feedScrollY = CGFloat(new) * pageH }
                 }
                 .compatOnChange(of: co.readyIndex) { releaseHeldIfSettled() }
-                .compatSelectionFeedback(trigger: co.manualSelectionFeedback)
                 .accessibilityIdentifier("player.feed")
                 .accessibilityValue(feedSettled ? "idle" : "scrolling")
             }

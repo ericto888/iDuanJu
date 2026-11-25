@@ -275,6 +275,7 @@ final class MPVMetalView: UIView {
         setOpt("demuxer-max-bytes", "64MiB")
         setOpt("demuxer-max-back-bytes", "16MiB")
         setOpt("network-timeout", "20")
+        setOpt("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=3")
         #if DEBUG
         setOpt("terminal", "no")
         #endif
@@ -444,9 +445,7 @@ final class MPVMetalView: UIView {
         if let ua = merged["User-Agent"] {
             _ = mpv_set_property_string(handle, "user-agent", ua)
         }
-        if let ref = merged["Referer"] {
-            _ = mpv_set_property_string(handle, "referrer", ref)
-        }
+        _ = mpv_set_property_string(handle, "referrer", merged["Referer"] ?? "")
         let extra = merged.filter { $0.key != "User-Agent" && $0.key != "Referer" }
             .map { "\($0.key): \($0.value)" }
             .joined(separator: ",")

@@ -820,8 +820,9 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         case .direct(let u):
             guard u.path.hasSuffix(".mp4") else { return nil }
             return AVURLAsset(url: u, options: mp4AssetOptions())
-        case .remote(let u, let h):
-            return AVURLAsset(url: u, options: mp4AssetOptions(headers: h))
+        case .remote:
+            // Never open a competing second connection to a remote CDN MP4 (breaks single-connection rate-limited CDNs like 91Porn).
+            return nil
         case .stream(let loader, let s):
             guard let u = URL(string: s), !MPVPlayerEngine.isPlaylist(u) else { return nil }
             return AVURLAsset(url: u, options: ["AVURLAssetHTTPHeaderFieldsKey": loader.headers])
