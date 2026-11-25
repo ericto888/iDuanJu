@@ -762,9 +762,9 @@ private struct DynamicSiteFeed: View {
 
     private var chips: some View {
         HomeChannelBar(
-            items: ["__recommendation"] + categories.map(\.id),
+            items: categories.map(\.id),
             selection: $selected,
-            label: { id in id == "__recommendation" ? "推荐" : (categories.first(where: { $0.id == id })?.title ?? id) },
+            label: { id in categories.first(where: { $0.id == id })?.title ?? id },
             ink: STVTheme.text
         ) {
             showAllCategories = true
