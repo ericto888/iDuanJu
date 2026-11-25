@@ -860,15 +860,17 @@ private struct DynamicSiteFeed: View {
         if let pluginID = source.pluginID,
            let response = try? await PluginRuntime.call(pluginID, "home", [:]) as? [String: Any] {
             let fresh = PluginOut.categories(response["categories"])
-            if !fresh.isEmpty {
-                await MainActor.run { PluginStore.shared.cacheCategories(pluginID, fresh) }
-                let categories = fresh.map {
-                    SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank)
-                }
-                let supportsFeatured = PluginStore.snapshot(pluginID)?.manifest.homeFeatures?.contains("featured") == true
-                let featured = supportsFeatured ? JSVideoProvider(source: source).featuredItems(from: response) : []
+            await MainActor.run { PluginStore.shared.cacheCategories(pluginID, fresh) }
+            let categories = fresh.map {
+                SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank)
+            }
+            let supportsFeatured = PluginStore.snapshot(pluginID)?.manifest.homeFeatures?.contains("featured") == true
+            let featured = supportsFeatured ? JSVideoProvider(source: source).featuredItems(from: response) : []
+            if !categories.isEmpty {
                 return DynamicHomeData(categories: categories, featured: featured)
             }
+            let cached = provider.categories.filter { !$0.id.isEmpty }
+            return DynamicHomeData(categories: cached.isEmpty ? [fallback] : cached, featured: featured)
         }
 
         // home() 不可用时仍兼容已有缓存分类及旧插件；没有能力声明时不推断推荐内容。
