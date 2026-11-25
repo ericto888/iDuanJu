@@ -10,7 +10,6 @@ on:
       - feat/plugin-builtin-source-overrides
       - main
       - fix/maccms-line-separator
-      - feature/source-aware-search-autocomplete
 
 permissions:
   contents: read
