@@ -58,6 +58,8 @@ struct PluginManifest: Codable, Hashable {
     var icon: String?
     var permissions: Permissions
     var capabilities: [String]
+    /// Optional UI features supported by the plugin's home() response (e.g. featured).
+    var homeFeatures: [String]?
     var settings: [Setting]?
     var update: Update?
     /// Optional built-in video source IDs this plugin replaces while enabled, e.g. ["xvideos"].
@@ -106,6 +108,11 @@ struct PluginManifest: Codable, Hashable {
             for target in overrides where !DramaSource.overridableBuiltins.contains(where: { $0.rawValue == target }) {
                 p.append("不允许接管该内置站源：\(target)")
             }
+        }
+        if let homeFeatures {
+            if Set(homeFeatures).count != homeFeatures.count { p.append("homeFeatures 不能包含重复能力") }
+            for feature in homeFeatures where feature != "featured" { p.append("不支持的首页能力：\\(feature)") }
+            if !homeFeatures.isEmpty && !capabilities.contains("home") { p.append("声明 homeFeatures 必须实现 home() 并在 capabilities 中声明 home") }
         }
         for s in settings ?? [] {
             if s.key.range(of: #"^[a-zA-Z][a-zA-Z0-9_]{0,31}$"#, options: .regularExpression) == nil { p.append("settings.key 不合法：\(s.key)") }
