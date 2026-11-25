@@ -145,6 +145,9 @@ struct SourcesView: View {
         case .xvideos: return "HLS 自适应 + MP4 · 需代理"
         case .xnxx: return "HLS 自适应 + MP4 · 需代理"
         case .pornhub: return "HLS 1080P/720P/480P · 需代理"
+        case .youporn: return "HLS + MP4 多画质 · 需代理"
+        case .redtube: return "HLS + MP4 多画质 · 需代理"
+        case .hqporner: return "MP4 多画质（mydaddy.cc 嵌入页）· 需代理"
         default:
             if let pluginID = s.pluginID {
                 return "JS 插件 · " + (PluginStore.snapshot(pluginID)?.manifest.httpDomains.first ?? "")
