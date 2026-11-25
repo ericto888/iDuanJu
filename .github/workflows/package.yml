@@ -9,6 +9,7 @@ on:
       - feat/online-source-store
       - feat/plugin-builtin-source-overrides
       - main
+      - feature/source-aware-search-autocomplete
       - fix/maccms-line-separator
 
 permissions:
