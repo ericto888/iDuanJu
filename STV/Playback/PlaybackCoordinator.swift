@@ -919,7 +919,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     }
 
     /// Long-video sources go through the loopback proxy so segments / MP4 ranges come from the byte
-    /// pre-buffer. AES-128 streams with an out-of-band key keep the resource-loader path.
+    /// pre-buffer. HLS AES-128 keys are served locally when already resolved out of band.
     private func prebuffered(_ s: HGStream, budget: Int, index i: Int) -> Source? {
         if let tok = LocalHLSProxy.token(of: s.url) {           // SupJav: already proxied
             LocalHLSProxy.shared.enablePrefetch(tok, budget: budget)
