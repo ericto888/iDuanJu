@@ -261,12 +261,21 @@ actor HuangguoClient {
                 return out.filter { $0.title.lowercased().contains(needle) }
             }) }
             for await (i, r) in g {
-                switch r { case .success(let s): groups[i] = s; case .failure(let e): errors.append(e) }
+                let sourceName = ["视频站", "AI站", "App源"].indices.contains(i) ? ["视频站", "AI站", "App源"][i] : "未知源"
+                switch r {
+                case .success(let items):
+                    groups[i] = items
+                    SiteLog.add("[黄果搜索] \(sourceName) 返回 \(items.count) 条")
+                case .failure(let error):
+                    errors.append(error)
+                    SiteLog.add("[黄果搜索] \(sourceName) 失败：\(error.localizedDescription)")
+                }
             }
         }
         var seen = Set<String>()
         // Same rule as Android HuangguoClient.blocked: never return minors / non-consent titles.
         let hits = groups.joined().filter { !Self.blocked($0) && seen.insert($0.id).inserted }
+        SiteLog.add("[黄果搜索] 汇总：视频站 \(groups[0].count)，AI站 \(groups[1].count)，App源 \(groups[2].count)，过滤去重后 \(hits.count)")
         if hits.isEmpty, let v = errors.first(where: { $0.verifyTarget != nil }) { throw v }
         if hits.isEmpty, errors.count == groups.count, let e = errors.first { throw ProviderError.upstream(e.localizedDescription) }
         return hits
