@@ -718,6 +718,11 @@ private final class SourceHomeCache {
 
     private var values: [String: Snapshot] = [:]
 
+    func remove(pluginID: String, overrides: [String] = []) {
+        values.removeValue(forKey: DramaSource.plugin(pluginID).rawValue)
+        for id in overrides { values.removeValue(forKey: id) }
+    }
+
     private func key(_ source: DramaSource) -> String {
         source.rawValue
     }
@@ -760,6 +765,7 @@ private struct DynamicSiteFeed: View {
     @State private var shelfItems: [String: [HGSeries]] = [:]
     @State private var shelfLoaded: Set<String> = []
     @State private var shelfLoading: Set<String> = []
+    @State private var shelfRequestTokens: [String: UUID] = [:]
     @State private var shelfErrors: [String: Error] = [:]
     @State private var selectedCategory: SiteCategory?
     @State private var heroCover: String?
@@ -883,6 +889,8 @@ private struct DynamicSiteFeed: View {
             await refresh()
         }
         .compatOnChange(of: heroCover) { cover in if let cover { onHero(cover) } }
+        .compatOnChange(of: selected) { _ in saveMemory() }
+        .compatOnChange(of: selectedCategory?.id) { _ in saveMemory() }
     }
 
     @ViewBuilder
@@ -1010,18 +1018,26 @@ private struct DynamicSiteFeed: View {
 
     @MainActor
     private func loadShelf(_ category: SiteCategory, force: Bool = false) async {
-        guard !shelfLoading.contains(category.id),
-              force || !shelfLoaded.contains(category.id) else { return }
+        guard force || (!shelfLoading.contains(category.id) && !shelfLoaded.contains(category.id)) else { return }
         guard let provider = Sites.provider(source) else { return }
+        let requestToken = UUID()
+        shelfRequestTokens[category.id] = requestToken
         shelfLoading.insert(category.id)
         shelfErrors[category.id] = nil
-        defer { shelfLoading.remove(category.id) }
+        defer {
+            if shelfRequestTokens[category.id] == requestToken {
+                shelfLoading.remove(category.id)
+                shelfRequestTokens[category.id] = nil
+            }
+        }
         do {
             let page = try await provider.list(category, page: 1)
+            guard shelfRequestTokens[category.id] == requestToken else { return }
             shelfItems[category.id] = page.items
             shelfLoaded.insert(category.id)
             shelfErrors[category.id] = nil
         } catch {
+            guard shelfRequestTokens[category.id] == requestToken else { return }
             shelfErrors[category.id] = error
         }
         saveMemory()
@@ -1033,11 +1049,13 @@ private struct DynamicSiteFeed: View {
         isRefreshing = true
         defer { isRefreshing = false }
 
+        let previousAllCategoryID = selectedCategory?.id
+        let previousSelectedID = selected
+        let previousLoadedShelves = shelfLoaded
         let home = await Self.loadHome(source)
         categories = home.categories
         featuredItems = home.featured
         featuredIndex = 0
-        let previouslyLoaded = shelfLoaded
         shelfErrors = [:]
 
         if let cover = featuredItems.first?.cover, !cover.isEmpty {
@@ -1045,19 +1063,25 @@ private struct DynamicSiteFeed: View {
             onHero(cover)
         }
 
-        let id = categories.contains { $0.id == selected }
-            ? selected
+        let id = categories.contains { $0.id == previousSelectedID }
+            ? previousSelectedID
             : (categories.first?.id ?? "")
         selected = id
-        selectedCategory = nil
+        selectedCategory = previousAllCategoryID.flatMap { oldID in
+            categories.first(where: { $0.id == oldID })
+        }
 
         if usesCategoryShelves {
             // Refresh only shelves already visited; the rest remain lazy-loaded as they enter view.
-            for category in categories where previouslyLoaded.contains(category.id) {
+            for category in categories where previousLoadedShelves.contains(category.id) {
                 await loadShelf(category, force: true)
             }
-        } else {
-            reload(id)
+        }
+
+        if let allCategory = selectedCategory {
+            await allPager.refreshPreservingDepth(allFetcher(for: allCategory))
+        } else if !usesCategoryShelves {
+            await pager.refreshPreservingDepth(selectedFetcher(for: id))
         }
         saveMemory()
     }
