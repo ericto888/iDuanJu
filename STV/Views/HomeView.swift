@@ -656,6 +656,7 @@ private struct DynamicSiteFeed: View {
     @StateObject private var pager = Pager()
     @State private var heroCover: String?
     @State private var didLoad = false
+    @State private var showAllCategories = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -727,28 +728,50 @@ private struct DynamicSiteFeed: View {
             didLoad = true
             await refresh()
         }
+        .sheet(isPresented: $showAllCategories) {
+            NavigationStack {
+                List(categories) { category in
+                    Button {
+                        selected = category.id
+                        showAllCategories = false
+                        reload(category.id)
+                    } label: {
+                        HStack {
+                            Text(category.title)
+                            Spacer()
+                            if selected == category.id {
+                                Image(systemName: "checkmark").foregroundStyle(STVTheme.accent)
+                            }
+                        }
+                    }
+                    .foregroundStyle(STVTheme.text)
+                }
+                .scrollContentBackground(.hidden)
+                .background(STVTheme.surface)
+                .navigationTitle("全部分类")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("完成") { showAllCategories = false }
+                    }
+                }
+            }
+        }
         .compatOnChange(of: heroCover) { cover in if let cover { onHero(cover) } }
     }
 
     private var chips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(categories) { c in
-                    let on = c.id == selected
-                    Button { selected = c.id; reload(c.id) } label: {
-                        Text(c.title).font(.system(size: 13, weight: on ? .semibold : .regular))
-                            .foregroundStyle(on ? STVTheme.bg : STVTheme.text.opacity(0.8))
-                            .padding(.horizontal, 12).frame(height: 30)
-                            .background(on ? STVTheme.text : STVTheme.text.opacity(0.1), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("home.module.\(c.title)")
-                    .accessibilityAddTraits(on ? .isSelected : [])
-                }
-            }.padding(.horizontal, 16)
+        HomeChannelBar(
+            items: categories.map(\\.id),
+            selection: $selected,
+            label: { id in categories.first(where: { $0.id == id })?.title ?? id },
+            ink: STVTheme.text
+        ) {
+            showAllCategories = true
         }
-        .compatScrollBounceBasedOnSize(axes: .horizontal)
+        .padding(.horizontal, 12)
         .padding(.bottom, 4)
+        .accessibilityIdentifier("home.dynamic.categoryBar")
     }
 
     private var cardsSkeleton: some View {
