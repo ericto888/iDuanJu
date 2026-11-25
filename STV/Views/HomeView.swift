@@ -730,7 +730,22 @@ private struct DynamicSiteFeed: View {
         }
         .sheet(isPresented: $showAllCategories) {
             NavigationStack {
-                List(categories) { category in
+                List {
+                    Button {
+                        selectedChannelID = "__recommendation"
+                        showCategoryList = false
+                        Task { await loadAll(SiteCategory(id: "browse", title: "推荐", path: "browse")) }
+                    } label: {
+                        HStack {
+                            Text("推荐")
+                            Spacer()
+                            if selectedChannelID == "__recommendation" {
+                                Image(systemName: "checkmark").foregroundStyle(STVTheme.accent)
+                            }
+                        }
+                    }
+                    .foregroundStyle(STVTheme.text)
+                    ForEach(categories) { category in
                     Button {
                         selected = category.id
                         showAllCategories = false
@@ -745,6 +760,7 @@ private struct DynamicSiteFeed: View {
                         }
                     }
                     .foregroundStyle(STVTheme.text)
+                    }
                 }
                 .scrollContentBackground(.hidden)
                 .background(STVTheme.surface)
@@ -762,9 +778,9 @@ private struct DynamicSiteFeed: View {
 
     private var chips: some View {
         HomeChannelBar(
-            items: categories.map(\.id),
+            items: ["__recommendation"] + categories.map(\.id),
             selection: $selected,
-            label: { id in categories.first(where: { $0.id == id })?.title ?? id },
+            label: { id in id == "__recommendation" ? "推荐" : (categories.first(where: { $0.id == id })?.title ?? id) },
             ink: STVTheme.text
         ) {
             showAllCategories = true
@@ -890,7 +906,9 @@ private struct HuangguaHomeFeed: View {
                             get: { selectedChannelID },
                             set: { id in
                                 selectedChannelID = id
-                                if let category = categories.first(where: { $0.id == id }) {
+                                if id == "__recommendation" {
+                                    Task { await loadAll(SiteCategory(id: "browse", title: "推荐", path: "browse")) }
+                                } else if let category = categories.first(where: { $0.id == id }) {
                                     Task { await loadAll(category) }
                                 }
                             }
@@ -1054,8 +1072,8 @@ private struct HuangguaHomeFeed: View {
             let fresh = PluginOut.categories(home["categories"]).filter { !$0.id.isEmpty }
             PluginStore.shared.cacheCategories(pluginID, fresh)
             categories = fresh.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id) }
-            if !categories.contains(where: { $0.id == selectedChannelID }) {
-                selectedChannelID = categories.first?.id ?? ""
+            if selectedChannelID.isEmpty || (selectedChannelID != "__recommendation" && !categories.contains(where: { $0.id == selectedChannelID })) {
+                selectedChannelID = "__recommendation"
             }
 
             // 推荐是站源声明的真实分类（黄瓜当前 ID 为 browse），不借用空 ID 推断。
