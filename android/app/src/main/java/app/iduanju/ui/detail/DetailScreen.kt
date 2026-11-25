@@ -54,7 +54,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.iduanju.IdjApp
 import app.iduanju.core.hongguo.HGEpisode
-import app.iduanju.core.hongguo.HGDetailFact
 import app.iduanju.core.hongguo.HGSeries
 import app.iduanju.core.hongguo.HGSeriesDetail
 import app.iduanju.ui.home.HomeFmt
@@ -230,9 +229,6 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
                         startEp = startEp,
                         onPlay = onPlay,
                     )
-                    if (dd.facts.isNotEmpty()) {
-                        FactsCard(dd.facts, Modifier.padding(top = 14.dp), inset = 24.dp)
-                    }
                     if (dd.desc.isNotEmpty()) {
                         Intro(dd.desc, horizontalPadding = 24.dp, topPadding = 22.dp, collapsedLines = 4)
                     }
@@ -621,7 +617,6 @@ private fun DetailBody(
     val c = IdjThemeColors
     val go = app.iduanju.ui.LocalNavigate.current
     Stats(d, Modifier.padding(top = 18.dp))
-    if (d.facts.isNotEmpty()) FactsCard(d.facts, Modifier.padding(top = 14.dp))
     if (showActions) {
         Row(Modifier.padding(horizontal = 20.dp).padding(top = 16.dp).onGloballyPositioned { onActions(it.boundsInRoot().bottom) },
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -786,31 +781,6 @@ private fun Stats(d: HGSeriesDetail, modifier: Modifier = Modifier) {
             }
         }
       }
-    }
-}
-
-/** `.facts`: 两列信息条（上线日期 / 出品 / 更新状态 / 播放次数 / 单集片长 / 题材类型）。 */
-@Composable
-private fun FactsCard(facts: List<HGDetailFact>, modifier: Modifier = Modifier, inset: Dp = 20.dp) {
-    val c = IdjThemeColors
-    Column(
-        modifier.padding(horizontal = inset).fillMaxWidth().dsCard(16.dp).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        facts.chunked(2).forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                row.forEach { f ->
-                    Column(Modifier.weight(1f)) {
-                        Text(f.label, color = c.secondary, fontSize = 11.sp, maxLines = 1)
-                        Text(
-                            f.value, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                            maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp),
-                        )
-                    }
-                }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
-            }
-        }
     }
 }
 

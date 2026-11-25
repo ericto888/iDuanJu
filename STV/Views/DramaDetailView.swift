@@ -337,7 +337,6 @@ struct DramaDetailView: View {
 
     @ViewBuilder private func detailBody(_ d: HGSeriesDetail, showActions: Bool = true) -> some View {
         stats(d).padding(.top, 18)
-        if !d.facts.isEmpty { factsCard(d.facts).padding(.top, 14) }
 
         if showActions {
             HStack(spacing: 12) {
@@ -434,25 +433,6 @@ struct DramaDetailView: View {
         .padding(.horizontal, 20)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("detail.stats")
-    }
-
-    private func factsCard(_ facts: [HGDetailFact]) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 16, alignment: .leading),
-                            GridItem(.flexible(), spacing: 16, alignment: .leading)],
-                  alignment: .leading, spacing: 12) {
-            ForEach(facts) { f in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(f.label).font(.system(size: 11)).foregroundStyle(STVTheme.secondary).lineLimit(1)
-                    Text(f.value).font(.system(size: 13, weight: .medium)).foregroundStyle(STVTheme.text)
-                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .padding(14)
-        .dsCard(16)
-        .padding(.horizontal, 20)
-        .accessibilityIdentifier("detail.facts")
     }
 
     private func intro(_ text: String) -> some View {

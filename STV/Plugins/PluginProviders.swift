@@ -355,16 +355,11 @@ struct JSVideoProvider: SiteProvider {
             }
         }
         let cover = PluginOut.url(o["cover"])
-        let facts = ((o["facts"] as? [[String: Any]]) ?? []).prefix(10).compactMap { f -> HGDetailFact? in
-            let label = PluginOut.s(f["label"], max: 20)
-            let value = PluginOut.s(f["value"], max: 160)
-            return label.isEmpty || value.isEmpty ? nil : HGDetailFact(label: label, value: value)
-        }
         return HGSeriesDetail(source: source, seriesId: s.seriesId, title: title,
                               cover: cover.isEmpty ? s.cover : PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"])),
                               desc: PluginOut.s(o["desc"], max: 4000), author: PluginOut.s(o["director"], max: 80).nilIfEmpty,
-                              actors: PluginOut.strings(o["actors"]), onlineTime: (o["onlineTime"] as? Int) ?? 0, totalEps: eps.count, episodes: eps, tags: tags,
-                              episodeLabel: eps.count > 1 ? "共\(eps.count)集" : "长视频", facts: facts)
+                              actors: PluginOut.strings(o["actors"]), onlineTime: 0, totalEps: eps.count, episodes: eps, tags: tags,
+                              episodeLabel: eps.count > 1 ? "共\(eps.count)集" : "长视频")
     }
 
     func resolve(_ s: HGSeries, _ ep: HGEpisode) async throws -> HGResolvedVideo {
