@@ -368,7 +368,7 @@ struct HomeView: View {
         case .hongguo: return .hongguo
         case .huangguo: return .huangguo
         case .ai:
-            if case .huangguo(.ai) = subs[.ai] { return .huangguo }
+            if case .some(.huangguo(.ai)) = subs[.ai] { return .huangguo }
             return .hongguo
         case .site(let site): return site
         case .channels, .manga, .novel: return .hongguo
