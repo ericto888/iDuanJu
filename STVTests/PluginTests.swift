@@ -262,6 +262,9 @@ final class PluginTests: XCTestCase {
         let featuredHome = try m(["type": "shortdrama", "capabilities": ["detail", "play", "home"], "homeFeatures": ["featured"]])
         XCTAssertEqual(featuredHome.homeFeatures, ["featured"])
         XCTAssertTrue(featuredHome.problems(appVersion: "1.5").isEmpty)
+        let shelfHome = try m(["type": "shortdrama", "capabilities": ["detail", "play", "home"], "homeFeatures": ["featured", "categoryShelves"]])
+        XCTAssertEqual(shelfHome.homeFeatures, ["featured", "categoryShelves"])
+        XCTAssertTrue(shelfHome.problems(appVersion: "1.5").isEmpty)
         XCTAssertFalse(try m(["homeFeatures": ["featured"]]).problems(appVersion: "1.5").isEmpty,
                        "homeFeatures must require the home() capability")
         XCTAssertFalse(try m(["type": "shortdrama", "capabilities": ["detail", "play", "home"], "homeFeatures": ["unknown"]]).problems(appVersion: "1.5").isEmpty)
