@@ -699,6 +699,36 @@ private struct SiteCategoryChipBar: View {
     }
 }
 
+@MainActor
+private final class DynamicSiteFeedMemory {
+    static let shared = DynamicSiteFeedMemory()
+
+    struct Snapshot {
+        var categories: [SiteCategory]
+        var selected: String
+        var featuredItems: [HGSeries]
+        var featuredIndex: Int
+        var shelfItems: [String: [HGSeries]]
+        var shelfLoaded: Set<String>
+        var selectedCategoryID: String?
+        var heroCover: String?
+    }
+
+    private var values: [String: Snapshot] = [:]
+
+    private func key(_ source: DramaSource) -> String {
+        source.pluginID ?? source.cmsKey ?? source.label
+    }
+
+    func snapshot(for source: DramaSource) -> Snapshot? {
+        values[key(source)]
+    }
+
+    func save(_ snapshot: Snapshot, for source: DramaSource) {
+        values[key(source)] = snapshot
+    }
+}
+
 /// CMS / JS plugin home: every returned category is a selectable module, and the selected one pages its own list.
 /// One renderer for every CMS / JavaScript video source.
 /// The site supplies categories and optional homeFeatures; refresh, paging and category loading
@@ -814,6 +844,20 @@ private struct DynamicSiteFeed: View {
         .task {
             guard !didLoad else { return }
             didLoad = true
+            if let cached = DynamicSiteFeedMemory.shared.snapshot(for: source) {
+                categories = cached.categories
+                selected = cached.selected
+                featuredItems = cached.featuredItems
+                featuredIndex = min(cached.featuredIndex, max(0, cached.featuredItems.count - 1))
+                shelfItems = cached.shelfItems
+                shelfLoaded = cached.shelfLoaded
+                selectedCategory = cached.selectedCategoryID.flatMap { id in
+                    cached.categories.first(where: { $0.id == id })
+                }
+                heroCover = cached.heroCover
+                if let cover = cached.heroCover, !cover.isEmpty { onHero(cover) }
+                return
+            }
             await refresh()
         }
         .compatOnChange(of: heroCover) { cover in if let cover { onHero(cover) } }
@@ -821,7 +865,7 @@ private struct DynamicSiteFeed: View {
 
     @ViewBuilder
     private func categoryBar(_ proxy: ScrollViewProxy) -> some View {
-        if categories.count > 1 {
+        if !categories.isEmpty {
             SiteCategoryChipBar(categories: categories, selection: $selected) { category in
                 if usesCategoryShelves {
                     withAnimation(.compatSnappy) {
@@ -958,6 +1002,7 @@ private struct DynamicSiteFeed: View {
         } catch {
             shelfErrors[category.id] = error
         }
+        saveMemory()
     }
 
     @MainActor
@@ -992,6 +1037,17 @@ private struct DynamicSiteFeed: View {
         } else {
             reload(id)
         }
+        saveMemory()
+    }
+
+    @MainActor
+    private func saveMemory() {
+        DynamicSiteFeedMemory.shared.save(
+            .init(categories: categories, selected: selected, featuredItems: featuredItems,
+                  featuredIndex: featuredIndex, shelfItems: shelfItems, shelfLoaded: shelfLoaded,
+                  selectedCategoryID: selectedCategory?.id, heroCover: heroCover),
+            for: source
+        )
     }
 
     private func reload(_ id: String) {
@@ -1025,6 +1081,7 @@ private struct DynamicSiteFeed: View {
     @MainActor
     private func showAll(_ category: SiteCategory) {
         selectedCategory = category
+        saveMemory()
         reloadAll(category)
     }
 
