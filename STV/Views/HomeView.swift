@@ -700,7 +700,7 @@ private struct SiteCategoryChipBar: View {
 }
 
 @MainActor
-private final class SourceHomeCache {
+final class SourceHomeCache {
     static let shared = SourceHomeCache()
 
     struct Snapshot {
