@@ -26,7 +26,7 @@ struct SearchView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            SearchField(text: $query, placeholder: "搜索\\(source.label)短剧", onSubmit: submit, onCancel: pushed ? { dismiss() } : (submitted.isEmpty ? nil : { query = ""; submitted = "" }))
+            SearchField(text: $query, placeholder: "搜索\(source.label)短剧", onSubmit: submit, onCancel: pushed ? { dismiss() } : (submitted.isEmpty ? nil : { query = ""; submitted = "" }))
                 .padding(.horizontal, 16).padding(.top, 6)
             if submitted.isEmpty && source == .hongguo && !suggestions.isEmpty {
                 suggestionList
@@ -124,7 +124,7 @@ struct SearchView: View {
 
     @ViewBuilder private var suggestionList: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(suggestions, id: \\.id) { item in
+            ForEach(suggestions, id: \.id) { item in
                 NavigationLink(value: Route.series(item)) {
                     HStack(spacing: 10) {
                         Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(STVTheme.secondary)
