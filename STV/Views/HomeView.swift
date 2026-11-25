@@ -361,13 +361,27 @@ struct HomeView: View {
         )
     }
 
+    /// Resolve the search provider from the page currently selected in the home source pager.
+    /// The AI page follows its selected sub-board (Hongguo AI or Huangguo AI).
+    private var activeSearchSource: DramaSource {
+        switch source {
+        case .hongguo: return .hongguo
+        case .huangguo: return .huangguo
+        case .ai:
+            if case .huangguo(.ai) = subs[.ai] { return .huangguo }
+            return .hongguo
+        case .site(let site): return site
+        case .channels, .manga, .novel: return .hongguo
+        }
+    }
+
     // MARK: Header (search + filter, source bar)
 
     private var header: some View {
         VStack(spacing: 0) {
             if !headerHidden {
                 HStack(spacing: 0) {
-                    NavigationLink(value: Route.search) {
+                    NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
                         DSSearchBarLabel()
                             .padding(.leading, 16).frame(height: 46).contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityIdentifier("home.search")
