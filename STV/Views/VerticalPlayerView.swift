@@ -86,9 +86,8 @@ struct PlayerScreen: View {
     /// A display-only lift for wide clips on an upright iPhone. It is independent of PiP state.
     private var videoLift: CGFloat {
         guard !layoutMetrics.isPad, aspect > 1.0 else { return 0 }
-        let upright = displayOrientation == .portrait || displayOrientation == .portraitUpsideDown
-        let unknownFallback = displayOrientation == .unknown && !landscape
-        return upright || unknownFallback ? 44 : 0
+        let upright = displayOrientation.isPortrait
+        return upright ? 44 : 0
     }
     private var keepsChromeVisible: Bool { portraitLandscapeClip }
     private var canShowPadSplit: Bool {
@@ -355,7 +354,12 @@ struct PlayerScreen: View {
         .onAppear {
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             let orientation = UIDevice.current.orientation
-            if orientation.isPortrait || orientation.isLandscape { displayOrientation = orientation }
+            if orientation.isPortrait || orientation.isLandscape {
+                displayOrientation = orientation
+            } else {
+                // Capture the presentation orientation once; do not fall back to transient PiP size classes later.
+                displayOrientation = landscape ? .landscapeLeft : .portrait
+            }
             StatusBarGate.shared.setHidden(landscape || !controlsVisible || panel == .danmaku, animated: false)
         }
         .compatOnChange(of: landscape || !controlsVisible || panel == .danmaku) { hideBar in
