@@ -54,7 +54,7 @@ struct SourcesView: View {
                             label("去广告", "nosign", sub: "去掉 HLS 片源里插播的广告片段（adjump、异域名短片段、AES 片源中的明文短片段、重复片段）；不会整段丢弃正片的分段标记")
                         }.padding(14).accessibilityIdentifier("settings.adstrip")
                         VStack(alignment: .leading, spacing: 10) {
-                            label("播放内核", "cpu", sub: "默认使用系统播放器（原生支持画中画小窗、功耗更低）；如需播放杜比视界/HDR10/DTS/TrueHD 或内置 ASS 字幕，可切换为 MPVKit（暂不支持画中画）")
+                            label("播放内核", "cpu", sub: "默认自动按视频格式选择内核：HLS/MP4 优先系统播放器（原生画中画、功耗更低），FLV/MKV/TS 等优先 MPVKit；任一内核失败会自动切换备用内核。")
                             Picker("播放内核", selection: Binding(get: { engineKind }, set: { engineKind = $0; PlayerEngineSettings.preferred = $0 })) {
                                 ForEach(PlayerEngineKind.allCases, id: \.self) { Text($0.label).tag($0) }
                             }
@@ -201,6 +201,10 @@ struct PlayerCoreLicenses: View {
         Item(id: "dovi", title: "libdovi（dovi_tool dolby_vision crate）", license: "MIT · Copyright (c) quietvoid and contributors",
              links: [("github.com/quietvoid/dovi_tool", "https://github.com/quietvoid/dovi_tool")],
              note: "Dolby Vision Profile 5/7/8 RPU 解析（MIT）。", files: ["LibDovi-LICENSE"]),
+        Item(id: "cpython", title: "CPython 3.13（Python 脚本运行时）", license: "PSF-2.0 · Copyright © Python Software Foundation",
+             links: [("python.org", "https://www.python.org"), ("BeeWare Python-Apple-support 3.13-b18", "https://github.com/beeware/Python-Apple-support/releases/tag/3.13-b18")],
+             note: "运行 TVBox 的 Python 站点脚本；标准库已精简。内含 Expat、libffi、mpdecimal、bzip2、liblzma、HACL* 等组件，全文见下。部分构建不包含该运行时。",
+             files: ["CPython-LICENSE", "CPython-components"]),
     ]
     private func text(_ f: String) -> String {
         Bundle.main.url(forResource: f, withExtension: "txt").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? f
