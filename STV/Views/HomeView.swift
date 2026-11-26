@@ -219,7 +219,7 @@ final class HomeHeroSelection: ObservableObject {
 
     func configure(_ boards: [BoardSpec], fallback: Bool) {
         let candidates = fallback ? boards : Array(boards.prefix(1))
-        let nextIDs = candidates.map(\\.id)
+        let nextIDs = candidates.map(\.id)
         guard nextIDs != ids else {
             candidates.forEach { BoardCache.shared.feed($0).load() }
             return
@@ -567,9 +567,7 @@ private struct HomeFeedPage: View {
                             .padding(.top, 16)
                             .transition(.opacity)
                     }
-                    if source == .hongguo, !library.continueWatching.isEmpty {
-                        HomeContinueRow(items: library.continueWatching).padding(.top, 24)
-                    }
+                    if source == .hongguo { HomeContinueSection() }
                     sections
                 }
             }
@@ -601,7 +599,7 @@ private struct HomeFeedPage: View {
         }
         .onAppear { loadHomeBoards(); reportHero() }
         .compatOnChange(of: tab) { loadHomeBoards() }
-        .compatOnChange(of: boards.map(\\.id)) { _ in loadHomeBoards() }
+        .compatOnChange(of: boards.map(\.id)) { _ in loadHomeBoards() }
         .compatOnChange(of: heroKey) { reportHero() }
         .compatOnChange(of: heroPicks.count) { count in
             if heroIndex >= count { heroIndex = 0 }
@@ -665,11 +663,11 @@ private struct HomeFeedPage: View {
             if let legacyError { ErrorStateView(error: legacyError) { Task { await loadLegacy() } } }
             else { cardsSkeleton }
         } else {
-            ForEach(Array(boards.enumerated()), id: \\.element.id) { n, board in
+            ForEach(Array(boards.enumerated()), id: \.element.id) { n, board in
                 HomeBoardSection(
                     feed: BoardCache.shared.feed(board),
                     board: board,
-                    heroIDs: Set(heroPicks.map(\\.id)),
+                    heroIDs: Set(heroPicks.map(\.id)),
                     isHeroBoard: board.id == heroBoard?.id,
                     landscape: { if case .site(let site) = tab { return site.isLongVideo }; return false }(),
                     topPadding: n == 0 && heroPicks.isEmpty ? 18 : 24,
@@ -717,7 +715,7 @@ private struct HomeBoardSection: View {
                 VStack(alignment: .leading, spacing: 12) {
                     DSSectionHeader(title: board.title)
                     LazyVGrid(columns: HomeSection.columns(landscape: landscape), spacing: 16) {
-                        ForEach(0..<(landscape ? 2 : 3), id: \\.self) { _ in
+                        ForEach(0..<(landscape ? 2 : 3), id: \.self) { _ in
                             VStack(alignment: .leading, spacing: 8) {
                                 ShimmerBlock().aspectRatio(landscape ? 16/9 : 3/4, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12))
                                 ShimmerBlock().frame(height: 12).frame(maxWidth: 90)
