@@ -89,16 +89,12 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     /// 4 Hz state: observed only by the views that draw it (see `PlaybackClock`).
     let clock = PlaybackClock()
     let telemetry = PlaybackTelemetry()
-    // Compatibility surface for the locally customised player UI. These values are backed by the upstream split stores.
-    var scrubPreview: Double? {
-        get { clock.scrubPreview }
-        set { clock.scrubPreview = newValue }
-    }
-    var prebuffer: (bytes: Int, until: Double, lowStorage: Bool)? {
-        guard let value = telemetry.prebuffer else { return nil }
-        return (value.bytes, value.until, value.lowStorage)
-    }
-    var subtitleText: String? { telemetry.subtitle }
+    // Published compatibility surface for the locally customised player UI.
+    // Keep the old view bindings reactive while the upstream clock / telemetry stay split into their own stores.
+    @Published var scrubPreview: Double?
+    @Published private(set) var prebuffer: (bytes: Int, until: Double, lowStorage: Bool)?
+    @Published private(set) var subtitleText: String?
+    private var compatibilitySubscriptions = Set<AnyCancellable>()
     var time: Double { clock.sample.time }
     var duration: Double { clock.sample.duration }
     var bufferedUntil: Double { clock.sample.bufferedUntil }
@@ -296,6 +292,14 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         self.av = a
         self.engine = engine ?? a
         super.init()
+        telemetry.$prebuffer.sink { [weak self] value in
+            Task { @MainActor [weak self] in
+                self?.prebuffer = value.map { ($0.bytes, $0.until, $0.lowStorage) }
+            }
+        }.store(in: &compatibilitySubscriptions)
+        telemetry.$subtitle.sink { [weak self] value in
+            Task { @MainActor [weak self] in self?.subtitleText = value }
+        }.store(in: &compatibilitySubscriptions)
     }
 
     func start() {
