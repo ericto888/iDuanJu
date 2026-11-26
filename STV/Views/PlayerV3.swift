@@ -41,7 +41,7 @@ struct PlayerTechStrip: View {
 
 /// ⟲10 · ▶ (76 pt glass, the outer ring doubles as buffer / loading progress) · ⟳10.
 struct PlayerCenterControls: View {
-    let co: PlaybackCoordinator
+    @ObservedObject var co: PlaybackCoordinator
     @ObservedObject private var clock: PlaybackClock
     let onInteract: () -> Void
     var spacing: CGFloat = 44
@@ -171,7 +171,7 @@ struct PlayerTimelineV3: View {
 
     init(co: PlaybackCoordinator, scrubbing: Binding<Bool>, onInteract: @escaping () -> Void = {},
          landscape: Bool = false, onFullscreen: (() -> Void)? = nil, inline: Bool = false) {
-        self.co = co
+        self._co = ObservedObject(wrappedValue: co)
         self._clock = ObservedObject(wrappedValue: co.clock)
         self._scrubbing = scrubbing
         self.onInteract = onInteract
