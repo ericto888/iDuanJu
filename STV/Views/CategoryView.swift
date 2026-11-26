@@ -119,11 +119,9 @@ struct CategoryView: View {
 
     /// `.topfade`: page colour under the status bar, fading out over the content once it scrolls.
     private var topFade: some View {
-        LinearGradient(stops: [.init(color: STVTheme.bg, location: 0), .init(color: STVTheme.bg, location: 0.42), .init(color: STVTheme.bg.opacity(0), location: 1)],
-                       startPoint: .top, endPoint: .bottom)
-            .frame(height: collapsed && mode == .filter ? 70 : 24)
-            .ignoresSafeArea(edges: .top)
-            .opacity(scrolled ? 1 : 0)
+        Color.clear.frame(height: collapsed && mode == .filter ? 52 : 2)
+            .frame(maxWidth: .infinity)
+            .background { LiquidEdgeFade(visible: scrolled) }
             .allowsHitTesting(false)
     }
 
