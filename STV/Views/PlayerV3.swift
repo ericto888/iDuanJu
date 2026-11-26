@@ -230,7 +230,7 @@ struct PlayerTimelineV3: View {
 // MARK: Icon row
 
 enum PlayerPanel: String, Identifiable {
-    case episodes, quality, rates, audio, subtitles, danmaku, more
+    case episodes, quality, rates, audio, subtitles, danmaku, more, guide
     var id: Self { self }
 }
 
