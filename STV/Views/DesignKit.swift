@@ -128,7 +128,7 @@ private struct StatusFade: ViewModifier {
             .compatOnScrolled(threshold: 6) { if scrolled != $0 { scrolled = $0 } }
             .overlay(alignment: .top) {
                 Color.clear.frame(height: 2).frame(maxWidth: .infinity)
-                    .background { LiquidEdgeFade(visible: scrolled) }
+                    .background { LiquidEdgeFade(visible: scrolled, overhang: 56) }
                     .allowsHitTesting(false)
             }
     }
