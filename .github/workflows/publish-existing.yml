@@ -154,9 +154,9 @@ jobs:
             if [ "$REPLACE_DRAFT" = true ]; then
               gh release upload "$tag" dist/"$platform"/* --clobber
               gh api --method PATCH "repos/$GH_REPO/git/refs/tags/$tag" -f sha="$BUILD_SHA" -F force=true >/dev/null
-              gh release edit "$tag" --target "$BUILD_SHA" --title "$title" --notes-file "$platform-notes.md" --prerelease --draft=true
+              gh release edit "$tag" --target "$BUILD_SHA" --title "$title" --notes-file "$platform-notes.md" --prerelease=false --draft=true
             else
-              gh release create "$tag" dist/"$platform"/* --target "$BUILD_SHA" --title "$title" --notes-file "$platform-notes.md" --prerelease --draft
+              gh release create "$tag" dist/"$platform"/* --target "$BUILD_SHA" --title "$title" --notes-file "$platform-notes.md" --draft
             fi
             gh release view "$tag" --json assets > "$platform-assets.json"
             PLATFORM="$platform" python3 - <<'PY'
@@ -173,5 +173,5 @@ jobs:
           done
           # Both platforms are staged and verified before making either visible.
           for tag in "$ANDROID_TAG" "$IOS_TAG"; do
-            gh release edit "$tag" --draft=false --prerelease
+            gh release edit "$tag" --draft=false --prerelease=false
           done
