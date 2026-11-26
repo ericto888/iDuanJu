@@ -91,7 +91,10 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     let telemetry = PlaybackTelemetry()
     // Published compatibility surface for the locally customised player UI.
     // Keep the old view bindings reactive while the upstream clock / telemetry stay split into their own stores.
-    @Published var scrubPreview: Double?
+    var scrubPreview: Double? {
+        get { clock.scrubPreview }
+        set { clock.scrubPreview = newValue }
+    }
     @Published private(set) var prebuffer: (bytes: Int, until: Double, lowStorage: Bool)?
     @Published private(set) var subtitleText: String?
     @Published private(set) var time: Double = 0
@@ -292,6 +295,9 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         self.av = a
         self.engine = engine ?? a
         super.init()
+        clock.$scrubPreview.sink { [weak self] _ in
+            Task { @MainActor [weak self] in self?.objectWillChange.send() }
+        }.store(in: &compatibilitySubscriptions)
         clock.$sample.sink { [weak self] sample in
             Task { @MainActor [weak self] in
                 self?.time = sample.time
