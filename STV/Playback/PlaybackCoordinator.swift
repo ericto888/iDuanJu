@@ -94,10 +94,11 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     @Published var scrubPreview: Double?
     @Published private(set) var prebuffer: (bytes: Int, until: Double, lowStorage: Bool)?
     @Published private(set) var subtitleText: String?
+    @Published private(set) var time: Double = 0
+    @Published private(set) var duration: Double = 0
+    @Published private(set) var bufferedUntil: Double = 0
+    @Published private(set) var tech: PlayerTech?
     private var compatibilitySubscriptions = Set<AnyCancellable>()
-    var time: Double { clock.sample.time }
-    var duration: Double { clock.sample.duration }
-    var bufferedUntil: Double { clock.sample.bufferedUntil }
     /// User intent survives buffering, episode replacement and system interruptions.
     @Published private var wantsPlayback = true
     @Published private var transportPaused = false
@@ -136,7 +137,6 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     /// Design v3 chrome: rendered video size, audio / subtitle options, auto-advance.
     @Published private(set) var videoSize: CGSize = .zero
     /// Full readout lives in `telemetry.tech`; these two change rarely and drive chrome.
-    var tech: PlayerTech? { telemetry.tech }
     @Published private(set) var resolutionLabel = ""
     @Published private(set) var nativeHDR = false
     @Published private(set) var audioOptions: [MediaTrack] = []
@@ -292,6 +292,16 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         self.av = a
         self.engine = engine ?? a
         super.init()
+        clock.$sample.sink { [weak self] sample in
+            Task { @MainActor [weak self] in
+                self?.time = sample.time
+                self?.duration = sample.duration
+                self?.bufferedUntil = sample.bufferedUntil
+            }
+        }.store(in: &compatibilitySubscriptions)
+        telemetry.$tech.sink { [weak self] value in
+            Task { @MainActor [weak self] in self?.tech = value }
+        }.store(in: &compatibilitySubscriptions)
         telemetry.$prebuffer.sink { [weak self] value in
             Task { @MainActor [weak self] in
                 self?.prebuffer = value.map { ($0.bytes, $0.until, $0.lowStorage) }
