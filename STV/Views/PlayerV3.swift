@@ -108,10 +108,25 @@ struct PlayerMetaRow: View {
     let line: String
     let lineStrong: String
     let rest: String
-    var showSkip = false
+    @ObservedObject private var clock: PlaybackClock
+    let introEnd: Double
+    let skipReady: Bool
     var onSkip: () -> Void = {}
 
+    init(source: String?, line: String, lineStrong: String, rest: String, clock: PlaybackClock,
+         introEnd: Double, skipReady: Bool, onSkip: @escaping () -> Void = {}) {
+        self.source = source
+        self.line = line
+        self.lineStrong = lineStrong
+        self.rest = rest
+        self._clock = ObservedObject(wrappedValue: clock)
+        self.introEnd = introEnd
+        self.skipReady = skipReady
+        self.onSkip = onSkip
+    }
+
     var body: some View {
+        let showSkip = skipReady && clock.sample.time < introEnd - 1 && clock.sample.duration > introEnd + 30
         HStack(spacing: 8) {
             if let source {
                 Text(source).font(.system(size: 11, weight: .semibold))

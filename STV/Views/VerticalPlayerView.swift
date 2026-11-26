@@ -1012,7 +1012,7 @@ struct PlayerScreen: View {
             line = seasonTag.map { $0 + " · " } ?? ""; strong = "第\(e.ep)集"; rest = " / 共\(co.episodes.count)集"
         }
         return PlayerMetaRow(source: shortFixture ? "本地彩条测试" : (longList && co.episodes.count > 1 ? nil : series.source.label), line: line, lineStrong: strong, rest: rest,
-                             showSkip: skip && showSkip, onSkip: skipIntro)
+                             clock: co.clock, introEnd: introEnd, skipReady: skip, onSkip: skipIntro)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("player.episodeInfo")
             .accessibilityValue("第\(e.ep)集")
