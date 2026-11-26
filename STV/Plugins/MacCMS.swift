@@ -349,7 +349,7 @@ struct MacCMSProvider: SiteProvider {
 }
 
 /// MacCMS RSS uses one <dd flag="…"> per playback line and carries pagination on <list>.
-private final class CMSXML: NSObject, XMLParserDelegate {
+final class CMSXML: NSObject, XMLParserDelegate {
     var output: [String: Any] = [:]
     var videos: [[String: String]] = [], categories: [[String: String]] = []
     var video: [String: String]?, flags: [String] = [], urls: [String] = []
