@@ -248,8 +248,12 @@ struct PluginsView: View {
                     if e.adult ?? true { DSTag(text: "18+") }
                     Spacer(minLength: 0)
                     if let installed = store.plugin(e.id) {
-                        Text(e.version.map { PluginManifest.compare($0, installed.manifest.version) > 0 ? "可更新 \($0)" : "已安装" } ?? "已安装")
-                            .dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary)
+                        if let ver = e.version, PluginManifest.compare(ver, installed.manifest.version) > 0 {
+                            Button { prepare { try await PluginInstaller.prepare(manifestURL: e.manifest, origin: "订阅：" + s.url) } } label: { MiniButtonLabel(title: "更新 \(ver)") }
+                                .buttonStyle(PressScale())
+                        } else {
+                            Text("已安装").dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary)
+                        }
                     } else {
                         Button { prepare { try await PluginInstaller.prepare(manifestURL: e.manifest, origin: "订阅：" + s.url) } } label: { MiniButtonLabel(title: "安装") }
                             .buttonStyle(PressScale())
