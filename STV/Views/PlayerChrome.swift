@@ -372,16 +372,7 @@ struct PlayerSpeedHUD: View {
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(
-                    LinearGradient(colors: [.white.opacity(0.3), .white.opacity(0.08)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                    lineWidth: 0.8
-                )
-        )
-        .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
+        .liquidGlass(corner: 22, tone: .panel, onMedia: true)
     }
 }
 
