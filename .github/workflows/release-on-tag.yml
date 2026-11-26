@@ -1,13 +1,7 @@
 name: release on tag
 
-# Pushing a release tag (e.g. v1.5b15-novel-ui or v1.5.15) builds both iOS unsigned IPA and signed
-# Android APK in parallel, verifies signatures/manifests/checksums, and publishes both GitHub Releases
-# (iOS on the pushed tag + companion *-android tag for the Android in-app AppUpdater).
+# Release packaging and publishing are manual-only. Pushing a tag must never build or publish by itself.
 on:
-  push:
-    tags:
-      - 'v*'
-      - '!v*-android'
   workflow_dispatch:
     inputs:
       tag:
