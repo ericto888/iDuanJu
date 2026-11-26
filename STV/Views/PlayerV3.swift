@@ -10,17 +10,9 @@ struct PlayerGlass: ViewModifier {
     var corner: CGFloat
     var strong = false
     func body(content: Content) -> some View {
-        content
-            .background {
-                RoundedRectangle(cornerRadius: corner, style: .continuous).fill(.ultraThinMaterial)
-                    .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous).fill(strong ? Color(red: 28/255, green: 30/255, blue: 36/255).opacity(0.84) : Color(white: 0.09).opacity(0.45)))
-            }
-            .overlay { RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(.white.opacity(strong ? 0.12 : 0.14), lineWidth: strong ? 1 : 0.5) }
-            .shadow(color: .black.opacity(strong ? 0.5 : 0), radius: 25, y: 20)
-            .environment(\.colorScheme, .dark)
+        content.liquidGlass(corner: corner, tone: strong ? .panel : .clear, onMedia: true)
     }
 }
-
 extension View {
     func playerGlass(_ corner: CGFloat, strong: Bool = false) -> some View { modifier(PlayerGlass(corner: corner, strong: strong)) }
 }
