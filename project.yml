@@ -25,6 +25,10 @@ targets:
     platform: iOS
     sources:
       - STV
+      # TVBox JavaScript / Python script libraries bundled as resources.
+      - path: shared/tvbox
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: TDLibKit
       - package: QuickJS

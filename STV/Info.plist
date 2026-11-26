@@ -28,9 +28,9 @@
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-	    <key>NSLocalNetworkUsageDescription</key>
-    <string>用于连接同一局域网里配对的设备和局域网片源</string>
-</dict>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于连接同一局域网里配对的设备和局域网片源（包括 TVBox JAR 桥接）</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>用于解锁「片源管理」里隐藏的长视频片源</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
