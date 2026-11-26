@@ -409,7 +409,10 @@ enum PluginInstaller {
     }
 
     static func prepare(manifestURL: String, origin: String) async throws -> PendingInstall {
-        let data = try await download(manifestURL, limit: 256 << 10)
+        let data = try await download(manifestURL, limit: 2 << 20)
+        if let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any], o["manifest"] != nil {
+            return try prepare(bundle: data, origin: origin)
+        }
         return try await prepare(manifestData: data, manifestURL: manifestURL, origin: origin)
     }
 
