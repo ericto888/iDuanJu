@@ -621,10 +621,8 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         audioSessionActive = false
         continuePiP = false
         if !pipActive { engine.setPiPActive(false) }
-        if pip?.isPictureInPictureActive == true {
-            restoringPiP = true
-            pip?.stopPictureInPicture()
-        }
+        // AVKit owns the stop when the user restores the app from the PiP window. Stopping
+        // it again here races the restore delegate and can relayout the video surface twice.
         resumeIfRequested()
         // Engine foreground restoration may itself be asynchronous. Reconcile once afterwards,
         // re-reading intent so a pause pressed in the meantime always wins.
