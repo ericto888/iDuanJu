@@ -38,6 +38,7 @@ struct RootTabView: View {
                             GlassTabBar(selection: $tab, items: Self.items) { i in
                                 if i == tab { paths[i] = NavigationPath() }
                             }
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }
                 }
