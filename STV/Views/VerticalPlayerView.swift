@@ -152,17 +152,9 @@ struct PlayerScreen: View {
                         }
                     }
                     .frame(width: full.width, height: full.height)
-                    if let sub = co.subtitleText, !co.pipActive {
-                        // Aether loopback / software routes: the host draws the selected track's cues.
-                        VStack {
-                            Spacer()
-                            Text(sub).font(.system(size: landscape ? 18 : 16, weight: .semibold)).foregroundStyle(.white)
-                                .multilineTextAlignment(.center).shadow(color: .black, radius: 2).shadow(color: .black.opacity(0.8), radius: 4)
-                                .padding(.horizontal, 24)
-                                .padding(.bottom, (landscape ? 70 : 200) + ins.bottom)
-                                .accessibilityIdentifier("player.subtitle")
-                        }
-                        .frame(width: full.width, height: full.height).allowsHitTesting(false)
+                    if !co.pipActive {
+                        PlayerSubtitleOverlay(telemetry: co.telemetry, landscape: landscape, bottom: (landscape ? 70 : 200) + ins.bottom)
+                            .frame(width: full.width, height: full.height)
                     }
                     let previewDanmaku = panel == .danmaku
                     if series.source == .hongguo, !co.pipActive, !speedMode,
