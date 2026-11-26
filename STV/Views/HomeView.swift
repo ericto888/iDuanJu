@@ -1284,7 +1284,7 @@ private struct PosterHero: View {
         let url = picks.indices.contains(index) ? picks[index].cover : ""
         return ZStack {
             Color(red: 0.14, green: 0.10, blue: 0.10)
-            CoverView(url: url, corner: 0).blur(radius: 40).scaleEffect(1.5).opacity(0.85).id(url).transition(.opacity)
+            CoverBackdrop(url: url).opacity(0.9).id(url).transition(.opacity)
             LinearGradient(colors: [.black.opacity(0.18), .black.opacity(0.62)], startPoint: .topLeading, endPoint: .bottomTrailing)
         }
         .clipped()

@@ -50,7 +50,8 @@ enum HLSAdFilter {
             if up.hasPrefix("#EXTINF") {
                 started = true
                 cur.extinf = line
-                cur.duration = Double(line.dropFirst(8).split(separator: ",").first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? "") ?? 0
+                let duration = Double(line.dropFirst(8).split(separator: ",").first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? "") ?? 0
+                cur.duration = (0...86_400).contains(duration) ? duration : 0
                 continue
             }
             if line.isEmpty { continue }

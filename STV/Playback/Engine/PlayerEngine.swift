@@ -2,13 +2,25 @@ import AVFoundation
 import AVKit
 import UIKit
 
-/// Which playback core plays an episode. System AVPlayer is the default (native Picture-in-Picture and
-/// lower power draw); MPVKit (`libmpv` + `FFmpeg` + `libdovi` + `libplacebo`, iOS 16+) is opt-in for
-/// Dolby Vision, HDR10, DTS/TrueHD/AC3/EAC3, and ASS subtitles, with AVPlayer fallback on failure.
+/// Which playback core plays an episode. `auto` (default) picks per media: system AVPlayer for what AVFoundation opens
+/// (HLS, MP4: native Picture-in-Picture, lowest power), MPVKit (`libmpv` + `FFmpeg` + `libdovi`, iOS 16+) for FLV, MKV,
+/// MPEG-TS, RTMP/RTSP and other containers. Whichever core is tried first, the other one is the fallback.
 enum PlayerEngineKind: String, CaseIterable, Sendable {
-    case avplayer, mpv
-    var label: String { self == .mpv ? "MPVKit (DV/DTS)" : "系统播放器" }
-    var short: String { self == .mpv ? "MPV" : "AVPlayer" }
+    case auto, avplayer, mpv
+    var label: String {
+        switch self {
+        case .auto: return "自动（推荐）"
+        case .avplayer: return "系统播放器"
+        case .mpv: return "MPVKit (DV/DTS)"
+        }
+    }
+    var short: String {
+        switch self {
+        case .auto: return "自动"
+        case .avplayer: return "AVPlayer"
+        case .mpv: return "MPV"
+        }
+    }
 }
 
 enum PlayerEngineSettings {
@@ -21,11 +33,18 @@ enum PlayerEngineSettings {
                 if let k = PlayerEngineKind(rawValue: e) { return k }
             }
             #endif
-            guard let raw = UserDefaults.standard.string(forKey: key) else { return .avplayer }
+            guard let raw = UserDefaults.standard.string(forKey: key) else { return .auto }
             if raw == "aether" { return .mpv }
-            return PlayerEngineKind(rawValue: raw) ?? .avplayer
+            return PlayerEngineKind(rawValue: raw) ?? .auto
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
+
+    /// Cores to try for this media, in order (never empty).
+    static func order(_ container: MediaContainer, preferred: PlayerEngineKind = PlayerEngineSettings.preferred) -> [PlayerEngineKind] {
+        let needsFFmpeg = container == .ffmpeg || container == .dash
+        if preferred == .mpv || needsFFmpeg { return [.mpv, .avplayer] }
+        return [.avplayer, .mpv]
     }
 }
 

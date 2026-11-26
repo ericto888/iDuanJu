@@ -4,6 +4,7 @@ options:
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true
+  preGenCommand: bash scripts/fetch-ios-python.sh
 settings:
   SWIFT_VERSION: "5.0"
   TARGETED_DEVICE_FAMILY: "1,2"
@@ -13,6 +14,8 @@ packages:
     exactVersion: 1.5.2-tdlib-1.8.69-6126ecae
   QuickJS:
     path: Packages/QuickJS
+  PythonHost:
+    path: Packages/PythonHost
   MPVKit:
     url: https://github.com/mpvkit/MPVKit
     from: 1.0.0
@@ -26,6 +29,8 @@ targets:
       - package: TDLibKit
       - package: QuickJS
         product: CQuickJS
+      - package: PythonHost
+        product: CPythonHost
       - package: MPVKit
         product: MPVKit
     settings:
@@ -48,6 +53,9 @@ targets:
             mkdir -p "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ui_novel_preview"
             cp -R "$SRCROOT/STVTests/Fixtures/ui_novel_preview/" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ui_novel_preview/"
           fi
+      - name: Python runtime
+        basedOnDependencyAnalysis: false
+        script: bash "$SRCROOT/scripts/embed-ios-python.sh"
     info:
       path: STV/Info.plist
       properties:
@@ -57,6 +65,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSFaceIDUsageDescription: 用于解锁「片源管理」里隐藏的长视频片源
         NSPhotoLibraryAddUsageDescription: 用于把你下载的图片和视频保存到相册
+        NSLocalNetworkUsageDescription: 用于连接同一局域网里配对的设备和局域网片源
         LSApplicationQueriesSchemes: [tg]
         NSAppTransportSecurity:
           # 「阅读」书源: many novel sites are http-only. (NSAllowsLocalNetworking must not be set alongside:
@@ -85,6 +94,8 @@ targets:
           - "**/*.swift"
       # Preserve fixture subdirectories (000.bin/routes.json recur per source); never flatten or omit them.
       - path: STVTests/Fixtures
+        type: folder
+      - path: shared/tvbox
         type: folder
     dependencies:
       - target: STV
