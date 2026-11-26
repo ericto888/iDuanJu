@@ -56,7 +56,7 @@ struct PlayerCenterControls: View {
     @State private var spin = false
 
     init(co: PlaybackCoordinator, onInteract: @escaping () -> Void, spacing: CGFloat = 44) {
-        self.co = co
+        self._co = ObservedObject(wrappedValue: co)
         self._clock = ObservedObject(wrappedValue: co.clock)
         self.onInteract = onInteract
         self.spacing = spacing
@@ -66,38 +66,49 @@ struct PlayerCenterControls: View {
         let loading = co.readyIndex == nil || (co.waitingForMedia && !co.paused)
         let sample = clock.sample
         let buffered = sample.duration > 0 ? min(1, sample.bufferedUntil / sample.duration) : 0
-        HStack(spacing: spacing) {
-            Button { co.seek(by: -10); onInteract() } label: {
-                Image(systemName: "gobackward.10").font(.system(size: 29, weight: .regular)).frame(width: 44, height: 44).opacity(0.94)
-            }.accessibilityLabel("快退10秒").accessibilityIdentifier("player.back10")
-            Button { co.togglePause(); onInteract() } label: {
-                ZStack {
-                    Circle().fill(.ultraThinMaterial).environment(\.colorScheme, .dark)
-                    Circle().fill(Color(red: 20/255, green: 20/255, blue: 24/255).opacity(0.46))
-                    Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1)
-                    if loading {
-                        Circle().trim(from: 0, to: 0.28).stroke(.white, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                            .rotationEffect(.degrees(spin ? 360 : 0))
-                            .animation(.linear(duration: 0.9).repeatForever(autoreverses: false), value: spin)
-                            .onAppear { spin = true }.onDisappear { spin = false }
-                    } else {
-                        Circle().trim(from: 0, to: buffered).stroke(.white.opacity(0.75), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
+        LiquidGlassGroup(spacing: 12) {
+            HStack(spacing: spacing) {
+                if !co.isLive {
+                    Button { co.seek(by: -10); onInteract() } label: {
+                        Image(systemName: "gobackward.10").font(.system(size: 24, weight: .regular))
+                            .frame(width: 52, height: 52)
+                            .liquidGlass(Circle(), tone: .clear, interactive: true, onMedia: true)
+                            .contentShape(Circle())
                     }
-                    Image(systemName: co.paused ? "play.fill" : "pause.fill").font(.system(size: 26, weight: .regular))
-                        .offset(x: co.paused ? 2 : 0)
-                        .compatSymbolReplace()
+                    .accessibilityLabel("快退10秒").accessibilityIdentifier("player.back10")
                 }
-                .frame(width: 68, height: 68)
+                Button { co.togglePause(); onInteract() } label: {
+                    ZStack {
+                        if loading {
+                            Circle().trim(from: 0, to: 0.28).stroke(.white, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                                .rotationEffect(.degrees(spin ? 360 : 0))
+                                .animation(.linear(duration: 0.9).repeatForever(autoreverses: false), value: spin)
+                                .onAppear { spin = true }.onDisappear { spin = false }
+                        } else {
+                            Circle().trim(from: 0, to: buffered).stroke(.white.opacity(0.75), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                        }
+                        Image(systemName: co.paused ? "play.fill" : "pause.fill").font(.system(size: 27, weight: .regular))
+                            .offset(x: co.paused ? 2 : 0).compatSymbolReplace()
+                    }
+                    .frame(width: 72, height: 72)
+                    .liquidGlass(Circle(), tone: .clear, interactive: true, onMedia: true)
+                    .contentShape(Circle())
+                }
+                .accessibilityLabel(co.paused ? "播放" : "暂停").accessibilityIdentifier("player.playPause")
+                if !co.isLive {
+                    Button { co.seek(by: 10); onInteract() } label: {
+                        Image(systemName: "goforward.10").font(.system(size: 24, weight: .regular))
+                            .frame(width: 52, height: 52)
+                            .liquidGlass(Circle(), tone: .clear, interactive: true, onMedia: true)
+                            .contentShape(Circle())
+                    }
+                    .accessibilityLabel("快进10秒").accessibilityIdentifier("player.fwd10")
+                }
             }
-            .accessibilityLabel(co.paused ? "播放" : "暂停").accessibilityIdentifier("player.playPause")
-            Button { co.seek(by: 10); onInteract() } label: {
-                Image(systemName: "goforward.10").font(.system(size: 29, weight: .regular)).frame(width: 44, height: 44).opacity(0.94)
-            }.accessibilityLabel("快进10秒").accessibilityIdentifier("player.fwd10")
         }
         .buttonStyle(PressScale(scale: 0.92))
         .foregroundStyle(.white)
-        .shadow(color: .black.opacity(0.35), radius: 6)
     }
 }
 
@@ -155,7 +166,7 @@ struct PlayerMetaRow: View {
 /// v3 bar: full width 3 pt (played white, buffered white 40 %, track white 22 %), 4×16 bar knob; dragging grows
 /// it to 8 pt with a 20 pt round knob and a thumbnail + time bubble. Time row underneath: elapsed · −remaining.
 struct PlayerTimelineV3: View {
-    let co: PlaybackCoordinator
+    @ObservedObject var co: PlaybackCoordinator
     @ObservedObject private var clock: PlaybackClock
     @Binding var scrubbing: Bool
     var onInteract: () -> Void = {}
