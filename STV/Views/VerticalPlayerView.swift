@@ -69,6 +69,8 @@ struct PlayerScreen: View {
     @State private var nextDramaPick: NextDramaPick?
     /// Feed content offset (pt): the shared video layer rides along with the page in either orientation.
     @State private var feed = FeedOffset()
+    /// Preserve the inline destination's lift across PiP's temporary foreground size-class changes.
+    @State private var pipRestoreLift: CGFloat?
     /// Running double-tap seek (+10/+20/… s) and which side it is on; drives the side bubble.
     @State private var seekRun: (total: Int, at: Date)?
     @State private var horizontalSeekStart: Double?
@@ -82,7 +84,7 @@ struct PlayerScreen: View {
     /// Landscape-format clips shown in the upright player keep their full chrome visible.
     private var portraitLandscapeClip: Bool { !landscape && aspect > 1.0 }
     /// Keep landscape-format video visually above the phone's vertical midpoint.
-    private var videoLift: CGFloat { portraitLandscapeClip ? 44 : 0 }
+    private var videoLift: CGFloat { pipRestoreLift ?? (portraitLandscapeClip ? 44 : 0) }
     private var keepsChromeVisible: Bool { portraitLandscapeClip }
     private var canShowPadSplit: Bool {
         layoutMetrics.isPad && layoutMetrics.isLandscape && layoutMetrics.width >= 840 && aspect < 1.0 && !co.pipActive && !co.episodes.isEmpty
@@ -330,6 +332,19 @@ struct PlayerScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             co.didBecomeActive()
             flashChrome()
+        }
+        .compatOnChange(of: co.pipActive) { active in
+            if active {
+                pipRestoreLift = videoLift
+            } else if layoutMetrics.isLandscape || aspect <= 1.0 {
+                pipRestoreLift = nil
+            }
+        }
+        .compatOnChange(of: layoutMetrics.isLandscape) { _ in
+            if !co.pipActive { pipRestoreLift = nil }
+        }
+        .compatOnChange(of: aspect > 1.0) { _ in
+            if !co.pipActive { pipRestoreLift = nil }
         }
         .alert("画中画暂不可用", isPresented: Binding(get: { co.pipError != nil }, set: { if !$0 { co.pipError = nil } })) {
             Button("好") { co.pipError = nil }
