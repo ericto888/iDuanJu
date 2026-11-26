@@ -220,6 +220,43 @@ struct PlayerProgressBar: View {
     }
 }
 
+
+/// Inline playhead readout used by the compact portrait feed. Only this row observes the 4 Hz clock.
+struct PlayerCompactTimeControls: View {
+    let co: PlaybackCoordinator
+    @ObservedObject private var clock: PlaybackClock
+    let onInteract: () -> Void
+
+    init(co: PlaybackCoordinator, onInteract: @escaping () -> Void) {
+        self.co = co
+        self._clock = ObservedObject(wrappedValue: co.clock)
+        self.onInteract = onInteract
+    }
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Button { co.togglePause(); onInteract() } label: {
+                Image(systemName: co.paused ? "play.fill" : "pause.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 28, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(co.paused ? "播放" : "暂停")
+            .accessibilityIdentifier("player.playPause")
+
+            let t = clock.scrubPreview ?? clock.sample.time
+            Text(Fmt.clock(Int(t)))
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .accessibilityIdentifier("player.time")
+            Text("−" + Fmt.clock(Int(max(0, clock.sample.duration - t))))
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .accessibilityIdentifier("player.remaining")
+        }
+        .foregroundStyle(.white.opacity(0.85))
+    }
+}
+
 /// Bottom chrome under the caption: progress bar, then one quiet row (play · time … actions).
 struct PlayerTimeline<Trailing: View>: View {
     let co: PlaybackCoordinator

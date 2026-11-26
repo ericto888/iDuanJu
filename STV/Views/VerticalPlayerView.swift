@@ -800,25 +800,7 @@ struct PlayerScreen: View {
                         .allowsHitTesting(interactive && co.readyIndex == i)
 
                     HStack(spacing: 10) {
-                        HStack(spacing: 7) {
-                            Button { co.togglePause(); flashChrome() } label: {
-                                Image(systemName: co.paused ? "play.fill" : "pause.fill")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .frame(width: 28, height: 34)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(co.paused ? "播放" : "暂停")
-                            .accessibilityIdentifier("player.playPause")
-
-                            let t = co.scrubPreview ?? co.time
-                            Text(Fmt.clock(Int(t)))
-                                .font(.system(size: 12, weight: .medium).monospacedDigit())
-                                .accessibilityIdentifier("player.time")
-                            Text("−" + Fmt.clock(Int(max(0, co.duration - t))))
-                                .font(.system(size: 12, weight: .medium).monospacedDigit())
-                                .accessibilityIdentifier("player.remaining")
-                        }
+                        PlayerCompactTimeControls(co: co, onInteract: flashChrome)
                         .foregroundStyle(.white.opacity(0.85))
                         .opacity(dim).modifier(ChromeFade(on: chrome))
 
