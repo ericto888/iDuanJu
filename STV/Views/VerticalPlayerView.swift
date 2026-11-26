@@ -71,6 +71,10 @@ struct PlayerScreen: View {
     @State private var feed = FeedOffset()
     /// Physical device orientation drives the video-only display offset; PiP layout changes do not.
     @State private var displayOrientation = UIDevice.current.orientation
+    /// Hold the display offset constant while AVKit restores the app from PiP.
+    @State private var pipRestoreLift: CGFloat?
+    @State private var pipRestoreOrientation: UIDeviceOrientation?
+    @State private var pipRestoreEpisode: Int?
     /// Running double-tap seek (+10/+20/… s) and which side it is on; drives the side bubble.
     @State private var seekRun: (total: Int, at: Date)?
     @State private var horizontalSeekStart: Double?
@@ -86,9 +90,16 @@ struct PlayerScreen: View {
     /// A display-only lift for wide clips on an upright iPhone. Unknown orientation
     /// falls back to the current presentation layout so the first frame never starts at 0pt.
     private func videoLift(for videoAspect: CGFloat) -> CGFloat {
+        if let pipRestoreLift { return pipRestoreLift }
         guard !layoutMetrics.isPad, videoAspect > 1.0 else { return 0 }
         let upright = displayOrientation.isPortrait || (!displayOrientation.isLandscape && !landscape)
         return upright ? 44 : 0
+    }
+
+    private func clearPiPRestoreLift() {
+        pipRestoreLift = nil
+        pipRestoreOrientation = nil
+        pipRestoreEpisode = nil
     }
     private var videoLift: CGFloat { videoLift(for: aspect) }
     private var keepsChromeVisible: Bool { portraitLandscapeClip }
@@ -353,11 +364,24 @@ struct PlayerScreen: View {
             co.didBecomeActive()
             flashChrome()
         }
+        .compatOnChange(of: co.pipActive) { active in
+            if active {
+                pipRestoreLift = videoLift(for: aspect)
+                pipRestoreOrientation = displayOrientation
+                pipRestoreEpisode = co.current
+            }
+        }
+        .compatOnChange(of: co.current) { current in
+            if current != pipRestoreEpisode { clearPiPRestoreLift() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             let orientation = UIDevice.current.orientation
             // Ignore face-up / face-down / unknown readings; retain the last real device orientation.
             if orientation.isPortrait || orientation.isLandscape {
                 displayOrientation = orientation
+                if let savedOrientation = pipRestoreOrientation, orientation != savedOrientation {
+                    clearPiPRestoreLift()
+                }
             }
         }
         .alert("画中画暂不可用", isPresented: Binding(get: { co.pipError != nil }, set: { if !$0 { co.pipError = nil } })) {
