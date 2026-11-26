@@ -15,9 +15,10 @@ struct SearchView: View {
     @State private var hot: [HGSeries] = []
     @State private var hotError: Error?
     @State private var discoverSeed = 0
+    /// 搜索发现 picks for the current seed (shuffled once, not per body).
+    @State private var discover: [String] = []
     @State private var editingHistory = false
     @Environment(\.layoutMetrics) private var layout
-    @ObservedObject private var library = LibraryStore.shared
     @ObservedObject private var gate = SourceGate.shared
 
     @MainActor
@@ -37,27 +38,32 @@ struct SearchView: View {
     }
 
     private var searchPlaceholder: String {
-        source.isLongVideo ? "搜索\(source.label)" : "搜索\(source.label)短剧"
+        "搜索\(source.label)"
     }
 
     var body: some View {
-        VStack(spacing: 10) {
-            SearchField(text: $query, placeholder: searchPlaceholder, onSubmit: submit, onCancel: pushed ? { dismiss() } : (submitted.isEmpty ? nil : { query = ""; submitted = "" }))
-                .padding(.horizontal, 16).padding(.top, 6)
-            if gate.searchSources.count > 1 {
-                TextTabStrip(items: gate.searchSources, selection: $source) { $0.label }
-            }
-            ScrollView {
-                if submitted.isEmpty {
-                    if source == .hongguo && !suggestions.isEmpty {
-                        suggestionList
-                    } else {
-                        landing
-                    }
+        ScrollView {
+            if submitted.isEmpty {
+                if source == .hongguo && !suggestions.isEmpty {
+                    suggestionList
                 } else {
-                    results
+                    landing
+                }
+            } else {
+                results
+            }
+        }
+        .scrollDismissesKeyboard(.immediately)
+        .liquidTopBar {
+            let sources = gate.searchSources
+            VStack(spacing: 6) {
+                SearchField(text: $query, placeholder: searchPlaceholder, floating: true, onSubmit: submit, onCancel: pushed ? { dismiss() } : (submitted.isEmpty ? nil : { query = ""; submitted = "" }))
+                    .padding(.horizontal, 16)
+                if sources.count > 1 {
+                    TextTabStrip(items: sources, selection: $source, label: { $0.label }, floating: true)
                 }
             }
+            .padding(.top, 4).padding(.bottom, 8)
         }
         .background(STVTheme.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
@@ -83,41 +89,31 @@ struct SearchView: View {
         .compatOnChange(of: gate.searchSources) {
             if !gate.searchSources.contains(source) { source = .hongguo }
         }
+        .compatOnChange(of: hot.count) { reshuffle() }
+        .compatOnChange(of: discoverSeed) { reshuffle() }
     }
 
     // MARK: landing
 
-    private var discover: [String] {
-        guard hot.count > 3 else { return [] }
+    private func reshuffle() {
+        guard hot.count > 3 else { discover = []; return }
         var rng = SeededRNG(seed: UInt64(discoverSeed + 1))
-        return Array(hot.dropFirst(3).map(\.title).shuffled(using: &rng).prefix(8))
+        withAnimation(DS.select) { discover = Array(hot.dropFirst(3).map(\.title).shuffled(using: &rng).prefix(8)) }
     }
 
     @ViewBuilder private var landing: some View {
         VStack(alignment: .leading, spacing: 20) {
-            if !library.searchHistory.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    SectionHeader(title: "历史搜索", trailing: AnyView(HStack(spacing: 16) {
-                        if editingHistory {
-                            Button("全部删除") { library.clearSearch(); editingHistory = false }.foregroundStyle(STVTheme.accent)
-                            Button("完成") { editingHistory = false }.foregroundStyle(STVTheme.text)
-                        } else {
-                            Button { withAnimation { editingHistory = true } } label: {
-                                Image(systemName: "trash").foregroundStyle(STVTheme.secondary)
-                            }
-                        }
-                    }.font(.subheadline)))
-                    ChipFlow(items: library.searchHistory, onRemove: editingHistory ? { t in withAnimation { library.removeSearch(t) } } : nil) { t in
-                        if editingHistory { withAnimation { library.removeSearch(t) } } else { pick(t) }
-                    }
-                }
-            }
+            SearchHistorySection(editing: $editingHistory, pick: pick)
             if !discover.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
-                    SectionHeader(title: "搜索发现", trailing: AnyView(Button { withAnimation { discoverSeed += 1 } } label: {
-                        Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(STVTheme.secondary)
-                    }))
-                    ChipFlow(items: discover, accent: { t in discover.firstIndex(of: t) == 0 ? "热" : (discover.firstIndex(of: t) == 1 ? "荐" : nil) }) { pick($0) }
+                    SectionHeader(title: "搜索发现") {
+                        Button { discoverSeed += 1 } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 15, weight: .medium)).foregroundStyle(STVTheme.secondary)
+                                .contentShape(Rectangle().inset(by: -12))
+                        }
+                        .buttonStyle(PressScale()).accessibilityLabel("换一批")
+                    }
+                    ChipFlow(items: discover, accent: { t in t == discover.first ? "热" : (discover.count > 1 && t == discover[1] ? "荐" : nil) }) { pick($0) }
                 }
             }
             VStack(alignment: .leading, spacing: 12) {
@@ -143,7 +139,7 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 12) {
             if let e = pager.error, pager.items.isEmpty { ErrorStateView(error: e) { run() } }
             else if !pager.isLoading && pager.items.isEmpty {
-                CompatEmptyStateView(title: "无搜索结果", systemImage: "magnifyingglass", description: "没有找到与“\(submitted)”相关的内容")
+                DSEmptyState("无搜索结果", systemImage: "magnifyingglass", message: "没有找到与“\(submitted)”相关的内容")
             } else {
                 NumberedGrid(items: pager.items, numbered: false, hasMore: pager.hasMore, loading: pager.isLoading) { pager.loadMore() }
             }
@@ -155,20 +151,20 @@ struct SearchView: View {
             ForEach(suggestions, id: \.id) { item in
                 NavigationLink(value: Route.series(item)) {
                     HStack(spacing: 10) {
-                        Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(STVTheme.secondary)
-                        Text(item.title).font(.subheadline).foregroundStyle(STVTheme.text).lineLimit(1)
+                        Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(STVTheme.tertiary)
+                        Text(item.title).dsFont(15, relativeTo: .subheadline).foregroundStyle(STVTheme.text).lineLimit(1)
                         Spacer(minLength: 0)
-                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(STVTheme.secondary)
+                        Image(systemName: "arrow.up.left").font(.caption2).foregroundStyle(STVTheme.tertiary)
                     }
-                    .padding(.horizontal, 18).padding(.vertical, 11)
+                    .padding(.horizontal, 16).frame(minHeight: 48)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                if item.id != suggestions.last?.id { Divider().overlay(STVTheme.glassBorder).padding(.leading, 44) }
+                .buttonStyle(DSRowPress())
+                if item.id != suggestions.last?.id { Hairline().padding(.leading, 42) }
             }
         }
-        .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(STVTheme.glassBorder) }
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .dsCard(18)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }
@@ -193,7 +189,7 @@ struct SearchView: View {
     private func submit() {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines); guard !q.isEmpty else { return }
         suggestionTask?.cancel(); suggestions = []
-        library.addSearch(q); submitted = q; run()
+        LibraryStore.shared.addSearch(q); submitted = q; run()
     }
     private func run() {
         let q = submitted; guard !q.isEmpty else { return }
@@ -207,6 +203,37 @@ struct SearchView: View {
             if p.hasMore, let more = try? await HongguoClient.shared.rank(sub: .hotSearch, genre: .all, offset: p.nextOffset ?? 0, seenIds: p.items.map(\.seriesId)) { p.items += more.items }
             hot = Array(p.items.prefix(23)); hotError = nil
         } catch { hotError = error }
+    }
+}
+
+/// Own view: the library also publishes playback progress, which is no business of the search page.
+private struct SearchHistorySection: View {
+    @Binding var editing: Bool
+    let pick: (String) -> Void
+    @ObservedObject private var library = LibraryStore.shared
+    var body: some View {
+        if !library.searchHistory.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionHeader(title: "历史搜索") {
+                    HStack(spacing: 18) {
+                        if editing {
+                            Button("全部删除") { library.clearSearch(); editing = false }.foregroundStyle(DSTone.danger)
+                            Button("完成") { withAnimation(DS.select) { editing = false } }.foregroundStyle(STVTheme.accent)
+                        } else {
+                            Button { withAnimation(DS.select) { editing = true } } label: {
+                                Image(systemName: "trash").foregroundStyle(STVTheme.secondary).contentShape(Rectangle().inset(by: -12))
+                            }
+                            .accessibilityLabel("编辑历史搜索")
+                        }
+                    }
+                    .font(.system(size: 14, weight: .medium))
+                    .buttonStyle(PressScale())
+                }
+                ChipFlow(items: library.searchHistory, onRemove: editing ? { t in withAnimation(DS.select) { library.removeSearch(t) } } : nil) { t in
+                    if editing { withAnimation(DS.select) { library.removeSearch(t) } } else { pick(t) }
+                }
+            }
+        }
     }
 }
 

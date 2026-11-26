@@ -376,26 +376,23 @@ enum PluginInstaller {
     }
 
     /// Text pasted / scanned by the user: a manifest URL, a subscription URL, an M3U URL, a bundle JSON or an M3U list.
-    enum Pasted { case plugin(PendingInstall), subscription(String), tvbox(TVBoxImport.Config) }
+    enum Pasted { case plugin(PendingInstall), subscription(String), tvbox(String) }
     static func interpret(_ text: String) async throws -> Pasted {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if M3UImport.isChannelList(t) { return .plugin(try prepareM3U(t, url: nil, name: nil, origin: "粘贴")) }
-        if let data = t.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           o["sites"] != nil || o["spider"] != nil || o["lives"] != nil {
-            return .tvbox(try TVBoxImport.parse(data))
-        }
+        if TVBoxConfig.isConfig(t) { return .tvbox(t) }
         if t.hasPrefix("http://") || t.hasPrefix("https://") {
             let data = try await download(t, limit: 2 << 20)
             if let list = String(data: data, encoding: .utf8), M3UImport.isChannelList(list) {
                 return .plugin(try prepareM3U(list, url: t, name: nil, origin: t))
             }
             if let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                if o["sites"] != nil || o["spider"] != nil || o["lives"] != nil { return .tvbox(try TVBoxImport.parse(data)) }
                 if o["plugins"] != nil || o["cms"] != nil { return .subscription(t) }
                 if o["manifest"] != nil { return .plugin(try prepare(bundle: data, origin: t)) }
                 if o["schema"] != nil { return .plugin(try await prepare(manifestData: data, manifestURL: t, origin: t)) }
             }
-            throw PluginError.install("这个链接不是插件 manifest / .idjplugin / 订阅列表 / M3U")
+            if let decoded = try? TVBoxDecoder.decode(data), TVBoxConfig.isConfig(decoded) { return .tvbox(t) }
+            throw PluginError.install("这个链接不是插件 manifest / .idjplugin / 订阅列表 / M3U / TVBox 配置")
         }
         guard let data = t.data(using: .utf8) else { throw PluginError.install("无法识别") }
         return .plugin(try prepare(bundle: data, origin: "粘贴"))

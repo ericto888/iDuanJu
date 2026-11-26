@@ -8,8 +8,6 @@ struct PluginsView: View {
     @ObservedObject private var gate = SourceGate.shared
     @State private var pending: PendingInstall?
     @State private var updates: [PendingInstall] = []
-    @State private var liveLists: [TVBoxImport.Live] = []
-    @State private var showLive = false
     @State private var busy: String?
     @State private var message: String?
     @State private var showURL = false
@@ -19,10 +17,13 @@ struct PluginsView: View {
     @State private var showSub = false
     @State private var subText = ""
     @State private var showCMS = false
+    /// Bundled plugin manifests are parsed from the app bundle once, not in every body.
+    @State private var bundled: [(name: String, manifest: PluginManifest, data: Data)] = []
 
     var body: some View {
+        let plugins = store.visiblePlugins, recommended = self.recommended
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 22) {
                 NavigationLink { SourceStoreView() } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "storefront").font(.system(size: 20, weight: .semibold)).foregroundStyle(STVTheme.accent)
@@ -35,35 +36,28 @@ struct PluginsView: View {
                         Image(systemName: "chevron.right").font(.caption).foregroundStyle(STVTheme.secondary)
                     }.padding(14).background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14)).padding(.horizontal, 16)
                 }.buttonStyle(.plain).accessibilityIdentifier("plugins.onlineStore")
-                group("已安装（\(store.visiblePlugins.count)）") {
-                    if store.visiblePlugins.isEmpty {
-                        Text("还没有插件。可以从下面的网址 / 文件 / 订阅添加，或安装内置推荐。").font(.subheadline)
-                            .foregroundStyle(STVTheme.secondary).padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                DSSection("已安装（\(plugins.count)）", footer: hiddenAdult > 0 ? "另有 \(hiddenAdult) 个成人插件已隐藏：在「片源管理」解锁后显示。" : nil, separatorInset: 58) {
+                    if plugins.isEmpty {
+                        Text("还没有插件。可以从下面的网址 / 文件 / 订阅添加，或安装内置推荐。").dsFont(14, relativeTo: .subheadline)
+                            .foregroundStyle(STVTheme.secondary).dsRow(vertical: 14)
                     }
-                    ForEach(store.visiblePlugins) { p in
-                        NavigationLink { PluginDetailView(id: p.id) } label: { pluginRow(p) }.buttonStyle(.plain)
-                            .accessibilityIdentifier("plugins.row.\(p.id)")
-                        if p.id != store.visiblePlugins.last?.id { Divider().overlay(STVTheme.text.opacity(0.06)).padding(.leading, 48) }
-                    }
+                    ForEach(plugins) { p in pluginRow(p) }
                 }
-                if hiddenAdult > 0 {
-                    note("另有 \(hiddenAdult) 个成人插件已隐藏：在「片源管理」解锁后显示。")
-                }
-                group("添加插件") {
+                DSSection("添加插件", separatorInset: 58) {
                     action("从网址添加", "link", id: "plugins.add.url") { urlText = ""; showURL = true }
-                    action("从文件导入（插件 / M3U / TVBox JSON）", "doc.badge.plus", id: "plugins.add.file") { showFile = true }
+                    action("从文件导入", "doc.badge.plus", subtitle: "插件 / M3U / TVBox JSON", id: "plugins.add.file") { showFile = true }
                     action("粘贴插件内容", "doc.on.clipboard", id: "plugins.add.paste") { showPaste = true }
                     action(busy == "update" ? "正在检查更新…" : "检查更新", "arrow.triangle.2.circlepath", id: "plugins.update") { await checkUpdates() }
                 }
-                ForEach(updates) { u in
-                    Button { pending = u } label: {
-                        HStack { Image(systemName: "arrow.up.circle.fill").foregroundStyle(STVTheme.accent)
-                            Text("\(u.manifest.name) 可更新到 \(u.manifest.version)").foregroundStyle(STVTheme.text); Spacer()
-                            Text("查看权限变化").font(.caption).foregroundStyle(STVTheme.accent) }.padding(14)
-                    }.buttonStyle(.plain).background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14)).padding(.horizontal, 16)
+                if let message { banner(message) }
+                if !updates.isEmpty {
+                    DSSection("可更新", separatorInset: 58) {
+                        ForEach(updates) { u in
+                            DSRow(u.manifest.name, icon: "arrow.up.circle", subtitle: "可更新到 \(u.manifest.version)", value: "查看权限变化", chevron: true) { pending = u }
+                        }
+                    }
                 }
-                if !liveLists.isEmpty { group("TVBox 直播") { action("选择直播列表（\(liveLists.count)）", "list.bullet", id: "plugins.tvbox.live") { showLive = true } } }
-                group("订阅") {
+                DSSection("订阅", separatorInset: 58) {
                     ForEach(store.subscriptions) { s in subscriptionBlock(s) }
                     action("添加订阅地址", "plus.circle", id: "plugins.sub.add") { subText = ""; showSub = true }
                     if !store.subscriptions.isEmpty {
@@ -72,39 +66,34 @@ struct PluginsView: View {
                         }
                     }
                 }
-                group("采集站（苹果 CMS）") {
+                DSSection("采集站（苹果 CMS）", footer: "采集站使用内置的苹果 CMS v10 适配器（?ac=list / ?ac=detail），不运行任何脚本；只播放线路里的 m3u8 / mp4 直链，接口需支持 https。", separatorInset: 58) {
                     ForEach(cms.visibleSites) { s in cmsRow(s) }
                     action("添加采集站", "server.rack", id: "plugins.cms.add") { showCMS = true }
                 }
-                note("采集站使用内置的苹果 CMS v10 适配器（?ac=list / ?ac=detail），不运行任何脚本；只播放线路里的 m3u8 / mp4 直链，接口需支持 https。")
                 if !recommended.isEmpty {
-                    group("推荐插件（App 内置）") {
+                    DSSection("推荐插件（App 内置）") {
                         ForEach(recommended, id: \.manifest.id) { b in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(b.manifest.name).foregroundStyle(STVTheme.text)
-                                    Text(b.manifest.description ?? "").font(.caption).foregroundStyle(STVTheme.secondary).lineLimit(2)
-                                }
-                                Spacer()
-                                if store.plugin(b.manifest.id) != nil { Text("已安装").font(.caption).foregroundStyle(STVTheme.secondary) }
+                            HStack(spacing: 12) {
+                                DSRowLabel(title: b.manifest.name, subtitle: b.manifest.description)
+                                if store.plugin(b.manifest.id) != nil { Text("已安装").dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary) }
                                 else {
-                                    Button("安装") { prepare { try PluginInstaller.prepare(bundle: b.data, origin: "内置：" + b.name) } }
-                                        .buttonStyle(.bordered).tint(STVTheme.accent).accessibilityIdentifier("plugins.bundled.\(b.name)")
+                                    Button { prepare { try PluginInstaller.prepare(bundle: b.data, origin: "内置：" + b.name) } } label: { MiniButtonLabel(title: "安装") }
+                                        .buttonStyle(PressScale()).accessibilityIdentifier("plugins.bundled.\(b.name)")
                                 }
-                            }.padding(14)
+                            }
+                            .dsRow()
                         }
                     }
-                } else if !PluginInstaller.bundled().isEmpty {
-                    note("App 内置了 \(PluginInstaller.bundled().count) 个漫画插件（成人内容），在「片源管理」打开「成人漫画源」后才会显示在这里。")
+                } else if !bundled.isEmpty {
+                    note("App 内置了 \(bundled.count) 个漫画插件（成人内容），在「片源管理」打开「成人漫画源」后才会显示在这里。")
                 }
                 note("插件在独立沙箱里运行：没有 eval、不能访问未声明的域名和本机 / 局域网地址，每个插件的 cookie 与存储互相隔离，接触不到 Telegram、红果账号和钥匙串。所有插件结果都会过滤未成年人相关内容。")
-                if let message { Text(message).font(.caption).foregroundStyle(STVTheme.accent).padding(.horizontal, 16).accessibilityIdentifier("plugins.message") }
-            }.padding(.vertical, 12)
+            }
+            .padding(.top, 4).padding(.bottom, 32)
         }
-        .background(STVTheme.bg.ignoresSafeArea())
-        .navigationTitle("插件")
-        .navigationBarTitleDisplayMode(.inline)
-        .overlay { if busy == "prepare" { ProgressView("正在校验插件…").padding(20).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14)) } }
+        .dsNavigation("插件")
+        .overlay { if busy == "prepare" { DSBusyOverlay(label: "正在校验插件…") } }
+        .animation(DS.panel, value: busy)
         .sheet(item: $pending) { p in
             PluginConsentSheet(pending: p) { ok in
                 pending = nil
@@ -116,33 +105,28 @@ struct PluginsView: View {
                 } catch { message = error.localizedDescription }
             }
         }
-        .alert("插件网址", isPresented: $showURL) {
-            TextField("https://…/manifest.json 或 .idjplugin", text: $urlText).textInputAutocapitalization(.never).keyboardType(.URL)
-            Button("取消", role: .cancel) {}
-            Button("下一步") { interpret(urlText) }
-        } message: { Text("支持 TVBox 配置、M3U、插件和订阅链接") }
-        .alert("订阅地址", isPresented: $showSub) {
-            TextField("https://…/plugins.json", text: $subText).textInputAutocapitalization(.never).keyboardType(.URL)
-            Button("取消", role: .cancel) {}
-            Button("添加") { Task { do { try await store.addSubscription(subText); message = "已添加订阅" } catch { message = error.localizedDescription } } }
+        .dsDialog("插件网址", isPresented: $showURL, message: "支持 TVBox 配置、M3U、插件和订阅链接") {
+            [.cancel(), .primary("下一步", disabled: { urlText.trimmingCharacters(in: .whitespaces).isEmpty }) { interpret(urlText) }]
+        } extra: {
+            DSTextField("https://…/manifest.json 或 .idjplugin", text: $urlText, icon: "link").textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+        }
+        .dsDialog("订阅地址", isPresented: $showSub) {
+            [.cancel(), .primary("添加", disabled: { subText.trimmingCharacters(in: .whitespaces).isEmpty }) {
+                Task { do { try await store.addSubscription(subText); message = "已添加订阅" } catch { message = error.localizedDescription } }
+            }]
+        } extra: {
+            DSTextField("https://…/plugins.json", text: $subText, icon: "link").textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
         }
         .sheet(isPresented: $showPaste) { PasteSheet { text in showPaste = false; if let text { interpret(text) } } }
-        .sheet(isPresented: $showLive) { NavigationStack { List(liveLists, id: \.url) { live in
-            Button(live.name) { showLive = false; prepare { try await PluginInstaller.prepareLive(live) } }
-        }.navigationTitle("选择直播列表") } }
         .sheet(isPresented: $showCMS) { AddCMSSheet { showCMS = false; if let m = $0 { message = m } } }
         .fileImporter(isPresented: $showFile, allowedContentTypes: [.json, .data, .plainText, .item]) { r in
             guard case let .success(url) = r else { return }
             let ok = url.startAccessingSecurityScopedResource()
             defer { if ok { url.stopAccessingSecurityScopedResource() } }
             guard let d = try? Data(contentsOf: url), d.count < 4 << 20 else { message = "无法读取文件"; return }
-            if let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-               o["sites"] != nil || o["spider"] != nil || o["lives"] != nil {
-                do {
-                    let config = try TVBoxImport.parse(d)
-                    Task { await importTVBox(config, origin: "文件：" + url.lastPathComponent) }
-                }
-                catch { message = error.localizedDescription }
+            if let text = try? TVBoxDecoder.decode(d), TVBoxConfig.isConfig(text) {
+                let file = url.lastPathComponent
+                Task { await importTVBox { try await TVBoxStore.shared.importLocal(d, fileName: file) } }
                 return
             }
             if let list = String(data: d, encoding: .utf8), M3UImport.isChannelList(list) {
@@ -152,7 +136,9 @@ struct PluginsView: View {
             }
             prepare { try PluginInstaller.prepare(bundle: d, origin: "文件：" + url.lastPathComponent) }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("plugins.root")
+        .task { if bundled.isEmpty { bundled = await Task.detached { PluginInstaller.bundled() }.value } }
         #if DEBUG
         .task { if ProcessInfo.processInfo.environment["STV_PLUGIN_CONSENT_DEMO"] == "1", pending == nil { pending = DebugPlugins.demoPending(update: true) } }
         #endif
@@ -167,7 +153,7 @@ struct PluginsView: View {
         "com.idj.bundled.redtube", "com.idj.bundled.hqporner",
     ]
     private var recommended: [(name: String, manifest: PluginManifest, data: Data)] {
-        PluginInstaller.bundled().filter {
+        bundled.filter {
             !Self.iosNativeBundledIDs.contains($0.manifest.id)
                 && (!$0.manifest.adult || ($0.manifest.type == .comic ? gate.showAdultManga : gate.unlocked))
         }
@@ -191,32 +177,22 @@ struct PluginsView: View {
                 switch try await Task.detached { try await PluginInstaller.interpret(t) }.value {
                 case .plugin(let p): pending = p
                 case .subscription(let u): try await store.addSubscription(u); message = "这是订阅列表，已添加到「订阅」"
-                case .tvbox(let config): await importTVBox(config, origin: "粘贴")
+                case .tvbox(let text): await importTVBox { try await TVBoxStore.shared.importText(text) }
                 }
             } catch { message = error.localizedDescription }
             busy = nil
         }
     }
 
-    @MainActor private func importTVBox(_ config: TVBoxImport.Config, origin: String) async {
+    @MainActor private func importTVBox(_ work: @MainActor () async throws -> ImportResult) async {
         busy = "prepare"; message = nil
-        var added = 0
-        var failures: [String] = []
-        liveLists = config.lives
-        for offset in stride(from: 0, to: config.sites.count, by: 8) {
-            await withTaskGroup(of: String?.self) { group in
-                for site in config.sites[offset..<min(offset + 8, config.sites.count)] {
-                    group.addTask { @MainActor in
-                        do { _ = try await cms.add(name: site.name, api: site.api, adult: site.adult, origin: origin); return nil }
-                        catch { return "\(site.name)：\(error.localizedDescription)" }
-                    }
-                }
-                for await failure in group { if let failure { failures.append(failure) } else { added += 1 } }
+        do {
+            switch try await work() {
+            case .imported(let r): message = "已导入 TVBox「\(r.name)」：\(r.sites.count) 个点播站、\(r.lives.count) 个直播源，请到「TVBox」页使用"
+            case .depot(let d, _): message = "已添加 TVBox 多仓「\(d.name)」（\(d.entries.count) 条线路），请到「TVBox」页选择"
+            case .attachment(let name): message = "已保存文件 \(name)"
             }
-        }
-        let skipped = config.skipped > 0 ? "，跳过 \(config.skipped) 个脚本/不兼容站点" : ""
-        let failed = failures.isEmpty ? "" : "，验证失败 \(failures.count) 个：" + failures.prefix(3).joined(separator: "；")
-        message = "已导入 TVBox「\(config.name)」：添加 \(added)/\(config.sites.count) 个采集站\(skipped)\(failed)"
+        } catch { message = error.localizedDescription }
         busy = nil
     }
 
@@ -229,107 +205,124 @@ struct PluginsView: View {
 
     private func pluginRow(_ p: InstalledPlugin) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: p.manifest.type == .comic ? "book.closed" : "puzzlepiece.extension").frame(width: 24)
-                .foregroundStyle(p.enabled ? STVTheme.accent : STVTheme.secondary)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(p.manifest.name).foregroundStyle(STVTheme.text)
-                    badge(p.manifest.type.label)
-                    if p.manifest.adult { badge("18+") }
+            NavigationLink { PluginDetailView(id: p.id) } label: {
+                HStack(spacing: 12) {
+                    IconWell(systemName: p.manifest.type == .comic ? "book.closed" : "puzzlepiece.extension", size: 32, corner: 10,
+                             tint: p.enabled ? STVTheme.accent : STVTheme.tertiary, ground: p.enabled ? STVTheme.accentSoft : STVTheme.glass)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text(p.manifest.name).dsFont(16, .medium).foregroundStyle(STVTheme.text).lineLimit(1)
+                            DSTag(text: p.manifest.type.label)
+                            if p.manifest.adult { DSTag(text: "18+") }
+                        }
+                        Text(p.disabledReason ?? "v\(p.manifest.version) · \(p.manifest.author.name) · \(p.enabled ? "已启用" : "已停用")")
+                            .dsFont(12, relativeTo: .caption).foregroundStyle(p.disabledReason == nil ? STVTheme.secondary : STVTheme.accentWarm).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(STVTheme.tertiary)
                 }
-                Text(p.disabledReason ?? "v\(p.manifest.version) · \(p.manifest.author.name) · \(p.enabled ? "已启用" : "已停用")")
-                    .font(.caption).foregroundStyle(p.disabledReason == nil ? STVTheme.secondary : STVTheme.accentWarm).lineLimit(1)
+                .contentShape(Rectangle())
             }
-            Spacer()
-            Toggle("", isOn: Binding(get: { p.enabled }, set: { store.setEnabled(p.id, $0) })).labelsHidden()
+            .buttonStyle(PressScale(scale: 0.99))
+            .accessibilityIdentifier("plugins.row.\(p.id)")
+            DSSwitchControl(isOn: Binding(get: { p.enabled }, set: { store.setEnabled(p.id, $0) }), label: "启用 \(p.manifest.name)")
                 .accessibilityIdentifier("plugins.toggle.\(p.id)")
-            Image(systemName: "chevron.right").font(.caption).foregroundStyle(STVTheme.secondary)
-        }.padding(14).contentShape(Rectangle())
+        }
+        .dsRow()
     }
 
     @ViewBuilder private func subscriptionBlock(_ s: PluginSubscription) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(s.name.isEmpty ? s.url : s.name).foregroundStyle(STVTheme.text)
-                    Text(s.error ?? s.url).font(.caption2).foregroundStyle(s.error == nil ? STVTheme.secondary : STVTheme.accentWarm).lineLimit(1)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                DSRowLabel(title: s.name.isEmpty ? s.url : s.name, icon: "antenna.radiowaves.left.and.right")
+                Button { store.removeSubscription(s.url) } label: {
+                    Image(systemName: "trash").font(.system(size: 15, weight: .medium)).foregroundStyle(DSTone.danger).frame(width: 40, height: 40).contentShape(Rectangle())
                 }
-                Spacer()
-                Button(role: .destructive) { store.removeSubscription(s.url) } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
+                .buttonStyle(PressScale()).accessibilityLabel("删除订阅")
             }
+            Text(s.error ?? s.url).dsFont(11, relativeTo: .caption2).foregroundStyle(s.error == nil ? STVTheme.secondary : STVTheme.accentWarm).lineLimit(1)
+                .padding(.leading, 44).padding(.top, -12)
             ForEach(s.plugins.filter { !($0.adult ?? true) || gate.unlocked }) { e in
-                HStack {
-                    Text(e.name).font(.subheadline).foregroundStyle(STVTheme.text)
-                    if e.adult ?? true { badge("18+") }
-                    Spacer()
+                HStack(spacing: 8) {
+                    Text(e.name).dsFont(14, relativeTo: .subheadline).foregroundStyle(STVTheme.text)
+                    if e.adult ?? true { DSTag(text: "18+") }
+                    Spacer(minLength: 0)
                     if let installed = store.plugin(e.id) {
                         Text(e.version.map { PluginManifest.compare($0, installed.manifest.version) > 0 ? "可更新 \($0)" : "已安装" } ?? "已安装")
-                            .font(.caption).foregroundStyle(STVTheme.secondary)
+                            .dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary)
                     } else {
-                        Button("安装") { prepare { try await PluginInstaller.prepare(manifestURL: e.manifest, origin: "订阅：" + s.url) } }
-                            .buttonStyle(.bordered).tint(STVTheme.accent)
+                        Button { prepare { try await PluginInstaller.prepare(manifestURL: e.manifest, origin: "订阅：" + s.url) } } label: { MiniButtonLabel(title: "安装") }
+                            .buttonStyle(PressScale())
                     }
                 }
+                .padding(.leading, 44)
             }
             ForEach(s.cms.filter { !($0.adult ?? false) || gate.unlocked }) { c in
-                HStack {
-                    Image(systemName: "server.rack").font(.caption)
-                    Text(c.name).font(.subheadline).foregroundStyle(STVTheme.text)
-                    Spacer()
-                    if cms.sites.contains(where: { $0.api == (try? CMSStore.normalize(c.api)) }) { Text("已添加").font(.caption).foregroundStyle(STVTheme.secondary) }
+                HStack(spacing: 8) {
+                    Image(systemName: "server.rack").font(.caption).foregroundStyle(STVTheme.secondary)
+                    Text(c.name).dsFont(14, relativeTo: .subheadline).foregroundStyle(STVTheme.text)
+                    Spacer(minLength: 0)
+                    if cms.sites.contains(where: { $0.api == (try? CMSStore.normalize(c.api)) }) { Text("已添加").dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary) }
                     else {
-                        Button("添加") {
+                        Button {
                             Task { do { try await cms.add(name: c.name, api: c.api, adult: c.adult ?? false, origin: "订阅：" + s.url); message = "已添加采集站 \(c.name)" }
                                    catch { message = error.localizedDescription } }
-                        }.buttonStyle(.bordered).tint(STVTheme.accent)
+                        } label: { MiniButtonLabel(title: "添加") }
+                            .buttonStyle(PressScale())
                     }
                 }
+                .padding(.leading, 44)
             }
-        }.padding(14)
+        }
+        .dsRow(vertical: 12)
     }
 
     private func cmsRow(_ s: CMSSite) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "server.rack").frame(width: 24).foregroundStyle(s.enabled ? STVTheme.accent : STVTheme.secondary)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) { Text(s.name).foregroundStyle(STVTheme.text); if s.adult { badge("18+") } }
-                Text("\(URL(string: s.api)?.host ?? s.api) · \(s.categories.count) 个分类").font(.caption).foregroundStyle(STVTheme.secondary).lineLimit(1)
+            IconWell(systemName: "server.rack", size: 32, corner: 10, tint: s.enabled ? STVTheme.accent : STVTheme.tertiary, ground: s.enabled ? STVTheme.accentSoft : STVTheme.glass)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(s.name).dsFont(16, .medium).foregroundStyle(STVTheme.text).lineLimit(1)
+                    if s.adult { DSTag(text: "18+") }
+                }
+                Text("\(URL(string: s.api)?.host ?? s.api) · \(s.categories.count) 个分类").dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary).lineLimit(1)
             }
-            Spacer()
-            Toggle("", isOn: Binding(get: { s.enabled }, set: { cms.setEnabled(s.key, $0) })).labelsHidden()
-            NavigationLink { CMSLogView(site: s) } label: {
-                Image(systemName: "doc.text.magnifyingglass").foregroundStyle(STVTheme.secondary)
-            }.accessibilityIdentifier("cms.logs.\(s.key)")
+            Spacer(minLength: 0)
             Menu {
                 Toggle("成人内容（需片源管理解锁）", isOn: Binding(get: { s.adult }, set: { cms.setAdult(s.key, $0) }))
-                Button("删除", role: .destructive) { cms.remove(s.key) }
-            } label: { Image(systemName: "ellipsis.circle").foregroundStyle(STVTheme.secondary) }
-        }.padding(14).accessibilityIdentifier("plugins.cms.\(s.key)")
-    }
-
-    private func badge(_ t: String) -> some View {
-        Text(t).font(.caption2.weight(.semibold)).foregroundStyle(STVTheme.secondary)
-            .padding(.horizontal, 6).padding(.vertical, 2).background(STVTheme.glass, in: Capsule())
+                Button("删除", systemImage: "trash", role: .destructive) { cms.remove(s.key) }
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold)).foregroundStyle(STVTheme.secondary).frame(width: 36, height: 40).contentShape(Rectangle())
+            }
+            .accessibilityLabel("更多")
+            DSSwitchControl(isOn: Binding(get: { s.enabled }, set: { cms.setEnabled(s.key, $0) }), label: "启用 \(s.name)")
+        }
+        .dsRow()
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("plugins.cms.\(s.key)")
     }
 
     private func note(_ t: String) -> some View {
-        Text(t).font(.caption).foregroundStyle(STVTheme.secondary).padding(.horizontal, 16)
+        Text(t).dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.tertiary).lineSpacing(3).padding(.horizontal, 20)
     }
 
-    private func group<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.footnote.weight(.semibold)).foregroundStyle(STVTheme.secondary).padding(.horizontal, 20)
-            VStack(spacing: 0) { content() }
-                .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14))
-                .padding(.horizontal, 16)
+    /// Import results can be long (per-site failures), so they stay on the page instead of flashing by in a toast.
+    private func banner(_ t: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "info.circle").font(.system(size: 15, weight: .medium)).foregroundStyle(STVTheme.accent)
+            Text(t).dsFont(14, relativeTo: .subheadline).foregroundStyle(STVTheme.text).textSelection(.enabled).accessibilityIdentifier("plugins.message")
+            Spacer(minLength: 0)
+            Button { message = nil } label: { Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(STVTheme.tertiary).frame(width: 30, height: 30).contentShape(Rectangle()) }
+                .buttonStyle(.plain).accessibilityLabel("关闭")
         }
+        .padding(14)
+        .background(STVTheme.accentSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, 16)
+        .transition(.opacity)
     }
 
-    private func action(_ t: String, _ icon: String, id: String, _ f: @escaping () async -> Void) -> some View {
-        Button { Task { await f() } } label: {
-            HStack { Image(systemName: icon).frame(width: 24); Text(t); Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(STVTheme.secondary) }
-                .foregroundStyle(STVTheme.text).padding(14).contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityIdentifier(id)
+    private func action(_ t: String, _ icon: String, subtitle: String? = nil, id: String, _ f: @escaping () async -> Void) -> some View {
+        DSRow(t, icon: icon, subtitle: subtitle, chevron: true) { Task { await f() } }.accessibilityIdentifier(id)
     }
 }
 
@@ -340,64 +333,73 @@ struct PluginConsentSheet: View {
     private var m: PluginManifest { pending.manifest }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack { Text(m.name).font(.title3.weight(.bold)); if m.adult { Text("18+").font(.caption.weight(.bold)).foregroundStyle(.red) } }
-                        Text("\(m.type.label) · v\(m.version) · 作者 \(m.author.name)").font(.subheadline).foregroundStyle(.secondary)
-                        if let d = m.description, !d.isEmpty { Text(d).font(.subheadline) }
-                        Text("来源：\(pending.origin)").font(.caption).foregroundStyle(.secondary)
-                        Label(pending.signedBy == nil ? "未签名（无法确认作者身份）" : "已验证作者签名", systemImage: pending.signedBy == nil ? "exclamationmark.shield" : "checkmark.shield")
-                            .font(.caption).foregroundStyle(pending.signedBy == nil ? .orange : .green)
-                    }
-                }
-                if let targets = m.overrides, !targets.isEmpty {
-                    Section("接管的内置站源") {
-                        ForEach(targets, id: \.self) { target in
-                            Label(DramaSource(rawValue: target)?.label ?? target, systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
+        DSSheet(pending.isUpdate ? "更新插件" : "安装插件", onClose: { done(false) }) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Text(m.name).dsFont(19, .bold, relativeTo: .title3).foregroundStyle(STVTheme.text)
+                            if m.adult { DSStatus(text: "18+", tone: .warn) }
                         }
-                        Text("启用插件后将使用商店插件解析这些内置站源，不会重复显示。停用或卸载插件后自动恢复内置实现。").font(.caption).foregroundStyle(.secondary)
+                        Text("\(m.type.label) · v\(m.version) · 作者 \(m.author.name)").dsFont(14, relativeTo: .subheadline).foregroundStyle(STVTheme.secondary)
+                        if let d = m.description, !d.isEmpty { Text(d).dsFont(14, relativeTo: .subheadline).foregroundStyle(STVTheme.text) }
+                        Text("来源：\(pending.origin)").dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary)
+                        line(pending.signedBy == nil ? "未签名（无法确认作者身份）" : "已验证作者签名", pending.signedBy == nil ? "exclamationmark.shield" : "checkmark.shield",
+                             pending.signedBy == nil ? STVTheme.accentWarm : STVTheme.ok)
+                    }
+                    .padding(.horizontal, 20)
+                    if let diff = pending.diff, pending.isUpdate {
+                        DSSection("更新：从 v\(pending.existing?.manifest.version ?? "?") 到 v\(m.version) 的权限变化") {
+                            if diff.isEmpty { line("权限没有变化", "checkmark.circle", STVTheme.secondary).dsRow() }
+                            ForEach(diff.addedHTTP, id: \.self) { line("新增网络域名 \($0)", "plus.circle", STVTheme.accentWarm).dsRow() }
+                            ForEach(diff.addedMedia, id: \.self) { line("新增图片/视频域名 \($0)", "plus.circle", STVTheme.accentWarm).dsRow() }
+                            ForEach(diff.removedHTTP + diff.removedMedia, id: \.self) { line("移除 \($0)", "minus.circle", STVTheme.secondary).dsRow() }
+                            ForEach(diff.flags, id: \.self) { line($0, $0.hasPrefix("新增") ? "exclamationmark.triangle" : "minus.circle", $0.hasPrefix("新增") ? STVTheme.accentWarm : STVTheme.secondary).dsRow() }
+                        }
+                    }
+                    DSSection("允许访问的网站（只能访问这些域名）") {
+                        ForEach(m.httpDomains, id: \.self) { line($0, "globe", STVTheme.text).dsRow() }
+                    }
+                    if Set(m.mediaDomains) != Set(m.httpDomains) {
+                        DSSection("图片 / 视频地址") { ForEach(m.mediaDomains, id: \.self) { line($0, "photo", STVTheme.text).dsRow() } }
+                    }
+                    DSSection("额外能力", footer: "插件始终不能：eval / 动态代码、访问本机或局域网地址、读取其他插件或 Telegram / 红果 / 钥匙串数据。") {
+                        capability("Cloudflare 验证（本插件独立的隐藏网页，cookie 不与其他插件共享）", m.allowsCF)
+                        capability("插件私有存储（≤1MB）", m.allowsStorage)
+                        capability("请你登录该站点", m.allowsLogin)
+                    }
+                    DSSection("脚本") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("实现：\(pending.exported.joined(separator: " · "))").dsFont(13, relativeTo: .footnote).foregroundStyle(STVTheme.text)
+                            Text(pending.fileHash).font(.system(.caption2, design: .monospaced)).foregroundStyle(STVTheme.secondary).textSelection(.enabled)
+                        }
+                        .dsRow()
                     }
                 }
-                if let diff = pending.diff, pending.isUpdate {
-                    Section("更新：从 v\(pending.existing?.manifest.version ?? "?") 到 v\(m.version) 的权限变化") {
-                        if diff.isEmpty { Text("权限没有变化").foregroundStyle(.secondary) }
-                        ForEach(diff.addedHTTP, id: \.self) { Label("新增网络域名 \($0)", systemImage: "plus.circle").foregroundStyle(.orange) }
-                        ForEach(diff.addedMedia, id: \.self) { Label("新增图片/视频域名 \($0)", systemImage: "plus.circle").foregroundStyle(.orange) }
-                        ForEach(diff.removedHTTP + diff.removedMedia, id: \.self) { Label("移除 \($0)", systemImage: "minus.circle").foregroundStyle(.secondary) }
-                        ForEach(diff.flags, id: \.self) { Label($0, systemImage: $0.hasPrefix("新增") ? "exclamationmark.triangle" : "minus.circle") }
-                    }
-                }
-                Section("允许访问的网站（只能访问这些域名）") {
-                    ForEach(m.httpDomains, id: \.self) { Label($0, systemImage: "globe") }
-                }
-                if Set(m.mediaDomains) != Set(m.httpDomains) {
-                    Section("图片 / 视频地址") { ForEach(m.mediaDomains, id: \.self) { Label($0, systemImage: "photo") } }
-                }
-                Section("额外能力") {
-                    row("Cloudflare 验证（本插件独立的隐藏网页，cookie 不与其他插件共享）", m.allowsCF)
-                    row("插件私有存储（≤1MB）", m.allowsStorage)
-                    row("请你登录该站点", m.allowsLogin)
-                    Text("插件始终不能：eval / 动态代码、访问本机或局域网地址、读取其他插件或 Telegram / 红果 / 钥匙串数据。").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("脚本") {
-                    Text("实现：\(pending.exported.joined(separator: " · "))").font(.caption)
-                    Text(pending.fileHash).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
-                }
+                .padding(.bottom, 20)
             }
-            .navigationTitle(pending.isUpdate ? "更新插件" : "安装插件")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { done(false) } }
-                ToolbarItem(placement: .confirmationAction) { Button(pending.isUpdate ? "更新" : "安装") { done(true) }.accessibilityIdentifier("plugins.consent.install") }
+        } footer: {
+            DSSheetFooter {
+                Button { done(false) } label: { PillButtonPlain(title: "取消") }
+                Button { done(true) } label: { PillButtonLabel(title: pending.isUpdate ? "更新" : "安装", expand: true) }
+                    .accessibilityIdentifier("plugins.consent.install")
             }
+            .buttonStyle(PressScale(scale: 0.98))
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("plugins.consent")
+        .dsSheetChrome([.large])
     }
 
-    private func row(_ t: String, _ on: Bool) -> some View {
-        Label(t, systemImage: on ? "checkmark.circle.fill" : "circle").foregroundStyle(on ? .primary : .secondary)
+    private func line(_ t: String, _ icon: String, _ tint: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: icon).font(.system(size: 14, weight: .medium)).foregroundStyle(tint).frame(width: 20).accessibilityHidden(true)
+            Text(t).dsFont(14, relativeTo: .subheadline).foregroundStyle(tint == STVTheme.text ? STVTheme.text : tint).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func capability(_ t: String, _ on: Bool) -> some View {
+        line(t, on ? "checkmark.circle.fill" : "circle", on ? STVTheme.text : STVTheme.tertiary).dsRow()
     }
 }
 
@@ -405,18 +407,19 @@ private struct PasteSheet: View {
     let done: (String?) -> Void
     @State private var text = ""
     var body: some View {
-        NavigationStack {
-            TextEditor(text: $text).font(.system(.footnote, design: .monospaced)).padding(8)
-                .overlay(alignment: .topLeading) {
-                    if text.isEmpty { Text("粘贴 .idjplugin、M3U 频道列表、TVBox JSON 或插件 / 订阅链接").foregroundStyle(.secondary).padding(14).allowsHitTesting(false) }
-                }
-                .navigationTitle("粘贴插件").navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { done(nil) } }
-                    ToolbarItem(placement: .principal) { Button("从剪贴板") { text = UIPasteboard.general.string ?? "" } }
-                    ToolbarItem(placement: .confirmationAction) { Button("下一步") { done(text) }.disabled(text.isEmpty) }
-                }
+        DSSheet("粘贴插件", subtitle: "支持 .idjplugin、M3U 频道列表、TVBox JSON 或插件 / 订阅链接", onClose: { done(nil) }) {
+            DSTextEditor(placeholder: "粘贴 .idjplugin、M3U 频道列表、TVBox JSON 或插件 / 订阅链接", text: $text, mono: true)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .padding(.horizontal, 20)
+        } footer: {
+            DSSheetFooter {
+                Button { text = UIPasteboard.general.string ?? "" } label: { PillButtonPlain(title: "从剪贴板") }
+                Button { done(text) } label: { PillButtonLabel(title: "下一步", expand: true) }
+                    .disabled(text.isEmpty).opacity(text.isEmpty ? 0.4 : 1)
+            }
+            .buttonStyle(PressScale(scale: 0.98))
         }
+        .dsSheetChrome([.large])
     }
 }
 
@@ -429,34 +432,43 @@ private struct AddCMSSheet: View {
     @State private var error: String?
     @ObservedObject private var gate = SourceGate.shared
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("名称（可选）", text: $name)
-                    TextField("https://…/api.php/provide/vod/", text: $api).textInputAutocapitalization(.never).keyboardType(.URL)
-                        .accessibilityIdentifier("cms.api")
-                    if gate.unlocked { Toggle("成人内容（隐藏在片源管理之后）", isOn: $adult) }
-                } footer: {
+        DSSheet("添加采集站", onClose: { done(nil) }) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    DSTextField("名称（可选）", text: $name, icon: "tag")
+                    DSTextField("https://…/api.php/provide/vod/", text: $api, icon: "link", id: "cms.api")
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                    if gate.unlocked {
+                        Toggle(isOn: $adult) { Text("成人内容（隐藏在片源管理之后）").dsFont(15).foregroundStyle(STVTheme.text) }
+                            .toggleStyle(DSSwitch()).padding(.vertical, 6)
+                    }
                     Text("苹果 CMS v10 采集接口。添加时会请求一次 ?ac=list 验证；http 地址会自动改用 https。")
+                        .dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.tertiary).lineSpacing(3)
+                    if let error { Text(error).dsFont(13, relativeTo: .footnote).foregroundStyle(DSTone.danger) }
                 }
-                if let error { Text(error).foregroundStyle(.red).font(.caption) }
+                .padding(.horizontal, 20).padding(.bottom, 12)
             }
-            .navigationTitle("添加采集站").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { done(nil) } }
-                ToolbarItem(placement: .confirmationAction) {
-                    if busy { ProgressView() } else {
-                        Button("添加") {
-                            busy = true; error = nil
-                            Task {
-                                do { let s = try await CMSStore.shared.add(name: name, api: api, adult: adult); done("已添加采集站 \(s.name)（\(s.categories.count) 个分类）") }
-                                catch { self.error = error.localizedDescription }
-                                busy = false
-                            }
-                        }.disabled(api.isEmpty)
+        } footer: {
+            DSSheetFooter {
+                Button(action: add) {
+                    ZStack {
+                        PillButtonLabel(title: busy ? "" : "添加", expand: true)
+                        if busy { DSSpinner(size: 18, tint: STVTheme.onAccent) }
                     }
                 }
+                .disabled(busy || api.isEmpty).opacity(api.isEmpty ? 0.4 : 1)
             }
+            .buttonStyle(PressScale(scale: 0.98))
+        }
+        .dsSheetChrome([.medium, .large])
+    }
+
+    private func add() {
+        busy = true; error = nil
+        Task {
+            do { let s = try await CMSStore.shared.add(name: name, api: api, adult: adult); done("已添加采集站 \(s.name)（\(s.categories.count) 个分类）") }
+            catch { self.error = error.localizedDescription }
+            busy = false
         }
     }
 }
@@ -475,58 +487,55 @@ struct PluginDetailView: View {
 
     var body: some View {
         Group {
-            if let p = store.plugin(id) { content(p) } else { Text("插件已卸载").foregroundStyle(STVTheme.secondary) }
+            if let p = store.plugin(id) { content(p) }
+            else { ScrollView { DSEmptyState("插件已卸载", systemImage: "puzzlepiece.extension").padding(.top, 60) } }
         }
-        .navigationTitle(store.plugin(id)?.manifest.name ?? "插件")
-        .navigationBarTitleDisplayMode(.inline)
-        .scrollContentBackground(.hidden)
-        .background(STVTheme.bg.ignoresSafeArea())
+        .dsNavigation(store.plugin(id)?.manifest.name ?? "插件")
+        .dsToast($message, icon: "checkmark.circle.fill")
     }
 
     private func content(_ p: InstalledPlugin) -> some View {
-        List {
-            Section {
-                Toggle("启用", isOn: Binding(get: { p.enabled }, set: { store.setEnabled(id, $0) })).accessibilityIdentifier("plugin.enabled")
-                if let r = p.disabledReason { Text(r).font(.caption).foregroundStyle(.orange) }
-                LabeledContent("版本", value: p.manifest.version)
-                LabeledContent("类型", value: p.manifest.type.label + (p.manifest.adult ? " · 18+" : ""))
-                LabeledContent("作者", value: p.manifest.author.name)
-                LabeledContent("来源", value: p.origin)
-                LabeledContent("签名", value: p.publicKey == nil ? "未签名" : "已固定作者公钥")
-            }
-            if let settings = p.manifest.settings, !settings.isEmpty {
-                Section("设置") {
-                    ForEach(settings) { s in settingRow(p, s) }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                DSSection {
+                    DSToggleRow("启用", isOn: Binding(get: { p.enabled }, set: { store.setEnabled(id, $0) })).accessibilityIdentifier("plugin.enabled")
+                    if let r = p.disabledReason { Text(r).dsFont(13, relativeTo: .footnote).foregroundStyle(STVTheme.accentWarm).dsRow() }
+                    DSRow("版本", value: p.manifest.version)
+                    DSRow("类型", value: p.manifest.type.label + (p.manifest.adult ? " · 18+" : ""))
+                    DSRow("作者", value: p.manifest.author.name)
+                    DSRow("来源", value: p.origin)
+                    DSRow("签名", value: p.publicKey == nil ? "未签名" : "已固定作者公钥")
                 }
-            }
-            Section {
-                ForEach(p.manifest.httpDomains, id: \.self) { Label($0, systemImage: "globe") }
-                ForEach(p.extraDomains, id: \.self) { d in
-                    Label(d + "（你添加的）", systemImage: "globe.badge.chevron.backward")
-                        .swipeActions { Button("移除", role: .destructive) { store.removeDomain(id, d) } }
+                if let settings = p.manifest.settings, !settings.isEmpty {
+                    DSSection("设置") { ForEach(settings) { s in settingRow(p, s) } }
                 }
-                Button("添加域名…") { newDomain = ""; askDomain = true }
-            } header: { Text("可访问的域名") } footer: { Text("站点换了新镜像时，可以在这里手动授权新域名（只允许 example.com 或 *.example.com）。") }
-            Section("数据") {
-                if p.manifest.allowsCF, let host = p.manifest.httpDomains.first(where: { !$0.hasPrefix("*") }), let u = URL(string: "https://\(host)/") {
-                    Button("打开验证页（Cloudflare / 登录）") { verify = u }
+                DSSection("可访问的域名", footer: "站点换了新镜像时，可以在这里手动授权新域名（只允许 example.com 或 *.example.com）。") {
+                    ForEach(p.manifest.httpDomains, id: \.self) { DSRow($0, icon: "globe") }
+                    ForEach(p.extraDomains, id: \.self) { d in
+                        DSRow(title: d, icon: "globe.badge.chevron.backward", subtitle: "你添加的") {
+                            Button { store.removeDomain(id, d) } label: { MiniButtonLabel(title: "移除", tint: DSTone.danger, ground: DSTone.dangerSoft) }.buttonStyle(PressScale())
+                        }
+                    }
+                    DSRow("添加域名…", icon: "plus") { newDomain = ""; askDomain = true }
                 }
-                Button("清除 cookie 与存储") { store.clearData(id); message = "已清除" }
-                NavigationLink("运行日志") { PluginLogView(id: id) }.accessibilityIdentifier("plugin.logs")
+                DSSection("数据", separatorInset: 58) {
+                    if p.manifest.allowsCF, let host = p.manifest.httpDomains.first(where: { !$0.hasPrefix("*") }), let u = URL(string: "https://\(host)/") {
+                        DSRow("打开验证页（Cloudflare / 登录）", icon: "shield", chevron: true) { verify = u }
+                    }
+                    DSRow("清除 cookie 与存储", icon: "eraser") { store.clearData(id); message = "已清除" }
+                    NavigationLink { PluginLogView(id: id) } label: { DSRowLabel(title: "运行日志", icon: "text.alignleft", chevron: true).dsRow() }
+                        .buttonStyle(DSRowPress()).accessibilityIdentifier("plugin.logs")
+                }
+                DSSection { DSRow("卸载插件", icon: "trash", role: .destructive) { confirmUninstall = true } }
             }
-            Section {
-                Button("卸载插件", role: .destructive) { confirmUninstall = true }
-            }
-            if let message { Text(message).font(.caption).foregroundStyle(STVTheme.accent) }
+            .padding(.top, 4).padding(.bottom, 32)
         }
-        .alert("授权新域名", isPresented: $askDomain) {
-            TextField("mirror.example.com", text: $newDomain).textInputAutocapitalization(.never)
-            Button("取消", role: .cancel) {}
-            Button("授权") { message = store.addDomain(id, newDomain.lowercased()) ? "已授权 \(newDomain)" : "域名格式不对" }
-        } message: { Text("插件之后可以访问这个域名（包括图片）。只在你信任这个插件时授权。") }
-        .confirmationDialog("卸载后会删除脚本、设置、cookie 和存储", isPresented: $confirmUninstall, titleVisibility: .visible) {
-            Button("卸载", role: .destructive) { store.uninstall(id); dismiss() }
+        .dsDialog("授权新域名", isPresented: $askDomain, message: "插件之后可以访问这个域名（包括图片）。只在你信任这个插件时授权。") {
+            [.cancel(), .primary("授权", disabled: { newDomain.isEmpty }) { message = store.addDomain(id, newDomain.lowercased()) ? "已授权 \(newDomain)" : "域名格式不对" }]
+        } extra: {
+            DSTextField("mirror.example.com", text: $newDomain, icon: "globe").textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
         }
+        .dsConfirm("卸载插件？", isPresented: $confirmUninstall, message: "卸载后会删除脚本、设置、cookie 和存储。", confirm: "卸载") { store.uninstall(id); dismiss() }
         .sheet(item: Binding(get: { verify.map(VerifyTarget.init) }, set: { verify = $0?.url })) { t in
             PluginVerifySheet(pluginID: id, url: t.url) { verify = nil; Task { await store.importWebCookies(id) } }
         }
@@ -537,16 +546,20 @@ struct PluginDetailView: View {
     @ViewBuilder private func settingRow(_ p: InstalledPlugin, _ s: PluginManifest.Setting) -> some View {
         switch s.type {
         case "select":
-            Picker(s.name, selection: Binding(get: { p.settings[s.key] ?? s.default ?? "" }, set: { store.setSetting(id, s.key, $0) })) {
-                ForEach(s.options ?? [], id: \.self) { Text($0).tag($0) }
-            }
+            DSPicker(s.name, options: s.options ?? [], selection: Binding(get: { p.settings[s.key] ?? s.default ?? "" }, set: { store.setSetting(id, s.key, $0) }), style: .row) { $0 }
         case "secret":
-            HStack {
-                SecureField(s.name + (PluginSecrets.get(id, s.key) == nil ? "" : "（已保存）"), text: Binding(get: { secretDrafts[s.key] ?? "" }, set: { secretDrafts[s.key] = $0 }))
-                Button("保存") { store.setSetting(id, s.key, secretDrafts[s.key] ?? ""); secretDrafts[s.key] = nil; message = "已保存到钥匙串（插件只看到占位符）" }
+            HStack(spacing: 10) {
+                DSTextField(s.name + (PluginSecrets.get(id, s.key) == nil ? "" : "（已保存）"), text: Binding(get: { secretDrafts[s.key] ?? "" }, set: { secretDrafts[s.key] = $0 }), secure: true)
+                Button { store.setSetting(id, s.key, secretDrafts[s.key] ?? ""); secretDrafts[s.key] = nil; message = "已保存到钥匙串（插件只看到占位符）" } label: { MiniButtonLabel(title: "保存") }
+                    .buttonStyle(PressScale())
             }
+            .dsRow()
         default:
-            TextField(s.name, text: Binding(get: { p.settings[s.key] ?? s.default ?? "" }, set: { store.setSetting(id, s.key, $0) }))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(s.name).dsFont(13, relativeTo: .footnote).foregroundStyle(STVTheme.secondary)
+                DSTextField(s.name, text: Binding(get: { p.settings[s.key] ?? s.default ?? "" }, set: { store.setSetting(id, s.key, $0) }))
+            }
+            .dsRow()
         }
     }
 }
@@ -554,75 +567,24 @@ struct PluginDetailView: View {
 struct PluginLogView: View {
     let id: String
     @State private var lines: [String] = []
-    @State private var confirmClear = false
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 4) {
-                if lines.isEmpty { Text("暂无日志").foregroundStyle(STVTheme.secondary) }
-                ForEach(Array(lines.enumerated().reversed()), id: \.offset) { _, l in
-                    Text(l).font(.system(.caption2, design: .monospaced)).foregroundStyle(STVTheme.text).textSelection(.enabled)
-                }
-            }.padding(16)
-        }
-        .background(STVTheme.bg.ignoresSafeArea())
-        .navigationTitle("运行日志").navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button { UIPasteboard.general.string = lines.joined(separator: "\n") } label: { Image(systemName: "doc.on.doc") }
-                    .disabled(lines.isEmpty)
-                Button(role: .destructive) { confirmClear = true } label: { Image(systemName: "trash") }
-                    .disabled(lines.isEmpty).accessibilityIdentifier("plugin.logs.clear")
-            }
-        }
-        .confirmationDialog("清空此插件的运行日志？", isPresented: $confirmClear, titleVisibility: .visible) {
-            Button("清空日志", role: .destructive) { PluginLog.clear(id); lines = [] }
-            Button("取消", role: .cancel) {}
-        } message: { Text("只删除「\(PluginStore.shared.plugin(id)?.manifest.name ?? id)」的日志，不会清除 Cookie、存储或插件设置。") }
-        .task { lines = PluginLog.lines(id) }
-        .onReceive(NotificationCenter.default.publisher(for: PluginLog.changed)) { _ in lines = PluginLog.lines(id) }
-        .accessibilityIdentifier("plugin.logview")
-    }
-}
-
-struct CMSLogView: View {
-    let site: CMSSite
-    @State private var lines: [String] = []
-    @State private var confirmClear = false
-
+    @State private var message: String?
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 6) {
-                if lines.isEmpty {
-                    Text("暂无日志。进入该采集站的首页、搜索、详情或播放后会在这里记录请求。")
-                        .font(.caption).foregroundStyle(STVTheme.secondary)
+                if lines.isEmpty { DSEmptyState("暂无日志", systemImage: "text.alignleft") }
+                ForEach(Array(lines.enumerated().reversed()), id: \.offset) { _, l in
+                    Text(l).font(.system(.caption2, design: .monospaced)).foregroundStyle(STVTheme.text).textSelection(.enabled)
                 }
-                ForEach(Array(lines.enumerated().reversed()), id: \.offset) { _, line in
-                    Text(line).font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(STVTheme.text).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }.padding(16)
-        }
-        .background(STVTheme.bg.ignoresSafeArea())
-        .navigationTitle("采集站调试日志")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button { UIPasteboard.general.string = lines.joined(separator: "\n") } label: { Image(systemName: "doc.on.doc") }
-                    .disabled(lines.isEmpty)
-                Button(role: .destructive) { confirmClear = true } label: { Image(systemName: "trash") }
-                    .disabled(lines.isEmpty).accessibilityIdentifier("cms.logs.clear")
             }
+            .padding(.horizontal, 16).padding(.bottom, 32)
         }
-        .confirmationDialog("清空「\(site.name)」的调试日志？", isPresented: $confirmClear, titleVisibility: .visible) {
-            Button("清空日志", role: .destructive) { CMSLog.clear(site.key); lines = [] }
-            Button("取消", role: .cancel) {}
-        } message: { Text("只删除此采集站的调试日志，不会删除采集站、分类或其他站点数据。") }
-        .task { lines = CMSLog.lines(site.key) }
-        .onReceive(NotificationCenter.default.publisher(for: CMSLog.notificationName())) { note in
-            guard (note.object as? String) == site.key else { return }
-            lines = CMSLog.lines(site.key)
+        .dsNavigation("运行日志") {
+            DSBarButton(systemName: "doc.on.doc") { UIPasteboard.general.string = lines.joined(separator: "\n"); message = "已复制" }.accessibilityLabel("复制")
         }
-        .accessibilityIdentifier("cms.logview.\(site.key)")
+        .dsToast($message, icon: "checkmark.circle.fill")
+        .task { lines = PluginLog.lines(id) }
+        .onReceive(NotificationCenter.default.publisher(for: PluginLog.changed)) { _ in lines = PluginLog.lines(id) }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("plugin.logview")
     }
 }
