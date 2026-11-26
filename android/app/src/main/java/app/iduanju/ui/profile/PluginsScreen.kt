@@ -128,6 +128,32 @@ fun PluginsScreen(onBack: () -> Unit) {
                 }
             }
             if (message != null) item("message", "note") { Note(message, error) }
+            if (bundled.isNotEmpty()) item("bundled", "group") {
+                Group("推荐插件（App 内置）",
+                    footer = if (visibleBundled.isEmpty()) "App 内置了 ${bundled.size} 个成人视频与漫画插件（成人内容），在「片源管理」打开成人内容后显示。" else null) {
+                    if (missingBundled.size > 1) {
+                        LinkRow("一键安装全部推荐（${missingBundled.size}）", ProfileIcons.add) {
+                            if (!busy) run {
+                                var ok = 0
+                                for ((file, _) in missingBundled) {
+                                    runCatching { store.install(store.bundledText(file), "内置") }.onSuccess { ok++ }
+                                }
+                                "已安装 $ok 个推荐插件"
+                            }
+                        }
+                        RowDivider()
+                    }
+                    visibleBundled.forEachIndexed { i, (file, m) ->
+                        if (i > 0) Hairline(Modifier.padding(start = 14.dp))
+                        val inst = store.plugins.firstOrNull { it.id == m.id }
+                        val newer = inst != null && PluginManifest.compare(m.version, inst.version) > 0
+                        EntryRow(m.name, listOfNotNull(m.type?.label, if (m.adult) "18+" else null), when { inst == null -> "安装"; newer -> "更新"; else -> null },
+                            sub = m.description, padded = true) {
+                            run { val r = store.install(store.bundledText(file), "内置"); "已安装「${r.name}」${r.version}" }
+                        }
+                    }
+                }
+            }
             item("add", "group") {
                 Group("添加插件", footer = "插件运行在 QuickJS 沙箱里，只能访问 manifest 声明的域名；未成年相关内容一律过滤。") {
                     LinkRow("从网址添加", ProfileIcons.link) { dialog = "url" }
@@ -186,32 +212,6 @@ fun PluginsScreen(onBack: () -> Unit) {
                     }
                     if (cms.sites.any { !it.adult || adult }) RowDivider()
                     LinkRow("添加采集站", ProfileIcons.server) { dialog = "cms" }
-                }
-            }
-            if (bundled.isNotEmpty()) item("bundled", "group") {
-                Group("推荐插件（App 内置）",
-                    footer = if (visibleBundled.isEmpty()) "App 内置了 ${bundled.size} 个成人视频与漫画插件（成人内容），在「片源管理」打开成人内容后显示。" else null) {
-                    if (missingBundled.size > 1) {
-                        LinkRow("一键安装全部推荐（${missingBundled.size}）", ProfileIcons.add) {
-                            if (!busy) run {
-                                var ok = 0
-                                for ((file, _) in missingBundled) {
-                                    runCatching { store.install(store.bundledText(file), "内置") }.onSuccess { ok++ }
-                                }
-                                "已安装 $ok 个推荐插件"
-                            }
-                        }
-                        RowDivider()
-                    }
-                    visibleBundled.forEachIndexed { i, (file, m) ->
-                        if (i > 0) Hairline(Modifier.padding(start = 14.dp))
-                        val inst = store.plugins.firstOrNull { it.id == m.id }
-                        val newer = inst != null && PluginManifest.compare(m.version, inst.version) > 0
-                        EntryRow(m.name, listOfNotNull(m.type?.label, if (m.adult) "18+" else null), when { inst == null -> "安装"; newer -> "更新"; else -> null },
-                            sub = m.description, padded = true) {
-                            run { val r = store.install(store.bundledText(file), "内置"); "已安装「${r.name}」${r.version}" }
-                        }
-                    }
                 }
             }
         }
