@@ -679,7 +679,7 @@ private struct HomeFeedPage: View {
 
     private var cardsSkeleton: some View {
         let landscape: Bool = { if case .site(let s) = tab { return s.isLongVideo } else { return false } }()
-        return LazyVGrid(columns: HomeSection.columns(landscape: landscape), spacing: 16) {
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: landscape ? 2 : 3), spacing: 16) {
             ForEach(0..<(landscape ? 2 : 3), id: \.self) { _ in
                 VStack(alignment: .leading, spacing: 8) {
                     ShimmerBlock().aspectRatio(landscape ? 16/9 : 3/4, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12))
