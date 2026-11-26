@@ -18,6 +18,16 @@ struct VerticalPlayerView: View {
     }
 }
 
+
+private struct PlayerLayerAccessibility: ViewModifier {
+    @ObservedObject var clock: PlaybackClock
+    let fillScreen: Bool
+    let showPlaybackTime: Bool
+    func body(content: Content) -> some View {
+        content.accessibilityValue(showPlaybackTime ? String(format: "已播放 %.2f 秒", clock.sample.time) : (fillScreen ? "fill" : "fit"))
+    }
+}
+
 struct PlayerScreen: View {
     let series: HGSeries
     let startIndex: Int?
@@ -118,7 +128,7 @@ struct PlayerScreen: View {
                     Color.black
                     // A single in-window layer remains the PiP source across paging, rotation and buffering.
                     PlayerLayerView(coordinator: co, fill: fillScreen, engine: co.engineKind)
-                        .accessibilityElement(children: .contain).accessibilityIdentifier(suppliedDetail == nil ? "player.video" : "novel.media.status").accessibilityValue(suppliedDetail == nil ? (fillScreen ? "fill" : "fit") : String(format: "已播放 %.2f 秒", co.time))
+                        .accessibilityElement(children: .contain).accessibilityIdentifier(suppliedDetail == nil ? "player.video" : "novel.media.status").modifier(PlayerLayerAccessibility(clock: co.clock, fillScreen: fillScreen, showPlaybackTime: suppliedDetail != nil))
                         .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - pageDrift(co.current ?? 0, page: full.height) - videoLift)
                         .allowsHitTesting(false)
                     if let held = co.heldFrame {
@@ -677,14 +687,7 @@ struct PlayerScreen: View {
     private func compactChrome(_ full: CGSize, ins: EdgeInsets) -> some View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
-            GeometryReader { g in
-                ZStack(alignment: .leading) {
-                    Color.white.opacity(0.18)
-                    Color.white.opacity(0.6).frame(width: g.size.width * max(0, min(1, co.duration > 0 ? co.time / co.duration : 0)))
-                }
-            }
-            .frame(height: 2)
-            .accessibilityIdentifier("player.compactProgress")
+            PlayerCompactProgress(clock: co.clock)
         }
         .frame(width: full.width, height: full.height)
         .allowsHitTesting(false)

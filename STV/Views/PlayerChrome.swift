@@ -279,6 +279,30 @@ struct PlayerPill: View {
     }
 }
 
+
+/// A tiny non-interactive progress line. It observes only the 4 Hz clock, not the whole player screen.
+struct PlayerCompactProgress: View {
+    @ObservedObject var clock: PlaybackClock
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Color.white.opacity(0.18)
+                Color.white.opacity(0.6).frame(width: g.size.width * clock.sample.fraction)
+            }
+        }
+        .frame(height: 2)
+        .accessibilityIdentifier("player.compactProgress")
+    }
+}
+
+/// Keeps the accessible playback time live without publishing every clock tick from PlaybackCoordinator.
+struct PlayerClockValue: ViewModifier {
+    @ObservedObject var clock: PlaybackClock
+    func body(content: Content) -> some View {
+        content.accessibilityValue(String(format: "已播放 %.2f 秒", clock.sample.time))
+    }
+}
+
 /// On-screen speed-control HUD while long-pressing.
 struct PlayerSpeedHUD: View {
     var rate: Double
