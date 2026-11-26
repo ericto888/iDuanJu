@@ -714,7 +714,7 @@ private struct HomeBoardSection: View {
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     DSSectionHeader(title: board.title)
-                    LazyVGrid(columns: HomeSection.columns(landscape: landscape), spacing: 16) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: landscape ? 2 : 3), spacing: 16) {
                         ForEach(0..<(landscape ? 2 : 3), id: \.self) { _ in
                             VStack(alignment: .leading, spacing: 8) {
                                 ShimmerBlock().aspectRatio(landscape ? 16/9 : 3/4, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12))
@@ -1028,7 +1028,7 @@ private struct DynamicSiteFeed: View {
     }
 
     private var cardsSkeleton: some View {
-        LazyVGrid(columns: HomeSection.columns(landscape: source.isLongVideo), spacing: 16) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: source.isLongVideo ? 2 : 3), spacing: 16) {
             ForEach(0..<(source.isLongVideo ? 2 : 3), id: \.self) { _ in
                 VStack(alignment: .leading, spacing: 8) {
                     ShimmerBlock().aspectRatio(source.isLongVideo ? 16/9 : 3/4, contentMode: .fit)
