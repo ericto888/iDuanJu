@@ -586,13 +586,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     func pictureInPictureController(_ controller: AVPictureInPictureController,
                                     restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completion: @escaping (Bool) -> Void) {
         restoringPiP = true
-        // Let the app's player screen return to the foreground and complete a SwiftUI layout
-        // pass before AVKit finishes the PiP-to-inline transition. This preserves the inline
-        // video's existing 44 pt portrait-landscape lift as the transition's destination.
-        Task { @MainActor [weak self] in
-            await Task.yield()
-            completion(controller === self?.pip && self?.observer != nil)
-        }
+        completion(controller === pip && observer != nil)
     }
 
     func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
