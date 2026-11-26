@@ -288,8 +288,8 @@ struct MacCMSProvider: SiteProvider {
                               desc: [meta, desc].filter { !$0.isEmpty }.joined(separator: "\n"),
                               author: PluginOut.s(v["vod_director"], max: 60).nilIfEmpty,
                               actors: actors,
-                              onlineTime: 0, totalEps: eps.count, episodes: eps, tags: tags.filter { !$0.isEmpty },
-                              episodeLabel: eps.count > 1 ? "共\(eps.count)集" : "长视频", tags: PluginOut.unique(tags.filter { !$0.isEmpty }) { $0 })
+                              onlineTime: 0, totalEps: eps.count, episodes: eps, tags: PluginOut.unique(tags.filter { !$0.isEmpty }) { $0 },
+                              episodeLabel: eps.count > 1 ? "共\(eps.count)集" : "长视频")
     }
 
     static func streams(for ep: HGEpisode) -> [HGStream] {
