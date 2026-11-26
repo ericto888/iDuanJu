@@ -134,9 +134,6 @@ struct PlayerScreen: View {
                             .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - videoLift)
                             .allowsHitTesting(false)
                     }
-                    // PiP restores the AVPlayer surface into the SwiftUI hierarchy. Do not animate
-                    // the existing 44 pt portrait-landscape lift when that surface is reattached.
-                    .transaction { $0.animation = nil }
                     if let held = co.heldFrame {
                         // Previous episode's last frame, riding with the swipe until the next one is on screen.
                         FeedDrift(feed: feed, index: held.index, page: full.height) {
@@ -144,7 +141,6 @@ struct PlayerScreen: View {
                                 .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - videoLift)
                                 .allowsHitTesting(false).accessibilityHidden(true)
                         }
-                        .transaction { $0.animation = nil }
                     }
                     Group {
                         if co.current != nil {
