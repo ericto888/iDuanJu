@@ -588,6 +588,43 @@ final class PluginTests: XCTestCase {
 
     // MARK: 苹果 CMS
 
+    private func tvboxConfig(_ text: String) throws -> TVBoxConfig {
+        guard case .config(let c) = try TVBoxConfig.parse(text, "") else { throw TVBoxError("not a config") }
+        return c
+    }
+
+    /// Every site of a pasted TVBox config is kept for the TVBox page: nothing is dropped or sent to 采集站 any more.
+    func testTVBoxConfigKeepsEverySiteKind() throws {
+        let config = try tvboxConfig(#"{"name":"demo","sites":[{"name":"CMS","type":1,"api":"http://cms.example/api.php/provide/vod/"},{"name":"jar","type":3,"api":"csp_demo"},{"name":"dup","type":1,"api":"https://cms.example/api.php/provide/vod/"}],"spider":"https://example.org/a.jar"}"#)
+        XCTAssertEqual(config.name, "demo")
+        XCTAssertEqual(config.sites.map(\.name), ["CMS", "jar", "dup"])
+        XCTAssertEqual(config.sites.map(\.kind), [.cmsJson, .jar, .cmsJson])
+        XCTAssertEqual(config.sites[0].api, "http://cms.example/api.php/provide/vod/")
+        XCTAssertTrue(config.hasCode)
+    }
+
+    func testTVBoxLargeCatalogAndStandaloneLiveLists() throws {
+        let scripts = (0..<600).map { ["type": 3, "api": "csp_\($0)"] as [String: Any] }
+        let xml = ["type": 0, "api": "https://cms.example/vod/xml"] as [String: Any]
+        let live = ["name": "直播", "url": "https://cms.example/channels.m3u"]
+        let bytes = try JSONSerialization.data(withJSONObject: ["sites": scripts + [xml], "lives": [live, live]])
+        let catalog = try tvboxConfig(String(decoding: bytes, as: UTF8.self))
+        XCTAssertEqual(catalog.sites.count, 601)
+        XCTAssertEqual(catalog.sites.filter { $0.kind == .cmsXml }.map(\.api), ["https://cms.example/vod/xml"])
+        XCTAssertEqual(catalog.lives.map(\.url), ["https://cms.example/channels.m3u"])
+    }
+
+    /// Code-only configs import too, but ask for trust before anything runs.
+    func testPastedTVBoxConfigsAreRecognised() async throws {
+        let text = #"{"sites":[{"name":"jar","type":3,"api":"csp_demo"}],"spider":"x.jar"}"#
+        XCTAssertTrue(try tvboxConfig(text).hasCode)
+        guard case .tvbox(let pasted) = try await PluginInstaller.interpret("  " + text + "\n") else { return XCTFail("not recognised") }
+        XCTAssertEqual(pasted, text)
+        let repo = TVBoxRepo(RepoRecord(id: "r", name: "n", url: ""), try tvboxConfig(text))
+        XCTAssertTrue(repo.needsTrust)
+        XCTAssertFalse(repo.trusted)
+    }
+
     @MainActor func testCMSCategoryRequestsKeepFullCategoryList() async throws {
         NetGuard.resolverOverride = { _ in ["93.184.216.34"] }
         var queries: [[String: String]] = []
