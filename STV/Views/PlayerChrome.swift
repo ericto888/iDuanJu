@@ -238,9 +238,8 @@ struct PlayerCompactTimeControls: View {
             Button { co.togglePause(); onInteract() } label: {
                 Image(systemName: co.paused ? "play.fill" : "pause.fill")
                     .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                    .liquidGlass(Circle(), tone: .clear, interactive: true, onMedia: true)
-                    .contentShape(Circle())
+                    .frame(width: 28, height: 34)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(co.paused ? "播放" : "暂停")
