@@ -743,18 +743,16 @@ struct PlayerScreen: View {
             if let i = co.current, co.episodes.indices.contains(i) {
                 VStack(alignment: .leading, spacing: 0) {
                     Group {
-                        Group {
-                            if co.channelList { PlayerProgramLine(series: series, channel: co.episodes[i]) }
-                            else { meta(i, skip: false) }
-                        }
-                        .padding(.bottom, 8).opacity(scrubbing ? 0 : 1).modifier(ChromeFade(on: chrome, keepAccessible: true))
-                        Text(co.detail?.title ?? series.title)
-                            .font(.system(size: 21, weight: .bold)).lineLimit(1)
-                            .shadow(color: .black.opacity(chrome ? 0 : 0.7), radius: 3)
-                            .accessibilityIdentifier("player.title")
-                            .accessibilityValue("第\(co.episodes[i].ep)集")
-                            .padding(.bottom, 10)
+                        if co.channelList { PlayerProgramLine(series: series, channel: co.episodes[i]) }
+                        else { meta(i, skip: false) }
                     }
+                    .padding(.bottom, 8).opacity(scrubbing ? 0 : 1).modifier(ChromeFade(on: chrome, keepAccessible: true))
+                    Text(co.detail?.title ?? series.title)
+                        .font(.system(size: 21, weight: .bold)).lineLimit(1)
+                        .shadow(color: .black.opacity(chrome ? 0 : 0.7), radius: 3)
+                        .accessibilityIdentifier("player.title")
+                        .accessibilityValue("第\(co.episodes[i].ep)集")
+                        .padding(.bottom, 10)
                     .opacity(panel != nil ? 0.35 : 1)
                     Group {
                         if !co.channelList {
@@ -814,11 +812,16 @@ struct PlayerScreen: View {
             if let i = co.current, co.episodes.indices.contains(i) {
                 VStack(spacing: 7) {
                     // Landscape: progress occupies its own row above the transport/tool controls.
-                    PlayerProgressBar(co: co, scrubbing: $scrubbing, onInteract: flashChrome)
-                        .frame(maxWidth: .infinity)
-                        .opacity(panel != nil ? 0.35 : 1)
-                        .shadow(color: .black.opacity(chrome ? 0 : 0.6), radius: 2)
-                        .allowsHitTesting(interactive && co.readyIndex == i)
+                    if co.channelList {
+                        PlayerProgramLine(series: series, channel: co.episodes[i])
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        PlayerProgressBar(co: co, scrubbing: $scrubbing, onInteract: flashChrome)
+                            .frame(maxWidth: .infinity)
+                            .opacity(panel != nil ? 0.35 : 1)
+                            .shadow(color: .black.opacity(chrome ? 0 : 0.6), radius: 2)
+                            .allowsHitTesting(interactive && co.readyIndex == i)
+                    }
 
                     HStack(spacing: 10) {
                         PlayerCompactTimeControls(co: co, onInteract: flashChrome)
