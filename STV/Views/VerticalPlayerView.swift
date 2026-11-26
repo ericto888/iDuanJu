@@ -783,7 +783,7 @@ struct PlayerScreen: View {
         let side = max(ins.leading, ins.trailing, 64) + 2
         return VStack(spacing: 0) {
             HStack(spacing: 10) {
-                PlayerIconButton(symbol: "chevron.left", label: "返回", transparent: true) { exitPlayer() }
+                PlayerIconButton(symbol: "chevron.left", label: "返回") { exitPlayer() }
                     .opacity(dim).modifier(ChromeFade(on: chrome))
 
                 Spacer(minLength: 12)
@@ -793,13 +793,13 @@ struct PlayerScreen: View {
                                title: "连播", value: co.autoNext ? "开" : "关", on: co.autoNext) {
                         co.autoNext.toggle(); showOSD(co.autoNext ? "连播：开" : "连播：关"); flashChrome()
                     }
-                    PlayerIconButton(symbol: "lock.open", label: "锁屏", transparent: true) { locked = true; panel = nil; flashChrome() }
+                    PlayerIconButton(symbol: "lock.open", label: "锁屏") { locked = true; panel = nil; flashChrome() }
                         .accessibilityIdentifier("player.lock")
-                    PlayerIconButton(symbol: "ellipsis", label: "更多", tint: panel == .more ? STVTheme.accent : .white, transparent: true) {
+                    PlayerIconButton(symbol: "ellipsis", label: "更多", tint: panel == .more ? STVTheme.accent : .white) {
                         toggle(.more)
                     }
                     .accessibilityIdentifier("player.more")
-                    PlayerIconButton(symbol: "arrow.down.right.and.arrow.up.left", label: "退出横屏", transparent: true) {
+                    PlayerIconButton(symbol: "arrow.down.right.and.arrow.up.left", label: "退出横屏") {
                         OrientationGate.exitLandscape(); flashChrome()
                     }
                     .accessibilityIdentifier("player.exitFullscreen")
