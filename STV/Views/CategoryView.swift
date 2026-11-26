@@ -37,16 +37,9 @@ struct CategoryView: View {
                     HStack(alignment: .center, spacing: 12) {
                         UnderlineTabs(items: Mode.allCases, selection: $mode, label: \.rawValue, idPrefix: "category.mode")
                         Spacer(minLength: 0)
-                        NavigationLink(value: Route.search) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(STVTheme.text)
-                                .frame(width: 36, height: 36)
-                                .background(STVTheme.glass, in: Circle())
-                                .overlay(Circle().strokeBorder(STVTheme.glassBorder, lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("搜索")
+                        NavigationLink(value: Route.search) { DSBarLabel(systemName: "magnifyingglass") }
+                            .buttonStyle(GlassPress())
+                            .accessibilityLabel("搜索")
                     }
                     .padding(.horizontal, 20).padding(.top, 8)
                     .id("category.top")
@@ -56,6 +49,7 @@ struct CategoryView: View {
                     .transition(.opacity)
                 }
                 .padding(.bottom, bottomBarHidden ? 0 : 96)
+                .compatScrollContent()
             }
             .scrollIndicators(.hidden)
             .coordinateSpace(name: "category.scroll")
@@ -69,12 +63,15 @@ struct CategoryView: View {
             }
             .overlay(alignment: .top) { topFade }
             .overlay(alignment: .top) {
-                if mode == .filter && collapsed {
-                    stickyBar { withAnimation(DS.panel) { proxy.scrollTo("category.top", anchor: .top) } }
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                // Scope the animation to the sticky strip; animating the whole scroll view also moves every changing cell.
+                ZStack(alignment: .top) {
+                    if mode == .filter && collapsed {
+                        stickyBar { withAnimation(DS.panel) { proxy.scrollTo("category.top", anchor: .top) } }
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                 }
+                .animation(DS.panel, value: collapsed)
             }
-            .animation(DS.panel, value: collapsed)
         }
         .coordinateSpace(name: "category")
         .onReceive(NotificationCenter.default.publisher(for: .categoryBottomBarVisibilityChanged)) { note in
