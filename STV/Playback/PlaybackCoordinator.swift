@@ -96,7 +96,6 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         set { clock.scrubPreview = newValue }
     }
     @Published private(set) var prebuffer: (bytes: Int, until: Double, lowStorage: Bool)?
-    @Published private(set) var subtitleText: String?
     var time: Double { clock.sample.time }
     var duration: Double { clock.sample.duration }
     var bufferedUntil: Double { clock.sample.bufferedUntil }
@@ -305,9 +304,6 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
             Task { @MainActor [weak self] in
                 self?.prebuffer = value.map { ($0.bytes, $0.until, $0.lowStorage) }
             }
-        }.store(in: &compatibilitySubscriptions)
-        telemetry.$subtitle.sink { [weak self] value in
-            Task { @MainActor [weak self] in self?.subtitleText = value }
         }.store(in: &compatibilitySubscriptions)
     }
 
