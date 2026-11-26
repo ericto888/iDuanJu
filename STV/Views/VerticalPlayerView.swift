@@ -706,7 +706,7 @@ struct PlayerScreen: View {
     private func portraitControls(_ full: CGSize, ins: EdgeInsets, chrome: Bool, interactive: Bool) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                PlayerIconButton(symbol: "chevron.left", label: "返回", transparent: true) { exitPlayer() }
+                PlayerIconButton(symbol: "chevron.left", label: "返回") { exitPlayer() }
                 Spacer()
                 PlayerIconButton(symbol: "pip.enter", label: "画中画") { co.togglePiP() }
                     .disabled(!co.pipPossible).opacity(co.pipPossible ? 1 : 0.55)
@@ -783,7 +783,7 @@ struct PlayerScreen: View {
         let side = max(ins.leading, ins.trailing, 64) + 2
         return VStack(spacing: 0) {
             HStack(spacing: 10) {
-                PlayerIconButton(symbol: "chevron.left", label: "返回") { exitPlayer() }
+                PlayerIconButton(symbol: "chevron.left", label: "返回", transparent: true) { exitPlayer() }
                     .opacity(dim).modifier(ChromeFade(on: chrome))
 
                 Spacer(minLength: 12)
@@ -795,7 +795,7 @@ struct PlayerScreen: View {
                     }
                     PlayerIconButton(symbol: "lock.open", label: "锁屏", transparent: true) { locked = true; panel = nil; flashChrome() }
                         .accessibilityIdentifier("player.lock")
-                    PlayerIconButton(symbol: "ellipsis", label: "更多", tint: panel == .more ? STVTheme.accent : .white) {
+                    PlayerIconButton(symbol: "ellipsis", label: "更多", tint: panel == .more ? STVTheme.accent : .white, transparent: true) {
                         toggle(.more)
                     }
                     .accessibilityIdentifier("player.more")
