@@ -5,63 +5,34 @@ struct ProfileView: View {
     @State private var showHongguoLogin = false
     @State private var bottomBarHidden = false
     @State private var chromeScrollBehavior = HomeChromeScrollBehavior()
-    @ObservedObject private var library = LibraryStore.shared
-    @ObservedObject private var gate = SourceGate.shared
-    @ObservedObject private var hgAccount = HongguoWebAccount.shared
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 24) {
                 GeometryReader { proxy in
                     Color.clear.preference(key: TabBarScrollOffsetKey.self, value: proxy.frame(in: .named("profile.scroll")).minY)
                 }
                 .frame(height: 0)
-                Text("我的").font(.largeTitle.weight(.heavy)).foregroundStyle(STVTheme.text).padding(.horizontal, 16)
-                hongguoAccountCard
-                if !library.continueWatching.isEmpty { ContinueRow(items: library.continueWatching) }
-                VStack(alignment: .leading, spacing: 10) {
-                    SectionHeader(title: "我的收藏", trailing: AnyView(NavigationLink(value: Route.favorites) {
-                        Text("全部 \(library.favorites.count)").font(.subheadline).foregroundStyle(STVTheme.secondary)
-                    }))
-                    if library.favorites.isEmpty {
-                        Text("在播放页右侧点 ♥ 收藏").font(.subheadline).foregroundStyle(STVTheme.secondary).padding(.horizontal, 16)
-                    } else {
-                        NumberedGrid(items: Array(library.favorites.prefix(6)), numbered: false)
+                Text("我的").dsFont(32, .heavy, relativeTo: .largeTitle).foregroundStyle(STVTheme.text).padding(.horizontal, 20)
+                    .accessibilityAddTraits(.isHeader)
+                HongguoAccountCard(message: $message, login: $showHongguoLogin)
+                ProfileLibrary()
+                ProfileLinks()
+                DSSection("维护", separatorInset: 58) {
+                    maintenance("重置红果设备注册", "arrow.counterclockwise") { await HongguoClient.shared.resetDevice(); message = "已重置红果设备" }
+                    maintenance("重置黄果访客会话", "person.badge.key") { await HuangguoClient.shared.resetSession(); message = "已清除黄果会话" }
+                    maintenance("清空封面缓存", "photo.stack") { await CoverStore.shared.clear(); message = "封面缓存已清空" }
+                    maintenance("清空播放缓存", "trash") {
+                        await Task.detached { try? FileManager.default.removeItem(at: EpisodePlaybackLoader.cacheDir) }.value
+                        await HongguoClient.shared.clearResolveCache()
+                        message = "播放缓存已清空"
                     }
                 }
-                VStack(spacing: 0) {
-                    link("观看历史", "clock.arrow.circlepath", .history, trailing: library.continueWatching.isEmpty ? nil : "\(library.continueWatching.count)")
-                    link("剧星榜", "star.circle", .actorRank)
-                    link("我的收藏", "heart", .favorites, trailing: "\(library.favorites.count)")
-                }
-                .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14))
-                .padding(.horizontal, 16)
-                VStack(spacing: 0) {
-                    link("Telegram 频道", "paperplane", .channels, trailing: "\(TGStore.shared.visibleChannels.count) 个")
-                    link("漫画", "book", .mangaHome, trailing: MangaStore.shared.favorites.isEmpty ? nil : "收藏 \(MangaStore.shared.favorites.count)")
-                    link("下载管理", "arrow.down.circle", .downloads, trailing: TGDownloads.shared.visible.isEmpty ? nil : "\(TGDownloads.shared.visible.count)")
-                }
-                .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14))
-                .padding(.horizontal, 16)
-                VStack(spacing: 0) {
-                    link("片源管理", "square.stack.3d.down.right", .sources,
-                         trailing: gate.enabledCount > 0 ? "已启用 \(gate.enabledCount) 个" : "红果 · 黄果")
-                    link("插件", "puzzlepiece.extension", .plugins, trailing: pluginTrailing)
-                    link("开源许可", "doc.text", .licenses)
-                }
-                .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14))
-                .padding(.horizontal, 16)
-                VStack(spacing: 0) {
-                    row("重置红果设备注册", "arrow.counterclockwise") { await HongguoClient.shared.resetDevice(); message = "已重置红果设备" }
-                    row("重置黄果访客会话", "person.badge.key") { await HuangguoClient.shared.resetSession(); message = "已清除黄果会话" }
-                    row("清空封面缓存", "photo.stack") { await CoverStore.shared.clear(); message = "封面缓存已清空" }
-                    row("清空播放缓存", "trash") { try? FileManager.default.removeItem(at: EpisodePlaybackLoader.cacheDir); await HongguoClient.shared.clearResolveCache(); message = "播放缓存已清空" }
-                }
-                .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14))
-                .padding(.horizontal, 16)
-                Text(message ?? "所有数据由本机直连上游，观看记录和收藏只保存在本机。\n\(Self.versionText)")
-                    .font(.caption).foregroundStyle(STVTheme.secondary).padding(.horizontal, 16)
-            }.padding(.top, 12).padding(.bottom, bottomBarHidden ? 0 : 96)
+                Text("所有数据由本机直连上游，观看记录和收藏只保存在本机。\n\(Self.versionText)")
+                    .dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.tertiary).lineSpacing(3).padding(.horizontal, 20)
+            }
+            .padding(.top, 8).padding(.bottom, bottomBarHidden ? 0 : 96)
+            .compatScrollContent()
         }
         .scrollIndicators(.hidden)
         .coordinateSpace(name: "profile.scroll")
@@ -70,7 +41,9 @@ struct ProfileView: View {
         }
         .compatOnScrollInteraction { chromeScrollBehavior.setInteracting($0) }
         .compatOnScrollMetrics { handleScrollMetrics($0) }
-        .background(STVTheme.bg.ignoresSafeArea())
+        .dsStatusFade()
+        .dsAmbient(cool: true)
+        .toolbar(.hidden, for: .navigationBar)
         .onReceive(NotificationCenter.default.publisher(for: .profileBottomBarVisibilityChanged)) { note in
             if let hidden = note.object as? Bool { bottomBarHidden = hidden }
         }
@@ -78,13 +51,8 @@ struct ProfileView: View {
             chromeScrollBehavior.reset()
             setBottomBarHidden(false)
         }
-        .toolbar(.hidden, for: .navigationBar)
-        .sheet(isPresented: $showHongguoLogin) {
-            HongguoLoginView()
-        }
-        .task {
-            if hgAccount.isLoggedIn { _ = await hgAccount.refreshProfile() }
-        }
+        .sheet(isPresented: $showHongguoLogin) { HongguoLoginView() }
+        .dsToast($message, icon: "checkmark.circle.fill", bottom: 16)
     }
 
     private func handleScrollMetrics(_ metrics: CompatScrollMetrics) {
@@ -109,93 +77,109 @@ struct ProfileView: View {
         NotificationCenter.default.post(name: .profileBottomBarVisibilityChanged, object: hidden)
     }
 
-    @ViewBuilder
-    private var hongguoAccountCard: some View {
-        HStack(spacing: 12) {
-            if let p = hgAccount.profile {
-                if !p.avatarUrl.isEmpty {
-                    CoverView(url: p.avatarUrl, corner: 22)
-                        .frame(width: 44, height: 44)
-                        .clipShape(Circle())
-                } else {
-                    Circle()
-                        .fill(STVTheme.accentSoft)
-                        .frame(width: 44, height: 44)
-                        .overlay(Text(String(p.nickname.prefix(1))).font(.headline).foregroundStyle(STVTheme.accent))
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(p.nickname)
-                        .font(.headline)
-                        .foregroundStyle(STVTheme.text)
-                        .lineLimit(1)
-                    Text(hgAccount.lastSyncNote ?? "已连接红果短剧，观看进度自动同步")
-                        .font(.caption)
-                        .foregroundStyle(STVTheme.secondary)
-                        .lineLimit(1)
-                }
-                Spacer()
-                Button("退出") {
-                    hgAccount.logout()
-                    message = "已退出红果短剧账号"
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(STVTheme.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(STVTheme.glass, in: Capsule())
-            } else {
-                Circle()
-                    .fill(STVTheme.accentSoft)
-                    .frame(width: 44, height: 44)
-                    .overlay(Image(systemName: "qrcode.viewfinder").font(.title3).foregroundStyle(STVTheme.accent))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("红果短剧扫码登录")
-                        .font(.headline)
-                        .foregroundStyle(STVTheme.text)
-                    Text("扫码连接账号，同步短剧观看进度")
-                        .font(.caption)
-                        .foregroundStyle(STVTheme.secondary)
-                }
-                Spacer()
-                Button("去扫码") {
-                    showHongguoLogin = true
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(STVTheme.accent, in: Capsule())
-            }
-        }
-        .padding(14)
-        .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 16)
-    }
-
-    private var pluginTrailing: String? {
-        let n = PluginStore.shared.visiblePlugins.count + CMSStore.shared.visibleSites.count
-        return n > 0 ? "\(n) 个" : nil
-    }
-
     static var versionText: String {
         let i = Bundle.main.infoDictionary
         return "i短剧 \(i?["CFBundleShortVersionString"] as? String ?? "") (\(i?["CFBundleVersion"] as? String ?? ""))"
     }
 
-    private func link(_ t: String, _ icon: String, _ r: Route, trailing: String? = nil) -> some View {
-        NavigationLink(value: r) {
-            HStack {
-                Image(systemName: icon).frame(width: 24); Text(t); Spacer()
-                if let trailing { Text(trailing).font(.subheadline).foregroundStyle(STVTheme.secondary) }
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(STVTheme.secondary)
-            }.foregroundStyle(STVTheme.text).padding(14)
-        }.buttonStyle(.plain)
+    private func maintenance(_ t: String, _ icon: String, _ action: @escaping () async -> Void) -> some View {
+        DSRow(t, icon: icon) { Task { await action() } }
     }
+}
 
-    private func row(_ t: String, _ icon: String, _ action: @escaping () async -> Void) -> some View {
-        Button { Task { await action() } } label: {
-            HStack { Image(systemName: icon).frame(width: 24); Text(t); Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(STVTheme.secondary) }
-                .foregroundStyle(STVTheme.text).padding(14)
-        }.buttonStyle(.plain)
+// Every block observes only what it shows: playback progress, plugin installs or a profile refresh re-render one block.
+
+private struct HongguoAccountCard: View {
+    @Binding var message: String?
+    @Binding var login: Bool
+    @ObservedObject private var account = HongguoWebAccount.shared
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let p = account.profile {
+                if !p.avatarUrl.isEmpty {
+                    CoverView(url: p.avatarUrl, corner: 24, maxPixelSize: CoverPixels.thumb).frame(width: 48, height: 48)
+                } else {
+                    Circle().fill(STVTheme.accentSoft).frame(width: 48, height: 48)
+                        .overlay(Text(String(p.nickname.prefix(1))).font(.headline).foregroundStyle(STVTheme.accent))
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(p.nickname).dsFont(17, .semibold, relativeTo: .headline).foregroundStyle(STVTheme.text).lineLimit(1)
+                    Text(account.lastSyncNote ?? "已连接红果短剧，观看进度自动同步")
+                        .dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    account.logout()
+                    message = "已退出红果短剧账号"
+                } label: { MiniButtonLabel(title: "退出", tint: STVTheme.secondary, ground: STVTheme.glass) }
+                    .buttonStyle(PressScale())
+            } else {
+                IconWell(systemName: "qrcode.viewfinder", size: 48)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("红果短剧扫码登录").dsFont(17, .semibold, relativeTo: .headline).foregroundStyle(STVTheme.text)
+                    Text("扫码连接账号，同步短剧观看进度").dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary)
+                }
+                Spacer(minLength: 0)
+                Button { login = true } label: { PillButtonLabel(title: "去扫码", small: true) }.buttonStyle(PressScale())
+            }
+        }
+        .padding(14)
+        .dsCard(20)
+        .padding(.horizontal, 16)
+        .task { if account.isLoggedIn { _ = await account.refreshProfile() } }
+    }
+}
+
+private struct ProfileLibrary: View {
+    @ObservedObject private var library = LibraryStore.shared
+    var body: some View {
+        let watching = Array(library.continueWatching.prefix(10)), favorites = library.favorites
+        if !watching.isEmpty { ContinueRow(items: watching) }
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "我的收藏") {
+                NavigationLink(value: Route.favorites) { MoreLabel(title: "全部 \(favorites.count)") }.buttonStyle(.plain)
+            }
+            if favorites.isEmpty {
+                Text("在播放页右侧点 ♥ 收藏").dsFont(14, relativeTo: .subheadline).foregroundStyle(STVTheme.secondary).padding(.horizontal, 16)
+            } else {
+                NumberedGrid(items: Array(favorites.prefix(6)), numbered: false, hasMore: true)
+            }
+        }
+        DSSection(separatorInset: 58) {
+            DSLinkRow("观看历史", route: Route.history, icon: "clock.arrow.circlepath", value: watching.isEmpty ? nil : "\(library.continueWatching.count)")
+            DSLinkRow("剧星榜", route: Route.actorRank, icon: "star.circle")
+            DSLinkRow("我的收藏", route: Route.favorites, icon: "heart", value: "\(favorites.count)")
+        }
+    }
+}
+
+private struct ProfileLinks: View {
+    @ObservedObject private var gate = SourceGate.shared
+    /// Counts of stores that load from disk: read after the first frame instead of while 我的 is being built.
+    @State private var counts = Counts()
+    private struct Counts: Equatable { var channels: String?; var manga: String?; var downloads: String?; var plugins: String? }
+
+    var body: some View {
+        Group {
+            DSSection(separatorInset: 58) {
+                DSLinkRow("Telegram 频道", route: Route.channels, icon: "paperplane", value: counts.channels)
+                DSLinkRow("漫画", route: Route.mangaHome, icon: "book", value: counts.manga)
+                DSLinkRow("下载管理", route: Route.downloads, icon: "arrow.down.circle", value: counts.downloads)
+            }
+            DSSection(separatorInset: 58) {
+                DSLinkRow("片源管理", route: Route.sources, icon: "square.stack.3d.down.right", value: gate.enabledCount > 0 ? "已启用 \(gate.enabledCount) 个" : "红果 · 黄果")
+                DSLinkRow("插件", route: Route.plugins, icon: "puzzlepiece.extension", value: counts.plugins)
+                DSLinkRow("开源许可", route: Route.licenses, icon: "doc.text")
+            }
+        }
+        .task {
+            await Task.yield()
+            let plugins = PluginStore.shared.visiblePlugins.count + CMSStore.shared.visibleSites.count
+            counts = Counts(channels: "\(TGStore.shared.visibleChannels.count) 个",
+                            manga: MangaStore.shared.favorites.isEmpty ? nil : "收藏 \(MangaStore.shared.favorites.count)",
+                            downloads: TGDownloads.shared.visible.isEmpty ? nil : "\(TGDownloads.shared.visible.count)",
+                            plugins: plugins > 0 ? "\(plugins) 个" : nil)
+        }
     }
 }
