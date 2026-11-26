@@ -65,9 +65,10 @@ struct PlayerScreen: View {
     @State private var speedBaseIndex = 0
     @State private var lastStepOffset = 0
     @State private var padDrawerOpen = true
+    @State private var favoriteTick = 0
     @State private var nextDramaPick: NextDramaPick?
     /// Feed content offset (pt): the shared video layer rides along with the page in either orientation.
-    @State private var feedScrollY: CGFloat = 0
+    @State private var feed = FeedOffset()
     /// Running double-tap seek (+10/+20/… s) and which side it is on; drives the side bubble.
     @State private var seekRun: (total: Int, at: Date)?
     @State private var horizontalSeekStart: Double?
@@ -127,15 +128,19 @@ struct PlayerScreen: View {
                 ZStack(alignment: .topLeading) {
                     Color.black
                     // A single in-window layer remains the PiP source across paging, rotation and buffering.
-                    PlayerLayerView(coordinator: co, fill: fillScreen, engine: co.engineKind)
-                        .accessibilityElement(children: .contain).accessibilityIdentifier(suppliedDetail == nil ? "player.video" : "novel.media.status").modifier(PlayerLayerAccessibility(clock: co.clock, fillScreen: fillScreen, showPlaybackTime: suppliedDetail != nil))
-                        .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - pageDrift(co.current ?? 0, page: full.height) - videoLift)
-                        .allowsHitTesting(false)
+                    FeedDrift(feed: feed, index: co.current ?? 0, page: full.height) {
+                        PlayerLayerView(coordinator: co, fill: fillScreen, engine: co.engineKind)
+                            .accessibilityElement(children: .contain).accessibilityIdentifier(suppliedDetail == nil ? "player.video" : "novel.media.status").modifier(PlayerLayerAccessibility(clock: co.clock, fillScreen: fillScreen, showPlaybackTime: suppliedDetail != nil))
+                            .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - videoLift)
+                            .allowsHitTesting(false)
+                    }
                     if let held = co.heldFrame {
                         // Previous episode's last frame, riding with the swipe until the next one is on screen.
-                        Image(uiImage: held.image).resizable()
-                            .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - pageDrift(held.index, page: full.height) - videoLift)
-                            .allowsHitTesting(false).accessibilityHidden(true)
+                        FeedDrift(feed: feed, index: held.index, page: full.height) {
+                            Image(uiImage: held.image).resizable()
+                                .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - videoLift)
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
                     }
                     Group {
                         if co.current != nil {
@@ -470,7 +475,7 @@ struct PlayerScreen: View {
                         _ = advanceToNextSeason()
                     }
             )
-            .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in feedScrollY = y }
+            .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in feed.y = y }
             .compatOnChange(of: co.readyIndex) { releaseHeldIfSettled() }
             .onScrollPhaseChange { _, phase in feedSettled = phase == .idle; releaseHeldIfSettled() }
             .accessibilityIdentifier("player.feed")
@@ -491,7 +496,7 @@ struct PlayerScreen: View {
                         .onChanged { val in
                             guard !isScrollDisabled, abs(val.translation.height) > abs(val.translation.width) else { return }
                             feedSettled = false
-                            feedScrollY = CGFloat(co.current ?? 0) * pageH - val.translation.height
+                            feed.y = CGFloat(co.current ?? 0) * pageH - val.translation.height
                         }
                         .onEnded { val in
                             guard !isScrollDisabled else { return }
@@ -507,14 +512,14 @@ struct PlayerScreen: View {
                             }
                             if next != cur { co.select(next) }
                             withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-                                feedScrollY = CGFloat(next) * pageH
+                                feed.y = CGFloat(next) * pageH
                             }
                             feedSettled = true
                             releaseHeldIfSettled()
                         }
                 )
                 .compatOnChange(of: co.current) { new in
-                    if let new { feedScrollY = CGFloat(new) * pageH }
+                    if let new { feed.y = CGFloat(new) * pageH }
                 }
                 .compatOnChange(of: co.readyIndex) { releaseHeldIfSettled() }
                 .accessibilityIdentifier("player.feed")
@@ -579,12 +584,6 @@ struct PlayerScreen: View {
     /// Trails `co.readyIndex` by ~90 ms so MPVMetalLayer / AVPlayerLayer presents frame 0 before
     /// the pre-decoded `firstFrames[i]` cover lifts, preventing any 1-frame black flash.
     @State private var revealedIndex: Int?
-
-    /// Offset of page `index` from rest, capped at one page either way.
-    private func pageDrift(_ index: Int, page: CGFloat) -> CGFloat {
-        guard page > 0 else { return 0 }
-        return max(-page, min(page, feedScrollY - CGFloat(index) * page))
-    }
 
     private func stage(_ i: Int) -> some View {
         ZStack {
@@ -712,10 +711,23 @@ struct PlayerScreen: View {
                 PlayerIconButton(symbol: "pip.enter", label: "画中画") { co.togglePiP() }
                     .disabled(!co.pipPossible).opacity(co.pipPossible ? 1 : 0.55)
                     .accessibilityIdentifier("player.pip")
-                if suppliedDetail == nil { PlayerIconButton(symbol: library.isFavorite(series) ? "heart.fill" : "heart",
-                                 label: library.isFavorite(series) ? "取消收藏" : "收藏") {
-                    library.toggleFavorite(series); flashChrome()
-                } }
+                if suppliedDetail == nil {
+                    if co.channelList, let i = co.current, co.episodes.indices.contains(i) {
+                        let isFav = LiveHooks.isFavorite(co.episodes[i])
+                        PlayerIconButton(symbol: isFav ? "star.fill" : "star",
+                                         label: isFav ? "取消收藏" : "收藏", tint: isFav ? STVTheme.accentWarm : .white) {
+                            LiveHooks.toggleFavorite(co.episodes[i])
+                            favoriteTick += 1
+                            flashChrome()
+                        }
+                        .id(favoriteTick)
+                    } else {
+                        PlayerIconButton(symbol: library.isFavorite(series) ? "heart.fill" : "heart",
+                                         label: library.isFavorite(series) ? "取消收藏" : "收藏") {
+                            library.toggleFavorite(series); flashChrome()
+                        }
+                    }
+                }
                 PlayerIconButton(symbol: "ellipsis", label: "更多", tint: panel == .more ? STVTheme.accent : .white) {
                     toggle(.more)
                 }
@@ -731,7 +743,11 @@ struct PlayerScreen: View {
             if let i = co.current, co.episodes.indices.contains(i) {
                 VStack(alignment: .leading, spacing: 0) {
                     Group {
-                        meta(i, skip: false).padding(.bottom, 8).opacity(scrubbing ? 0 : 1).modifier(ChromeFade(on: chrome, keepAccessible: true))
+                        Group {
+                            if co.channelList { PlayerProgramLine(series: series, channel: co.episodes[i]) }
+                            else { meta(i, skip: false) }
+                        }
+                        .padding(.bottom, 8).opacity(scrubbing ? 0 : 1).modifier(ChromeFade(on: chrome, keepAccessible: true))
                         Text(co.detail?.title ?? series.title)
                             .font(.system(size: 21, weight: .bold)).lineLimit(1)
                             .shadow(color: .black.opacity(chrome ? 0 : 0.7), radius: 3)
@@ -741,11 +757,13 @@ struct PlayerScreen: View {
                     }
                     .opacity(panel != nil ? 0.35 : 1)
                     Group {
-                        PlayerTimelineV3(co: co, scrubbing: $scrubbing, onInteract: flashChrome,
-                                         onFullscreen: { OrientationGate.enterLandscape(); flashChrome() }).id(i)
-                            .opacity(panel != nil ? 0.35 : 1)
-                            .shadow(color: .black.opacity(chrome ? 0 : 0.6), radius: 2)
-                            .allowsHitTesting(interactive && co.readyIndex == i)
+                        if !co.channelList {
+                            PlayerTimelineV3(co: co, scrubbing: $scrubbing, onInteract: flashChrome,
+                                             onFullscreen: { OrientationGate.enterLandscape(); flashChrome() }).id(i)
+                                .opacity(panel != nil ? 0.35 : 1)
+                                .shadow(color: .black.opacity(chrome ? 0 : 0.6), radius: 2)
+                                .allowsHitTesting(interactive && co.readyIndex == i)
+                        }
                     }
                 }
                 .padding(.horizontal, 20)
@@ -1919,5 +1937,23 @@ private struct ChromeFade: ViewModifier {
     var keepAccessible = false
     func body(content: Content) -> some View {
         content.opacity(on ? 1 : 0).allowsHitTesting(on).accessibilityHidden(!on && !keepAccessible)
+    }
+}
+
+
+/// Shared feed offset lets the video surface track paging without invalidating the whole player.
+@MainActor final class FeedOffset: ObservableObject {
+    @Published var y: CGFloat = 0
+}
+
+/// Keeps the video and held frame aligned with the page currently moving through the feed.
+private struct FeedDrift<Content: View>: View {
+    @ObservedObject var feed: FeedOffset
+    let index: Int
+    let page: CGFloat
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content.offset(y: page > 0 ? -max(-page, min(page, feed.y - CGFloat(index) * page)) : 0)
     }
 }
