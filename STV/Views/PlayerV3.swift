@@ -786,3 +786,52 @@ struct MoreSettingsPopover: View {
         .buttonStyle(PressScale())
     }
 }
+
+extension View {
+    /// The one panel surface of the player.
+    func playerPanel(_ corner: CGFloat = 28) -> some View {
+        liquidGlass(corner: corner, tone: .panel, onMedia: true).environment(\.colorScheme, .dark)
+    }
+}
+
+struct PlayerPanelChip: View {
+    let title: String
+    let selected: Bool
+    var symbol: String? = nil
+    var height: CGFloat = 32
+    var id: String? = nil
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if let symbol { Image(systemName: symbol).font(.system(size: 12, weight: .semibold)) }
+                Text(title).font(.system(size: 13, weight: selected ? .semibold : .regular)).lineLimit(1)
+            }
+            .foregroundStyle(selected ? STVTheme.accent : .white.opacity(0.88))
+            .padding(.horizontal, 13).frame(height: height)
+            .background(selected ? Color.white.opacity(0.18) : Color.white.opacity(0.08), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(PressScale())
+        .accessibilityIdentifier(id ?? "player.chip")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+struct PlayerLoading: View {
+    var text = "正在载入"
+    @State private var spin = false
+    var body: some View {
+        VStack(spacing: 10) {
+            Circle().trim(from: 0, to: 0.28).stroke(.white, style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
+                .frame(width: 34, height: 34)
+                .rotationEffect(.degrees(spin ? 360 : 0))
+                .animation(.linear(duration: 0.9).repeatForever(autoreverses: false), value: spin)
+            Text(text).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.8))
+        }
+        .shadow(color: .black.opacity(0.5), radius: 6)
+        .onAppear { spin = true }
+        .accessibilityElement(children: .combine)
+    }
+}
+
