@@ -64,19 +64,19 @@ struct RootTabView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .homeChromeVisibilityChanged)) { note in
             guard tab == 0, let hidden = note.object as? Bool else { return }
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { homeChromeHidden = hidden }
+            homeChromeHidden = hidden
         }
         .onReceive(NotificationCenter.default.publisher(for: .homeBottomBarVisibilityChanged)) { note in
             guard tab == 0, let hidden = note.object as? Bool else { return }
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { homeBottomBarHidden = hidden }
+            homeBottomBarHidden = hidden
         }
         .onReceive(NotificationCenter.default.publisher(for: .categoryBottomBarVisibilityChanged)) { note in
             guard tab == 2, let hidden = note.object as? Bool else { return }
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { categoryBottomBarHidden = hidden }
+            categoryBottomBarHidden = hidden
         }
         .onReceive(NotificationCenter.default.publisher(for: .profileBottomBarVisibilityChanged)) { note in
             guard tab == 3, let hidden = note.object as? Bool else { return }
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { profileBottomBarHidden = hidden }
+            profileBottomBarHidden = hidden
         }
         .compatOnChange(of: tab) { selected in
             if selected != 0 {
