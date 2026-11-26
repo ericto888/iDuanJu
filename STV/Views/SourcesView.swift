@@ -190,7 +190,7 @@ struct PlayerCoreLicenses: View {
              files: ["HGCurrentPlayer-Apache-2.0"]),
         Item(id: "mpvkit", title: "MPVKit 1.0.0（mpv v0.41.0）", license: "LGPL-2.1-or-later",
              links: [("MPVKit 1.0.0", "https://github.com/mpvkit/MPVKit/tree/1.0.0"), ("mpv.io", "https://mpv.io")],
-             note: "iOS 16+ 主力播放内核，内置 libmpv + MoltenVK + libplacebo + libass + libdovi，支持杜比视界、HDR10 与 DTS/TrueHD 软解。",
+             note: "iOS 16+ 可选播放内核，内置 libmpv + MoltenVK + libplacebo + libass + libdovi，支持杜比视界、HDR10 与 DTS/TrueHD 软解。",
              files: ["FFmpeg-LGPL-2.1"]),
         Item(id: "ffmpeg", title: "FFmpeg（via MPVKit 1.0.0）", license: "LGPL-2.1-or-later（未启用 GPL）",
              links: [("MPVKit 源码与构建脚本", "https://github.com/mpvkit/MPVKit"), ("ffmpeg.org", "https://ffmpeg.org")],
