@@ -350,13 +350,24 @@ struct PlayerScreen: View {
                 pipRestoreLift = videoLift
                 pipRestoreWasWide = aspect > 1.0
                 pipRestoreWasLandscape = layoutMetrics.isLandscape
-            } else if pipRestoreWasWide != (aspect > 1.0)
-                        || pipRestoreWasLandscape != layoutMetrics.isLandscape {
+            } else if pipRestoreWasWide != (aspect > 1.0) {
+                // PiP restoration can temporarily change SwiftUI's size-class/layout metrics.
+                // Do not discard the saved lift merely because the hosting window is being restored.
                 clearPiPRestoreLayout()
+            } else {
+                let orientation = UIDevice.current.orientation
+                if (orientation.isLandscape || orientation.isPortrait),
+                   let wasLandscape = pipRestoreWasLandscape,
+                   orientation.isLandscape != wasLandscape {
+                    clearPiPRestoreLayout()
+                }
             }
         }
-        .compatOnChange(of: layoutMetrics.isLandscape) { _ in
-            if !co.pipActive { clearPiPRestoreLayout() }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            guard !co.pipActive, let wasLandscape = pipRestoreWasLandscape else { return }
+            let orientation = UIDevice.current.orientation
+            guard orientation.isLandscape || orientation.isPortrait else { return }
+            if orientation.isLandscape != wasLandscape { clearPiPRestoreLayout() }
         }
         .compatOnChange(of: aspect > 1.0) { _ in
             if !co.pipActive { clearPiPRestoreLayout() }
