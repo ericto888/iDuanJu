@@ -69,10 +69,8 @@ struct PlayerScreen: View {
     @State private var nextDramaPick: NextDramaPick?
     /// Feed content offset (pt): the shared video layer rides along with the page in either orientation.
     @State private var feed = FeedOffset()
-    /// Preserve the inline destination's lift across PiP's temporary foreground size-class changes.
-    @State private var pipRestoreLift: CGFloat?
-    @State private var pipRestoreWasWide: Bool?
-    @State private var pipRestoreWasLandscape: Bool?
+    /// Physical device orientation drives the video-only display offset; PiP layout changes do not.
+    @State private var displayOrientation = UIDevice.current.orientation
     /// Running double-tap seek (+10/+20/… s) and which side it is on; drives the side bubble.
     @State private var seekRun: (total: Int, at: Date)?
     @State private var horizontalSeekStart: Double?
@@ -85,13 +83,12 @@ struct PlayerScreen: View {
     private var landscape: Bool { vClass == .compact || (layoutMetrics.isPad && layoutMetrics.isLandscape) }
     /// Landscape-format clips shown in the upright player keep their full chrome visible.
     private var portraitLandscapeClip: Bool { !landscape && aspect > 1.0 }
-    /// Keep landscape-format video visually above the phone's vertical midpoint.
-    private var videoLift: CGFloat { pipRestoreLift ?? (portraitLandscapeClip ? 44 : 0) }
-
-    private func clearPiPRestoreLayout() {
-        pipRestoreLift = nil
-        pipRestoreWasWide = nil
-        pipRestoreWasLandscape = nil
+    /// A display-only lift for wide clips on an upright iPhone. It is independent of PiP state.
+    private var videoLift: CGFloat {
+        guard !layoutMetrics.isPad, aspect > 1.0 else { return 0 }
+        let upright = displayOrientation == .portrait || displayOrientation == .portraitUpsideDown
+        let unknownFallback = displayOrientation == .unknown && !landscape
+        return upright || unknownFallback ? 44 : 0
     }
     private var keepsChromeVisible: Bool { portraitLandscapeClip }
     private var canShowPadSplit: Bool {
@@ -124,11 +121,11 @@ struct PlayerScreen: View {
     }
 
     private func videoRect(_ area: CGRect) -> CGRect {
-        if fillScreen { return area.offsetBy(dx: 0, dy: -videoLift) }
+        if fillScreen { return area }
         let a = aspect
         var w = area.width, h = w / a
         if h > area.height { h = area.height; w = h * a }
-        return CGRect(x: area.midX - w / 2, y: area.midY - h / 2 - videoLift, width: w, height: h)
+        return CGRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h)
     }
 
     var body: some View {
@@ -345,32 +342,11 @@ struct PlayerScreen: View {
             co.didBecomeActive()
             flashChrome()
         }
-        .compatOnChange(of: co.pipActive) { active in
-            if active {
-                pipRestoreLift = videoLift
-                pipRestoreWasWide = aspect > 1.0
-                pipRestoreWasLandscape = layoutMetrics.isLandscape
-            } else if pipRestoreWasWide != (aspect > 1.0) {
-                // PiP restoration can temporarily change SwiftUI's size-class/layout metrics.
-                // Do not discard the saved lift merely because the hosting window is being restored.
-                clearPiPRestoreLayout()
-            } else {
-                let orientation = UIDevice.current.orientation
-                if (orientation.isLandscape || orientation.isPortrait),
-                   let wasLandscape = pipRestoreWasLandscape,
-                   orientation.isLandscape != wasLandscape {
-                    clearPiPRestoreLayout()
-                }
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            guard !co.pipActive, let wasLandscape = pipRestoreWasLandscape else { return }
             let orientation = UIDevice.current.orientation
-            guard orientation.isLandscape || orientation.isPortrait else { return }
-            if orientation.isLandscape != wasLandscape { clearPiPRestoreLayout() }
-        }
-        .compatOnChange(of: aspect > 1.0) { _ in
-            if !co.pipActive { clearPiPRestoreLayout() }
+            if orientation.isPortrait || orientation.isLandscape || orientation == .unknown {
+                displayOrientation = orientation
+            }
         }
         .alert("画中画暂不可用", isPresented: Binding(get: { co.pipError != nil }, set: { if !$0 { co.pipError = nil } })) {
             Button("好") { co.pipError = nil }
