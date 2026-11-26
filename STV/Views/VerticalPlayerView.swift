@@ -1654,26 +1654,49 @@ struct PlayerLayerView: UIViewRepresentable {
         let view = PlayerRenderHost()
         view.backgroundColor = .black
         view.isUserInteractionEnabled = false
+        #if DEBUG
+        view.recordLifecycle("makeUIView")
+        #endif
         mount(in: view)
         return view
     }
 
-    func updateUIView(_ view: PlayerRenderHost, context: Context) { mount(in: view) }
+    func updateUIView(_ view: PlayerRenderHost, context: Context) {
+        #if DEBUG
+        view.recordLifecycle("updateUIView")
+        #endif
+        mount(in: view)
+    }
 
     static func dismantleUIView(_ view: PlayerRenderHost, coordinator: ()) {
+        #if DEBUG
+        view.recordLifecycle("dismantleUIView")
+        #endif
         view.renderSurface = nil
         view.subviews.forEach { $0.removeFromSuperview() }
     }
 
     private func mount(in container: PlayerRenderHost) {
+        #if DEBUG
+        guard Thread.isMainThread else {
+            NSLog("[PiPTrace] THREAD VIOLATION mount(in:) uptime=%.3f stack=%@", ProcessInfo.processInfo.systemUptime, Thread.callStackSymbols.prefix(12).joined(separator: " <- "))
+            return
+        }
+        #endif
         coordinator.fill = fill
         let surface = coordinator.engine.surface
+        #if DEBUG
+        container.recordMount(surface: surface)
+        #endif
         container.renderSurface = surface
         guard surface.superview !== container else { container.setNeedsLayout(); return }
         container.subviews.forEach { $0.removeFromSuperview() }
         surface.frame = container.bounds
         surface.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         container.addSubview(surface)
+        #if DEBUG
+        container.recordLifecycle("surface-attached")
+        #endif
     }
 }
 
@@ -1681,6 +1704,49 @@ struct PlayerLayerView: UIViewRepresentable {
 /// The Debug-only accessibility probe reads that render surface and its hosted video layers, not a SwiftUI wrapper.
 final class PlayerRenderHost: UIView {
     weak var renderSurface: UIView?
+    #if DEBUG
+    private var layoutPassCount = 0
+    private var mountPassCount = 0
+    private var lifecyclePassCount = 0
+    private var lastGeometrySignature: String?
+
+    func recordLifecycle(_ event: String) {
+        lifecyclePassCount += 1
+        NSLog("[PiPTrace] host=%@ event=%@ count=%d uptime=%.3f main=%@",
+              String(describing: ObjectIdentifier(self)), event, lifecyclePassCount,
+              ProcessInfo.processInfo.systemUptime, String(Thread.isMainThread))
+    }
+
+    func recordMount(surface: UIView) {
+        mountPassCount += 1
+        NSLog("[PiPTrace] host=%@ event=mount count=%d surface=%@ surfaceID=%@ sameSuperview=%@ uptime=%.3f",
+              String(describing: ObjectIdentifier(self)), mountPassCount,
+              String(describing: type(of: surface)), String(describing: ObjectIdentifier(surface)),
+              String(surface.superview === self), ProcessInfo.processInfo.systemUptime)
+    }
+
+    private func traceGeometry(_ surface: UIView) {
+        var layerValues: [String] = []
+        func visit(_ layer: CALayer, _ path: String) {
+            if let av = layer as? AVPlayerLayer {
+                layerValues.append("\(path):frame=\(av.frame),bounds=\(av.bounds),videoRect=\(av.videoRect)")
+            } else if layer is AVSampleBufferDisplayLayer {
+                layerValues.append("\(path):frame=\(layer.frame),bounds=\(layer.bounds)")
+            }
+            for (index, child) in (layer.sublayers ?? []).enumerated() {
+                visit(child, path + ".\(index)")
+            }
+        }
+        visit(surface.layer, "layer")
+        let signature = "hostFrame=\(frame),hostBounds=\(bounds),surfaceFrame=\(surface.frame),surfaceBounds=\(surface.bounds),surfaceSuperview=\(String(describing: surface.superview.map { ObjectIdentifier($0) })),videoLayers=\(layerValues)"
+        guard signature != lastGeometrySignature else { return }
+        lastGeometrySignature = signature
+        NSLog("[PiPTrace] host=%@ layout=%d geometry=%@ uptime=%.3f",
+              String(describing: ObjectIdentifier(self)), layoutPassCount, signature,
+              ProcessInfo.processInfo.systemUptime)
+    }
+    #endif
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         #if DEBUG
@@ -1690,8 +1756,29 @@ final class PlayerRenderHost: UIView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func layoutSubviews() {
+        #if DEBUG
+        guard Thread.isMainThread else {
+            NSLog("[PiPTrace] THREAD VIOLATION layoutSubviews uptime=%.3f stack=%@",
+                  ProcessInfo.processInfo.systemUptime, Thread.callStackSymbols.prefix(12).joined(separator: " <- "))
+            return
+        }
+        layoutPassCount += 1
+        #endif
         super.layoutSubviews()
-        guard let surface = renderSurface else { return }
+        guard let surface = renderSurface else {
+            #if DEBUG
+            if lastGeometrySignature != "unmounted" {
+                lastGeometrySignature = "unmounted"
+                NSLog("[PiPTrace] host=%@ layout=%d surface=UNMOUNTED frame=%@ bounds=%@ uptime=%.3f",
+                      String(describing: ObjectIdentifier(self)), layoutPassCount,
+                      String(describing: frame), String(describing: bounds), ProcessInfo.processInfo.systemUptime)
+            }
+            #endif
+            return
+        }
+        #if DEBUG
+        traceGeometry(surface)
+        #endif
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         UIView.performWithoutAnimation { surface.frame = bounds; surface.layoutIfNeeded() }
