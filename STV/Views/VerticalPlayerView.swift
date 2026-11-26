@@ -204,6 +204,10 @@ struct PlayerScreen: View {
                     } else {
                         if locked {
                             if controlsVisible { lockOnly(full, ins: ins).transition(.opacity) }
+                        } else if co.isLive, controlsVisible, !centerSuppressed, co.current != nil, co.readyIndex == co.current, !scrubbing, panel == nil {
+                            PlayerCenterControls(co: co, onInteract: flashChrome, spacing: landscape ? 72 : 44)
+                                .position(x: landscape ? full.width / 2 : rect.midX, y: landscape ? full.height / 2 : rect.midY)
+                                .transition(.opacity)
                         }
                         // Minimal 2 pt bottom progress bar when hidden; top area stays clean over portrait dramas.
                         if !previewDanmaku {
