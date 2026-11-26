@@ -1019,7 +1019,6 @@ struct PlayerScreen: View {
     }
 
     private var introEnd: Double { series.source.isLongVideo ? 90 : 15 }
-    private var showSkip: Bool { co.readyIndex != nil && co.time < introEnd - 1 && co.duration > introEnd + 30 }
     private func skipIntro() {
         guard co.duration > 0 else { return }
         co.seek(fraction: introEnd / co.duration); showOSD("已跳过片头")

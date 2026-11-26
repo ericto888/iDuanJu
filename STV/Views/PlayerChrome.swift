@@ -295,14 +295,6 @@ struct PlayerCompactProgress: View {
     }
 }
 
-/// Keeps the accessible playback time live without publishing every clock tick from PlaybackCoordinator.
-struct PlayerClockValue: ViewModifier {
-    @ObservedObject var clock: PlaybackClock
-    func body(content: Content) -> some View {
-        content.accessibilityValue(String(format: "已播放 %.2f 秒", clock.sample.time))
-    }
-}
-
 /// On-screen speed-control HUD while long-pressing.
 struct PlayerSpeedHUD: View {
     var rate: Double
