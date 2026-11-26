@@ -398,20 +398,6 @@ enum PluginInstaller {
         return .plugin(try prepare(bundle: data, origin: "粘贴"))
     }
 
-    /// A reviewed M3U channel list becomes a static video plugin, under the same rules as scripts/source-compat/m3u_to_idj.py.
-    static func prepareLive(_ live: TVBoxImport.Live) async throws -> PendingInstall {
-        let raw = String(decoding: try await download(live.url, limit: 2 << 20), as: UTF8.self)
-        if M3UImport.isChannelList(raw) { return try prepareM3U(raw, url: live.url, name: live.name, origin: "TVBox") }
-        var lines = ["#EXTM3U"]
-        for line in raw.split(whereSeparator: \.isNewline) {
-            guard let split = line.firstIndex(of: ",") else { continue }
-            let title = line[..<split].trimmingCharacters(in: .whitespaces)
-            let url = line[line.index(after: split)...].trimmingCharacters(in: .whitespaces)
-            if !title.isEmpty, url.hasPrefix("https://") { lines += ["#EXTINF:-1," + title, url] }
-        }
-        return try prepareM3U(lines.joined(separator: "\n"), url: live.url, name: live.name, origin: "TVBox")
-    }
-
     static func prepareM3U(_ text: String, url: String?, name: String?, origin: String) throws -> PendingInstall {
         let channels: [M3UImport.Channel]
         do { channels = try M3UImport.parse(text, base: url) }

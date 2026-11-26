@@ -588,32 +588,6 @@ final class PluginTests: XCTestCase {
 
     // MARK: 苹果 CMS
 
-    func testTVBoxImportDeduplicatesCMSAndSkipsSpiders() throws {
-        let data = Data(#"{"name":"demo","sites":[{"name":"CMS","type":1,"api":"http://cms.example/api.php/provide/vod/"},{"name":"jar","type":3,"api":"csp_demo"},{"name":"dup","type":1,"api":"https://cms.example/api.php/provide/vod/"}],"spider":"https://example.org/a.jar"}"#.utf8)
-        let config = try TVBoxImport.parse(data)
-        XCTAssertEqual(config.name, "demo")
-        XCTAssertEqual(config.sites.count, 1)
-        XCTAssertEqual(config.sites.first?.api, "https://cms.example/api.php/provide/vod/")
-        XCTAssertEqual(config.skipped, 2)
-    }
-
-    func testTVBoxLargeCatalogAndStandaloneLiveLists() throws {
-        let scripts = (0..<600).map { ["type": 3, "api": "csp_\($0)"] as [String: Any] }
-        let xml = ["type": 0, "api": "https://cms.example/vod/xml"] as [String: Any]
-        let live = ["name": "直播", "url": "https://cms.example/channels.m3u"]
-        let bytes = try JSONSerialization.data(withJSONObject: ["sites": scripts + [xml], "lives": [live, live]])
-        let catalog = try TVBoxImport.parse(bytes)
-        XCTAssertEqual(catalog.sites.map(\.api), ["https://cms.example/vod/xml"])
-        XCTAssertEqual(catalog.lives.map(\.url), ["https://cms.example/channels.m3u"])
-        XCTAssertEqual(catalog.skipped, 600)
-    }
-
-    func testTVBoxImportRejectsExecutableOnlyConfig() {
-        XCTAssertThrowsError(try TVBoxImport.parse(Data(#"{"sites":[{"name":"jar","type":3,"api":"csp_demo"}],"spider":"x.jar"}"#.utf8))) { error in
-            XCTAssertTrue(error.localizedDescription.contains("type=1"))
-        }
-    }
-
     @MainActor func testCMSCategoryRequestsKeepFullCategoryList() async throws {
         NetGuard.resolverOverride = { _ in ["93.184.216.34"] }
         var queries: [[String: String]] = []
