@@ -88,6 +88,7 @@ struct PlayerOptionsSheet<Option: Hashable>: View {
 /// asset allows it + "t / d" + blue ±delta). Drag or tap anywhere; seek happens on release.
 struct PlayerProgressBar: View {
     let co: PlaybackCoordinator
+    @ObservedObject private var clock: PlaybackClock
     @Binding var scrubbing: Bool
     var onInteract: () -> Void = {}
     /// Non-interactive hairline shown when the chrome is hidden.
@@ -98,11 +99,20 @@ struct PlayerProgressBar: View {
 
     private static let thin: CGFloat = 4, thick: CGFloat = 8, miniH: CGFloat = 2
 
+    init(co: PlaybackCoordinator, scrubbing: Binding<Bool>, onInteract: @escaping () -> Void = {}, mini: Bool = false) {
+        self.co = co
+        self._clock = ObservedObject(wrappedValue: co.clock)
+        self._scrubbing = scrubbing
+        self.onInteract = onInteract
+        self.mini = mini
+    }
+
     var body: some View {
-        let duration = max(0, co.duration)
-        let played = duration > 0 ? min(1, max(0, co.time / duration)) : 0
+        let sample = clock.sample
+        let duration = max(0, sample.duration)
+        let played = duration > 0 ? min(1, max(0, sample.time / duration)) : 0
         let shown = drag ?? played
-        let buffered = duration > 0 ? min(1, max(shown, co.bufferedUntil / duration)) : 0
+        let buffered = duration > 0 ? min(1, max(shown, sample.bufferedUntil / duration)) : 0
         let h = mini ? Self.miniH : (drag != nil ? Self.thick : Self.thin)
         GeometryReader { g in
             let w = g.size.width
@@ -158,16 +168,17 @@ struct PlayerProgressBar: View {
                 }))
         }
         .frame(height: mini ? Self.miniH : 22)
-        .task(id: drag.map { Int($0 * max(1, co.duration) / PlayerThumbnailer.bucket) }) {
-            guard let f = drag, co.duration > 0, co.thumbnails.available else { return }
-            if let c = co.thumbnails.cached(at: f * co.duration) { thumb = c; return }
+        .task(id: drag.map { Int($0 * max(1, clock.sample.duration) / PlayerThumbnailer.bucket) }) {
+            guard let f = drag, clock.sample.duration > 0, co.thumbnails.available else { return }
+            let t = f * clock.sample.duration
+            if let c = co.thumbnails.cached(at: t) { thumb = c; return }
             try? await Task.sleep(for: .milliseconds(60))
-            if let img = await co.thumbnails.image(at: f * co.duration), drag != nil { thumb = img }
+            if let img = await co.thumbnails.image(at: t), drag != nil { thumb = img }
         }
         #if DEBUG
         .task(id: co.scrubDemo) {   // screenshots only: `STV_SCRUB_DEMO=0.62` freezes the dragging look (no seek)
             if !mini, let f = co.scrubDemo {
-                dragStart = 0.2; drag = f; scrubbing = true; co.scrubPreview = f * co.duration
+                dragStart = 0.2; drag = f; scrubbing = true; co.scrubPreview = f * clock.sample.duration
             }
         }
         .task {
@@ -184,7 +195,7 @@ struct PlayerProgressBar: View {
         .accessibilityIdentifier(mini ? "player.progress.mini" : "player.progress")
         .accessibilityAdjustableAction { direction in
             let delta = direction == .increment ? 10.0 : -10.0
-            if duration > 0 { co.seek(fraction: max(0, min(1, (co.time + delta) / duration))) }
+            if duration > 0 { co.seek(fraction: max(0, min(1, (clock.sample.time + delta) / duration))) }
             onInteract()
         }
     }
@@ -212,9 +223,18 @@ struct PlayerProgressBar: View {
 /// Bottom chrome under the caption: progress bar, then one quiet row (play · time … actions).
 struct PlayerTimeline<Trailing: View>: View {
     let co: PlaybackCoordinator
+    @ObservedObject private var clock: PlaybackClock
     @Binding var scrubbing: Bool
     let onInteract: () -> Void
     @ViewBuilder var trailing: Trailing
+
+    init(co: PlaybackCoordinator, scrubbing: Binding<Bool>, onInteract: @escaping () -> Void, @ViewBuilder trailing: () -> Trailing) {
+        self.co = co
+        self._clock = ObservedObject(wrappedValue: co.clock)
+        self._scrubbing = scrubbing
+        self.onInteract = onInteract
+        self.trailing = trailing()
+    }
 
     var body: some View {
         VStack(spacing: 2) {
@@ -225,7 +245,7 @@ struct PlayerTimeline<Trailing: View>: View {
                         .font(.system(size: 17, weight: .semibold)).frame(width: 30, height: 36).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).accessibilityLabel(co.paused ? "播放" : "暂停").accessibilityIdentifier("player.playPause")
-                Text("\(Fmt.duration(Int(co.time))) / \(Fmt.duration(Int(max(0, co.duration))))")
+                Text("\(Fmt.duration(Int(clock.sample.time))) / \(Fmt.duration(Int(max(0, clock.sample.duration))))")
                     .font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.white.opacity(0.8))
                     .lineLimit(1).fixedSize().layoutPriority(2)
                     .accessibilityIdentifier("player.time")
