@@ -78,8 +78,8 @@ jobs:
 
   simulator-regression:
     name: iOS Simulator regression tests
-    # Push 仅运行模拟器回归，不构建 IPA；手动构建时不重复跑测试。
-    if: github.event_name == 'push'
+    # Push 和手动构建都运行回归测试；手动触发时与 IPA 构建并行。
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: macos-15-intel
     timeout-minutes: 75
     steps:
