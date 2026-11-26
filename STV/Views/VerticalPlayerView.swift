@@ -347,6 +347,9 @@ struct PlayerScreen: View {
         }
         .compatOnChange(of: co.current) { new in
             scrubbing = false
+            if let new, co.channelList, co.episodes.indices.contains(new) {
+                LiveHooks.remember(co.episodes[new], in: series)
+            }
             if new != nil {
                 centerSuppressed = true
                 if co.lastAdvanceWasAuto {
@@ -1057,8 +1060,13 @@ struct PlayerScreen: View {
         let dmOK = series.source == .hongguo
         let rate = SpeedPopover.label(co.playbackRate)
         return HStack(spacing: 0) {
-            PlayerActionButton(id: "player.episodes", a11y: "选集", title: "选集", active: panel == .episodes, action: { toggle(.episodes) }) {
-                Image(systemName: "square.grid.2x2")
+            PlayerActionButton(id: "player.episodes", a11y: co.channelList ? "频道" : "选集", title: co.channelList ? "频道" : "选集", active: panel == .episodes, action: { toggle(.episodes) }) {
+                Image(systemName: co.channelList ? "list.bullet" : "square.grid.2x2")
+            }
+            if co.channelList {
+                PlayerActionButton(id: "player.guide", a11y: "节目单", title: "节目单", active: panel == .guide, action: { toggle(.guide) }) {
+                    Image(systemName: "calendar")
+                }
             }
             PlayerActionButton(id: "player.rate", a11y: "播放倍速 " + rate, title: "倍速",
                                value: co.playbackRate == 1 ? "1.0×" : rate,
@@ -1104,7 +1112,7 @@ struct PlayerScreen: View {
     @ViewBuilder private func popover(_ p: PlayerPanel, full: CGSize, ins: EdgeInsets) -> some View {
         let width: CGFloat = {
             switch p {
-            case .episodes: return landscape ? 380 : full.width - 24
+            case .episodes, .guide: return landscape ? 380 : full.width - 24
             case .danmaku, .more: return landscape ? 356 : min(500, full.width - 24)
             case .rates: return landscape ? 230 : full.width - 24
             default: return landscape ? 270 : full.width - 24
@@ -1117,13 +1125,13 @@ struct PlayerScreen: View {
             if p == .more {
                 return landscape ? full.height * 0.84 : min(500, full.height * 0.72)
             }
-            return landscape ? (p == .episodes ? 270 : full.height - 44 - 110)
-                             : min(p == .episodes ? 372 : 420, full.height * 0.5)
+            return landscape ? ((p == .episodes || p == .guide) ? 340 : full.height - 44 - 110)
+                             : min((p == .episodes || p == .guide) ? 392 : 420, full.height * 0.52)
         }()
         let body = popoverContent(p)
             .frame(width: width)
             .frame(maxHeight: maxH, alignment: .top)
-            .fixedSize(horizontal: false, vertical: p != .episodes && p != .danmaku && p != .more)
+            .fixedSize(horizontal: false, vertical: p != .episodes && p != .guide && p != .danmaku && p != .more)
             .playerGlass(p == .danmaku ? 26 : (landscape ? 20 : 24), strong: p != .danmaku)
             .gesture(DragGesture(minimumDistance: 24).onEnded { v in if v.translation.height > 60 { closePanel() } })
             .accessibilityElement(children: .contain)
@@ -1179,16 +1187,29 @@ struct PlayerScreen: View {
         case .subtitles:
             TrackPopover(title: "字幕", options: co.subtitleOptions, selected: co.subtitleSelected, allowsOff: true,
                          emptyText: "当前视频没有可选字幕") { o in co.selectSubtitle(o); closePanel() }
+        case .guide:
+            if co.episodes.indices.contains(i) {
+                GuidePopover(series: series, channel: co.episodes[i], replaying: co.replay,
+                             onReplay: { program, video in closePanel(); co.playReplay(program, video: video) },
+                             onLive: { closePanel(); co.backToLive() })
+            }
         case .episodes:
-            EpisodesPopover(episodes: co.episodes, current: co.current ?? 0,
-                            seasons: seasonChips,
-                            currentSeason: series.seriesId, listStyle: longForm,
-                            dateLine: series.onlineTime > 0 ? Self.date(series.onlineTime) : nil,
-                            onPick: { idx in closePanel(); co.select(idx) },
-                            onSeason: { id in
-                                guard id != series.seriesId, let s = seasons.first(where: { $0.seriesId == id }) else { return }
-                                panel = nil; onSwitchSeries(s)
-                            })
+            if co.channelList {
+                ChannelsPopover(series: series, channels: co.episodes, current: i) { index in
+                    if landscape { co.select(index); flashChrome() }
+                    else { closePanel(); co.select(index) }
+                }
+            } else {
+                EpisodesPopover(episodes: co.episodes, current: co.current ?? 0,
+                                seasons: seasonChips,
+                                currentSeason: series.seriesId, listStyle: longForm,
+                                dateLine: series.onlineTime > 0 ? Self.date(series.onlineTime) : nil,
+                                onPick: { idx in closePanel(); co.select(idx) },
+                                onSeason: { id in
+                                    guard id != series.seriesId, let s = seasons.first(where: { $0.seriesId == id }) else { return }
+                                    panel = nil; onSwitchSeries(s)
+                                })
+            }
         case .danmaku:
             ScrollView {
                 DanmakuSettingsSheet(
@@ -1399,12 +1420,23 @@ struct PlayerScreen: View {
             if let suppliedDetail { d = suppliedDetail } else { d = try await Catalog.detail(series) }
             try Task.checkCancellation()
             loadError = nil
-            guard !d.episodes.isEmpty else { throw ProviderError.upstream("暂无可播放分集") }
-            let start = min(max(0, startIndex ?? (shortFixture ? Int(ProcessInfo.processInfo.environment["STV_FX_START"] ?? "") : nil) ?? library.progress(for: series)?.episodeIndex ?? 0), d.episodes.count - 1)
+            guard !d.episodes.isEmpty else { throw ProviderError.upstream(d.isLive ? "这个直播源没有频道" : "暂无可播放分集") }
             co.detail = d
+            if d.isLive {
+                let picked = startIndex.flatMap { index in
+                    series.source.tvboxLiveUID.flatMap { TVBoxStore.engine.listedChannel($0, index) }
+                }
+                let last = LiveHooks.lastChannel(series)?.index(in: d.episodes)
+                let start = min(max(0, startIndex.map { LiveHooks.place($0, picked, in: d.episodes) } ?? last ?? 0), d.episodes.count - 1)
+                co.select(start)
+                flashChrome()
+                return
+            }
+            let start = min(max(0, startIndex ?? (shortFixture ? Int(ProcessInfo.processInfo.environment["STV_FX_START"] ?? "") : nil) ?? library.progress(for: series)?.episodeIndex ?? 0), d.episodes.count - 1)
+            co.adoptPreferredLine()
             co.select(start)
             flashChrome()
-            if suppliedDetail == nil { seasons = await SeasonStore.seasons(for: d, series: series) }
+            if suppliedDetail == nil, !series.source.isTVBox { seasons = await SeasonStore.seasons(for: d, series: series) }
             co.onSeasonEnded = { advanceToNextSeason() }
         } catch { if !Task.isCancelled { loadError = error } }
     }
