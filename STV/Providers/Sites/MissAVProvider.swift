@@ -6,13 +6,14 @@ import Foundation
 /// behaviour of those sites (as also used by the "MissAV_TuT" Forward widget); no code is copied from it.
 struct MissAVProvider: SiteProvider {
     let source = DramaSource.missav
-    /// Probe order. `.fans` / `.media` currently answer without Cloudflare; the classic domains are kept as fallbacks.
-    static let mirrors = ["https://missav.fans", "https://missav.media", "https://missav.ai", "https://missav.ws", "https://missav.live"]
+    /// Probe order. `.live` currently answers without Cloudflare; other mirrors are kept as fallbacks.
+    static let mirrors = ["https://missav.live", "https://missav.ai", "https://missav.ws", "https://missav.fans", "https://missav.media"]
     /// iPhone Safari UA the mirrors serve plain HTML to (also used by the verify sheet so `cf_clearance` matches).
     static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1"
     static let probePath = "/dm539/cn/new"
-    /// Video CDN that is reachable without Cloudflare (surrit.com is CF-gated).
-    static let videoHost = "surrit.mrstcdn.store"
+    /// Video CDNs that answer without Cloudflare (bare surrit.com is CF-gated; mrstcdn.store is kept as fallback).
+    static let videoHost = "c.surrit.com"
+    static let fallbackVideoHosts = ["c.surrit.com", "surrit.mrstcdn.store"]
     static let coverHosts = ["fourhoi.mrstcdn.store", "fourhoi.com"]
 
     /// Simplified-Chinese listing paths (`/dmNNN/cn/slug`); `sort=` is the site's own ordering parameter.
@@ -125,61 +126,80 @@ struct MissAVProvider: SiteProvider {
                               tags: Array(tags.prefix(16)), episodeLabel: s.duration > 0 ? Fmt.clock(s.duration) : "长视频")
     }
 
-    /// Video UUID from the unpacked player script (`https://surrit.<host>/<uuid>/playlist.m3u8`).
-    static func videoUUID(_ h: String) -> String? {
-        let uuid = "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+    /// Video host + UUID from the unpacked player script (`https://c.surrit.com/<uuid>/playlist.m3u8`).
+    static func videoSource(_ h: String) -> (host: String, uuid: String)? {
+        let pat = "https?://([a-z0-9.-]*surrit\\.[a-z0-9.]+)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/"
         for js in JSUnpacker.unpackedScripts(h) {
-            if let m = HTML.groups("https?://surrit\\.[a-z0-9.]+/\(uuid)/", js) { return m[1].lowercased() }
+            if let m = HTML.groups(pat, js) { return (m[1].lowercased(), m[2].lowercased()) }
         }
-        return HTML.groups("surrit\\.[a-z0-9.]+/\(uuid)/", h)?[1].lowercased()
+        if let m = HTML.groups(pat, h) { return (m[1].lowercased(), m[2].lowercased()) }
+        return nil
     }
+
+    /// Video UUID from the unpacked player script (`https://c.surrit.com/<uuid>/playlist.m3u8`).
+    static func videoUUID(_ h: String) -> String? { videoSource(h)?.uuid }
 
     static func isPlaylist(_ text: String) -> Bool {
         text.contains("#EXTM3U") && (text.contains("#EXTINF") || text.contains("#EXT-X-STREAM-INF") || text.contains("#EXT-X-TARGETDURATION"))
     }
 
-    /// 1080P/720P/480P/360P variants that actually answer on surrit.mrstcdn.store, plus the master as 自动.
-    static func streams(uuid: String, site: String) async -> [HGStream] {
-        let hdr = ["Referer": site + "/", "Origin": site, "User-Agent": DramaSource.missav.userAgent]
-        let root = "https://\(videoHost)/\(uuid)"
+    /// Candidate video CDN hosts in probe order: prefer direct `*.surrit.com` hosts extracted from the page
+    /// (excluding bare CF-gated `surrit.com`), then `c.surrit.com`, then legacy `mrstcdn.store` fallbacks.
+    static func candidateVideoHosts(extracted: String?) -> [String] {
+        var hosts: [String] = []
+        if let h = extracted?.lowercased(), !h.isEmpty, h.hasSuffix(".surrit.com") { hosts.append(h) }
+        for h in fallbackVideoHosts where !hosts.contains(h) { hosts.append(h) }
+        if let h = extracted?.lowercased(), !h.isEmpty, !hosts.contains(h) { hosts.append(h) }
+        return hosts
+    }
+
+    /// 1080P/720P/480P/360P variants that actually answer on the video CDN, plus the master as 自动.
+    static func streams(uuid: String, site: String, extractedHost: String? = nil) async -> [HGStream] {
+        // c.surrit.com rejects mirror Referers (e.g. missav.fans / missav.media) with 403; use an accepted origin.
+        let streamOrigin = (site.contains("missav.fans") || site.contains("missav.media")) ? "https://missav.live" : site
+        let hdr = ["Referer": streamOrigin + "/", "Origin": streamOrigin, "User-Agent": DramaSource.missav.userAgent]
         let fixed = [1080, 720, 480, 360]
-        let probes: [(Int, String)] = [(0, "\(root)/playlist.m3u8")] + fixed.map { ($0, "\(root)/\($0)p/video.m3u8") }
-        var ok: [Int: String] = [:]
-        var master = ""
-        await withTaskGroup(of: (Int, String, String?).self) { g in
-            for (height, url) in probes {
-                g.addTask {
-                    let t = try? await SiteHTTP.shared.probe(url, headers: hdr, timeout: 6)
-                    return (height, url, t)
+        for host in candidateVideoHosts(extracted: extractedHost) {
+            let root = "https://\(host)/\(uuid)"
+            let probes: [(Int, String)] = [(0, "\(root)/playlist.m3u8")] + fixed.map { ($0, "\(root)/\($0)p/video.m3u8") }
+            var ok: [Int: String] = [:]
+            var master = ""
+            await withTaskGroup(of: (Int, String, String?).self) { g in
+                for (height, url) in probes {
+                    g.addTask {
+                        let t = try? await SiteHTTP.shared.probe(url, headers: hdr, timeout: 6)
+                        return (height, url, t)
+                    }
+                }
+                for await (height, url, text) in g {
+                    guard let text, isPlaylist(text) else { continue }
+                    if height == 0 { master = text } else { ok[height] = url }
                 }
             }
-            for await (height, url, text) in g {
-                guard let text, isPlaylist(text) else { continue }
-                if height == 0 { master = text } else { ok[height] = url }
+            // Heights listed in the master but not in the fixed probe set (e.g. 540p) are trusted from the master.
+            if !master.isEmpty, let base = URL(string: "\(root)/playlist.m3u8") {
+                for v in HLSPlaylist.variants(master, base.absoluteString) {
+                    let height = v.height
+                    guard height > 0, ok[height] == nil, !fixed.contains(height) else { continue }
+                    ok[height] = v.url
+                }
             }
-        }
-        // Heights listed in the master but not in the fixed probe set (e.g. 540p) are trusted from the master.
-        if !master.isEmpty, let base = URL(string: "\(root)/playlist.m3u8") {
-            for v in HLSPlaylist.variants(master, base.absoluteString) {
-                let height = v.height
-                guard height > 0, ok[height] == nil, !fixed.contains(height) else { continue }
-                ok[height] = v.url
+            var out = ok.keys.sorted(by: >).map { h in
+                HGStream(streamId: "missav-\(h)p", quality: "\(h)P", url: ok[h]!, key: "", height: h, kind: .hls, headers: hdr)
             }
+            if !master.isEmpty {
+                out.append(HGStream(streamId: "missav-auto", quality: "自动", url: "\(root)/playlist.m3u8", key: "", kind: .hls, headers: hdr))
+            }
+            if !out.isEmpty { return out }
         }
-        var out = ok.keys.sorted(by: >).map { h in
-            HGStream(streamId: "missav-\(h)p", quality: "\(h)P", url: ok[h]!, key: "", height: h, kind: .hls, headers: hdr)
-        }
-        if !master.isEmpty {
-            out.append(HGStream(streamId: "missav-auto", quality: "自动", url: "\(root)/playlist.m3u8", key: "", kind: .hls, headers: hdr))
-        }
-        return out
+        return []
     }
 
     func resolve(_ s: HGSeries, _ ep: HGEpisode) async throws -> HGResolvedVideo {
         let r = try await page(s)
-        guard let uuid = Self.videoUUID(r.text) else { throw SiteError.parse("MissAV 页面里没有找到视频 ID（打包脚本可能已改版）") }
-        let list = await Self.streams(uuid: uuid, site: r.base)
-        guard let first = list.first else { throw ProviderError.upstream("MissAV 视频 CDN（\(Self.videoHost)）无响应") }
+        guard let src = Self.videoSource(r.text) else { throw SiteError.parse("MissAV 页面里没有找到视频 ID（打包脚本可能已改版）") }
+        let list = await Self.streams(uuid: src.uuid, site: r.base, extractedHost: src.host)
+        guard let first = list.first else { throw ProviderError.upstream("MissAV 视频 CDN（\(src.host)）无响应") }
         return HGResolvedVideo(vid: s.seriesId, url: first.url, key: nil, duration: Double(s.duration), expiresAt: nil, err: nil, streams: list)
     }
 }
