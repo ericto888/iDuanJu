@@ -50,13 +50,22 @@ struct PlayerTechStrip: View {
 /// ⟲10 · ▶ (76 pt glass, the outer ring doubles as buffer / loading progress) · ⟳10.
 struct PlayerCenterControls: View {
     let co: PlaybackCoordinator
+    @ObservedObject private var clock: PlaybackClock
     let onInteract: () -> Void
     var spacing: CGFloat = 44
     @State private var spin = false
 
+    init(co: PlaybackCoordinator, onInteract: @escaping () -> Void, spacing: CGFloat = 44) {
+        self.co = co
+        self._clock = ObservedObject(wrappedValue: co.clock)
+        self.onInteract = onInteract
+        self.spacing = spacing
+    }
+
     var body: some View {
         let loading = co.readyIndex == nil || (co.waitingForMedia && !co.paused)
-        let buffered = co.duration > 0 ? min(1, co.bufferedUntil / co.duration) : 0
+        let sample = clock.sample
+        let buffered = sample.duration > 0 ? min(1, sample.bufferedUntil / sample.duration) : 0
         HStack(spacing: spacing) {
             Button { co.seek(by: -10); onInteract() } label: {
                 Image(systemName: "gobackward.10").font(.system(size: 29, weight: .regular)).frame(width: 44, height: 44).opacity(0.94)
@@ -132,6 +141,7 @@ struct PlayerMetaRow: View {
 /// it to 8 pt with a 20 pt round knob and a thumbnail + time bubble. Time row underneath: elapsed · −remaining.
 struct PlayerTimelineV3: View {
     let co: PlaybackCoordinator
+    @ObservedObject private var clock: PlaybackClock
     @Binding var scrubbing: Bool
     var onInteract: () -> Void = {}
     /// Max width of the bubble positioning area (screen coordinates).
@@ -141,12 +151,23 @@ struct PlayerTimelineV3: View {
     /// Landscape redesign: times inline but no 全屏 button (exit lives in the top bar).
     var inline = false
 
+    init(co: PlaybackCoordinator, scrubbing: Binding<Bool>, onInteract: @escaping () -> Void = {},
+         landscape: Bool = false, onFullscreen: (() -> Void)? = nil, inline: Bool = false) {
+        self.co = co
+        self._clock = ObservedObject(wrappedValue: co.clock)
+        self._scrubbing = scrubbing
+        self.onInteract = onInteract
+        self.landscape = landscape
+        self.onFullscreen = onFullscreen
+        self.inline = inline
+    }
+
     var body: some View {
         if inline {
             PlayerProgressBar(co: co, scrubbing: $scrubbing, onInteract: onInteract)
                 .frame(maxWidth: .infinity)
         } else if onFullscreen != nil {
-            let t = co.scrubPreview ?? co.time
+            let t = clock.scrubPreview ?? clock.sample.time
             HStack(spacing: 8) {
                 // Playback toggle is the first control, before the elapsed/remaining time labels.
                 Button { co.togglePause(); onInteract() } label: {
@@ -156,7 +177,7 @@ struct PlayerTimelineV3: View {
                 .buttonStyle(.plain).accessibilityLabel(co.paused ? "播放" : "暂停").accessibilityIdentifier("player.playPause")
                 Text(Fmt.clock(Int(t))).accessibilityIdentifier("player.time")
                 PlayerProgressBar(co: co, scrubbing: $scrubbing, onInteract: onInteract)
-                Text("−" + Fmt.clock(Int(max(0, co.duration - t)))).accessibilityIdentifier("player.remaining")
+                Text("−" + Fmt.clock(Int(max(0, clock.sample.duration - t)))).accessibilityIdentifier("player.remaining")
                 if let onFullscreen { Button(action: onFullscreen) {
                     Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white).frame(width: 30, height: 30).contentShape(Rectangle())
@@ -180,10 +201,10 @@ struct PlayerTimelineV3: View {
                         .font(.system(size: 15, weight: .semibold)).frame(width: 28, height: 32).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).accessibilityLabel(co.paused ? "播放" : "暂停").accessibilityIdentifier("player.playPause")
-                let t = co.scrubPreview ?? co.time
+                let t = clock.scrubPreview ?? clock.sample.time
                 Text(Fmt.clock(Int(t))).accessibilityIdentifier("player.time")
                 Spacer(minLength: 4)
-                Text("−" + Fmt.clock(Int(max(0, co.duration - t)))).accessibilityIdentifier("player.remaining")
+                Text("−" + Fmt.clock(Int(max(0, clock.sample.duration - t)))).accessibilityIdentifier("player.remaining")
             }
             .font(.system(size: 12, weight: .medium).monospacedDigit())
             .foregroundStyle(.white.opacity(0.85))
