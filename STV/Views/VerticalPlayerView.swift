@@ -157,7 +157,7 @@ struct PlayerScreen: View {
                             .frame(width: full.width, height: full.height)
                     }
                     let previewDanmaku = panel == .danmaku
-                    if series.source == .hongguo, !co.pipActive, !speedMode,
+                    if danmakuAvailable, !co.pipActive, !speedMode,
                        (previewDanmaku || (danmaku.enabled && co.current != nil && co.readyIndex == co.current)) {
                         danmakuLayer(co.current ?? 0, full: full, ins: ins, previewActive: previewDanmaku)
                     }
@@ -427,7 +427,7 @@ struct PlayerScreen: View {
             avoidSubtitle: danmaku.avoidSubtitle
         )
         let vid = co.episodes.indices.contains(i) ? co.episodes[i].vid : ""
-        return DanmakuOverlay(co: co, seriesId: series.seriesId, vid: vid, landscape: landscape, laneTop: r.top, laneCount: r.rows, previewActive: previewActive)
+        return DanmakuOverlay(co: co, seriesId: series.seriesId, vid: vid, source: co.danmakuURL[i], landscape: landscape, laneTop: r.top, laneCount: r.rows, previewActive: previewActive)
             .onAppear { if ins.top > stableSafeTop { stableSafeTop = ins.top } }
             .compatOnChange(of: ins.top) { newTop in if newTop > stableSafeTop { stableSafeTop = newTop } }
             .frame(width: full.width, height: full.height)
@@ -580,6 +580,10 @@ struct PlayerScreen: View {
     /// Trails `co.readyIndex` by ~90 ms so MPVMetalLayer / AVPlayerLayer presents frame 0 before
     /// the pre-decoded `firstFrames[i]` cover lifts, preventing any 1-frame black flash.
     @State private var revealedIndex: Int?
+
+    private var danmakuAvailable: Bool {
+        series.source == .hongguo || co.current.flatMap { co.danmakuURL[$0] } != nil
+    }
 
     private func stage(_ i: Int) -> some View {
         ZStack {
