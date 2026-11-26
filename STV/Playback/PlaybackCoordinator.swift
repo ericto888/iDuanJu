@@ -575,36 +575,18 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     }
 
     func pictureInPictureControllerWillStartPictureInPicture(_ controller: AVPictureInPictureController) {
-        #if DEBUG
-        NSLog("[PiPTrace] delegate=willStart entry uptime=%.3f main=%@ controller=%@",
-              ProcessInfo.processInfo.systemUptime, String(Thread.isMainThread), String(describing: ObjectIdentifier(controller)))
-        #endif
         // AVKit may deliver delegate callbacks from a private queue. All coordinator state
         // and renderer mutations that can trigger UIKit layout must stay on the main actor.
         Task { @MainActor [weak self] in
             guard let self, controller === self.pip else { return }
-            #if DEBUG
-            NSLog("[PiPTrace] delegate=willStart mainActor uptime=%.3f main=%@ pipActive=%@ restoring=%@ continue=%@ engine=%@",
-                  ProcessInfo.processInfo.systemUptime, String(Thread.isMainThread), String(self.pipActive),
-                  String(self.restoringPiP), String(self.continuePiP), String(describing: self.engine.kind))
-            #endif
             self.pipActive = true
             self.engine.setPiPActive(true)
         }
     }
 
     func pictureInPictureController(_ controller: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
-        #if DEBUG
-        NSLog("[PiPTrace] delegate=failedToStart entry uptime=%.3f main=%@ error=%@",
-              ProcessInfo.processInfo.systemUptime, String(Thread.isMainThread), error.localizedDescription)
-        #endif
         Task { @MainActor [weak self] in
             guard let self, controller === self.pip else { return }
-            #if DEBUG
-            NSLog("[PiPTrace] delegate=failedToStart mainActor uptime=%.3f main=%@ pipActive=%@ restoring=%@ continue=%@",
-                  ProcessInfo.processInfo.systemUptime, String(Thread.isMainThread), String(self.pipActive),
-                  String(self.restoringPiP), String(self.continuePiP))
-            #endif
             self.pipActive = false
             self.engine.setPiPActive(false)
             self.continuePiP = false
@@ -614,43 +596,16 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
 
     func pictureInPictureController(_ controller: AVPictureInPictureController,
                                     restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completion: @escaping (Bool) -> Void) {
-        #if DEBUG
-        NSLog("[PiPTrace] delegate=restoreUI entry uptime=%.3f main=%@ controller=%@",
-              ProcessInfo.processInfo.systemUptime, String(Thread.isMainThread), String(describing: ObjectIdentifier(controller)))
-        #endif
         Task { @MainActor [weak self] in
-            guard let self else {
-                #if DEBUG
-                NSLog("[PiPTrace] delegate=restoreUI completion=false reason=selfReleased uptime=%.3f main=%@",
-                      ProcessInfo.processInfo.systemUptime, String(Thread.isMainThread))
-                #endif
-                completion(false)
-                return
-            }
+            guard let self else { completion(false); return }
             self.restoringPiP = true
-            let shouldRestore = controller === self.pip && self.observer != nil
-            #if DEBUG
-            NSLog("[PiPTrace] delegate=restoreUI completion=%@ uptime=%.3f main=%@ pipActive=%@ restoring=%@ continue=%@ observer=%@",
-                  String(shouldRestore), ProcessInfo.processInfo.systemUptime, String(Thread.isMainThread),
-                  String(self.pipActive), String(self.restoringPiP), String(self.continuePiP), String(self.observer != nil))
-            #endif
-            completion(shouldRestore)
+            completion(controller === self.pip && self.observer != nil)
         }
     }
 
     func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
-        #if DEBUG
-        NSLog("[PiPTrace] delegate=didStop entry uptime=%.3f main=%@ controller=%@",
-              ProcessInfo.processInfo.systemUptime, String(Thread.isMainThread), String(describing: ObjectIdentifier(controller)))
-        #endif
         Task { @MainActor [weak self] in
             guard let self, controller === self.pip else { return }
-            #if DEBUG
-            NSLog("[PiPTrace] delegate=didStop mainActor uptime=%.3f main=%@ pipActive=%@ restoring=%@ continue=%@ ready=%@ engine=%@",
-                  ProcessInfo.processInfo.systemUptime, String(Thread.isMainThread), String(self.pipActive),
-                  String(self.restoringPiP), String(self.continuePiP), String(self.readyIndex != nil),
-                  String(describing: self.engine.kind))
-            #endif
             self.pipActive = false
             // A software source or fallback can replace the PiP content during an episode load.
             // That stop belongs to the handover, not to the user pressing the close button.
@@ -664,11 +619,6 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
                 else { self.resumeIfRequested() }
             }
             self.restoringPiP = false
-            #if DEBUG
-            NSLog("[PiPTrace] delegate=didStop finished uptime=%.3f main=%@ pipActive=%@ restoring=%@ continue=%@ paused=%@",
-                  ProcessInfo.processInfo.systemUptime, String(Thread.isMainThread), String(self.pipActive),
-                  String(self.restoringPiP), String(self.continuePiP), String(self.paused))
-            #endif
         }
     }
 
