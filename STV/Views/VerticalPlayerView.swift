@@ -73,8 +73,9 @@ struct PlayerScreen: View {
     @State private var displayOrientation = UIDevice.current.orientation
     /// Hold the display offset constant while AVKit restores the app from PiP.
     @State private var pipRestoreLift: CGFloat?
-    @State private var pipRestoreOrientation: UIDeviceOrientation?
     @State private var pipRestoreEpisode: Int?
+    /// Invalidates a delayed release if PiP starts again before the restore transition settles.
+    @State private var pipRestoreReleaseToken = UUID()
     /// Running double-tap seek (+10/+20/… s) and which side it is on; drives the side bubble.
     @State private var seekRun: (total: Int, at: Date)?
     @State private var horizontalSeekStart: Double?
@@ -97,8 +98,8 @@ struct PlayerScreen: View {
     }
 
     private func clearPiPRestoreLift() {
+        pipRestoreReleaseToken = UUID()
         pipRestoreLift = nil
-        pipRestoreOrientation = nil
         pipRestoreEpisode = nil
     }
     private var videoLift: CGFloat { videoLift(for: aspect) }
@@ -385,9 +386,20 @@ struct PlayerScreen: View {
         }
         .compatOnChange(of: co.pipActive) { active in
             if active {
+                // Freeze the pre-PiP offset before AVKit changes the app's size class/layout.
+                pipRestoreReleaseToken = UUID()
                 pipRestoreLift = videoLift(for: aspect)
-                pipRestoreOrientation = displayOrientation
                 pipRestoreEpisode = co.current
+            } else if pipRestoreLift != nil {
+                // Keep the frozen offset throughout AVKit's return animation. Device-orientation
+                // notifications can arrive mid-transition, so release only after the layout settles.
+                let token = UUID()
+                pipRestoreReleaseToken = token
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(700))
+                    guard pipRestoreReleaseToken == token, !co.pipActive else { return }
+                    clearPiPRestoreLift()
+                }
             }
         }
         .compatOnChange(of: co.current) { current in
@@ -395,12 +407,10 @@ struct PlayerScreen: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             let orientation = UIDevice.current.orientation
-            // Ignore face-up / face-down / unknown readings; retain the last real device orientation.
+            // Track the real device orientation, but never release the PiP offset lock here:
+            // iOS may emit transient orientation changes while the player UI is being restored.
             if orientation.isPortrait || orientation.isLandscape {
                 displayOrientation = orientation
-                if let savedOrientation = pipRestoreOrientation, orientation != savedOrientation {
-                    clearPiPRestoreLift()
-                }
             }
         }
         .alert("画中画暂不可用", isPresented: Binding(get: { co.pipError != nil }, set: { if !$0 { co.pipError = nil } })) {
