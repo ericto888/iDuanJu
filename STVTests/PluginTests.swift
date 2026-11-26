@@ -334,11 +334,14 @@ final class PluginTests: XCTestCase {
 
     func testBundledPluginsValidate() throws {
         let b = PluginInstaller.bundled()
-        XCTAssertEqual(Set(b.map(\.manifest.id)), ["com.idj.bundled.manga18fx", "com.idj.bundled.komikindo", "com.idj.bundled.jm18comic"])
+        let comics: Set = ["com.idj.bundled.manga18fx", "com.idj.bundled.komikindo", "com.idj.bundled.jm18comic"]
+        XCTAssertTrue(Set(b.map(\.manifest.id)).isSuperset(of: comics))
         for x in b {
             XCTAssertTrue(x.manifest.adult, "\(x.name) must sit behind the adult switch")
             let p = try PluginInstaller.prepare(bundle: x.data, origin: "test")
-            XCTAssertTrue(Set(p.exported).isSuperset(of: ["home", "category", "search", "detail", "pages"]), "\(x.name): \(p.exported)")
+            // Comics export pages; video plugins export play.
+            let last = comics.contains(x.manifest.id) ? "pages" : "play"
+            XCTAssertTrue(Set(p.exported).isSuperset(of: ["home", "category", "search", "detail", last]), "\(x.name): \(p.exported)")
         }
     }
 
