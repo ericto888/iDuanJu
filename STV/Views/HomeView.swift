@@ -708,9 +708,9 @@ private struct HomeBoardSection: View {
         Group {
             if let error = feed.error {
                 ErrorStateView(error: error) { feed.load(force: true) }
-            } else if !feed.items.isEmpty {
+            } else if case .loaded = feed.state {
                 let rest = isHeroBoard ? feed.items.filter { !heroIDs.contains($0.id) } : feed.items
-                HomeShelf(title: board.title, note: nil, items: Array(rest.prefix(12)), more: board)
+                HomeShelf(title: board.title, note: rest.isEmpty ? "暂无更多内容" : nil, items: Array(rest.prefix(12)), more: board)
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     DSSectionHeader(title: board.title)
