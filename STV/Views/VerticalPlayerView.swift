@@ -122,10 +122,6 @@ struct PlayerScreen: View {
         return fallbackAspect
     }
 
-    private func aspect(of image: UIImage) -> CGFloat {
-        guard image.size.width > 0, image.size.height > 0 else { return fallbackAspect }
-        return image.size.width / image.size.height
-    }
     /// True for native portrait-format video, independent of the device's current orientation.
     private var isPortraitVideo: Bool { aspect < 1.0 }
 
@@ -164,7 +160,7 @@ struct PlayerScreen: View {
                         FeedDrift(feed: feed, index: held.index, page: full.height) {
                             Image(uiImage: held.image).resizable()
                                 .frame(width: area.width, height: area.height)
-                                .offset(x: area.minX, y: area.minY - videoLift(for: aspect(of: held.image)))
+                                .offset(x: area.minX, y: area.minY - videoLift)
                                 .allowsHitTesting(false).accessibilityHidden(true)
                         }
                     }
@@ -638,7 +634,7 @@ struct PlayerScreen: View {
                         .resizable()
                         .aspectRatio(contentMode: fillScreen ? .fill : .fit)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .offset(y: -videoLift(for: aspect(of: frame)))
+                        .offset(y: -videoLift)
                         .clipped()
                         .allowsHitTesting(false)
                 } else if (i == co.heldFrame?.index || i == co.current) && co.errors[i] == nil {
