@@ -621,6 +621,10 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         audioSessionActive = false
         continuePiP = false
         if !pipActive { engine.setPiPActive(false) }
+        if pip?.isPictureInPictureActive == true {
+            restoringPiP = true
+            pip?.stopPictureInPicture()
+        }
         // AVKit owns the stop when the user restores the app from the PiP window. Stopping
         // it again here races the restore delegate and can relayout the video surface twice.
         resumeIfRequested()
