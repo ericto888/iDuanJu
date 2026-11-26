@@ -263,7 +263,7 @@ jobs:
             else
               tag="$IOS_TAG"
               title="i短剧 iOS ${IOS_VERSION}b${IOS_BUILD} (${tag})"
-              install="包内版本为 ${IOS_VERSION} build ${IOS_BUILD}。IPA 未签名（最低 iOS 18），请自行重签侧载。"
+              install="包内版本为 ${IOS_VERSION} build ${IOS_BUILD}。IPA 未签名（最低 iOS 16），请自行重签侧载。"
             fi
 
             if [ -n "$NOTES_SRC" ]; then
@@ -281,7 +281,7 @@ jobs:
           EOF
             fi
 
-            gh release create "$tag" dist/"$platform"/* --target "$BUILD_SHA" --title "$title" --notes-file "$platform-notes.md" --prerelease --draft
+            gh release create "$tag" dist/"$platform"/* --target "$BUILD_SHA" --title "$title" --notes-file "$platform-notes.md" --draft
             gh release view "$tag" --json assets > "$platform-assets.json"
             PLATFORM="$platform" python3 - <<'PY'
           import hashlib, json, os, pathlib
@@ -298,5 +298,5 @@ jobs:
 
           # Publish both platforms atomically after both uploads and digests verify.
           for tag in "$ANDROID_TAG" "$IOS_TAG"; do
-            gh release edit "$tag" --draft=false --prerelease
+            gh release edit "$tag" --draft=false --prerelease=false
           done
