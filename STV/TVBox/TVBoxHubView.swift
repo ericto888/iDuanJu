@@ -1,523 +1,260 @@
+import Combine
 import SwiftUI
 
-/// 02 · TVBox 点播展示页 + 03 · TVBox 直播展示页
+/// TVBox tab: 点播 / 直播, the current site or live source, search, categories and posters. Playback always goes through the
+/// shared detail page and player.
 struct TVBoxHubView: View {
     @ObservedObject private var store = TVBoxStore.shared
     @ObservedObject private var gate = SourceGate.shared
+    @StateObject private var hub = TVBoxHubModel()
+    @State private var picking = false
+    @State private var asking: TVBoxRepo?
+    @State private var paired = BridgeClient.shared.paired
 
-    @State private var mode = 0 // 0 = 点播, 1 = 直播
-    @State private var selectedSiteKey: String?
-    @State private var selectedLiveId: String?
-    @State private var showPicker = false
+    /// What the page is about, derived once per update.
+    private struct Subject {
+        let repo: TVBoxRepo?
+        let stamp: String
+        let sites: [TVBoxSiteRef]
+        let lives: [TVBoxLiveRef]
+        let site: TVBoxSiteRef?
+        let live: TVBoxLiveRef?
 
-    var body: some View {
-        let activeRepo = store.activeRepo
-        let sites = (activeRepo?.sites ?? []).filter { $0.enabled && (!$0.adult || gate.unlocked) }
-        let lives = (activeRepo?.lives ?? []).filter(\.enabled)
-        let currentSite = sites.first { $0.key == selectedSiteKey } ?? sites.first
-        let currentLive = lives.first { $0.id == selectedLiveId } ?? lives.first
-
-        ZStack(alignment: .top) {
-            STVTheme.bg.ignoresSafeArea()
-            LinearGradient(
-                colors: [(mode == 0 ? STVTheme.accent : STVTheme.accentWarm).opacity(0.11), .clear],
-                startPoint: .top, endPoint: .center
-            ).ignoresSafeArea()
-
-            VStack(spacing: 0) {
-                // 顶部：点播 / 直播 分段 + 右侧站点/直播源切换胶囊 + 配置齿轮
-                HStack(spacing: 16) {
-                    segmentTab("点播", on: mode == 0) { mode = 0 }
-                    segmentTab("直播", on: mode == 1) { mode = 1 }
-                    Spacer()
-                    if activeRepo != nil {
-                        Button { showPicker = true } label: {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(mode == 0 ? Color(red: 0.37, green: 0.82, blue: 0.54) : Color(red: 1.0, green: 0.42, blue: 0.42))
-                                    .frame(width: 7, height: 7)
-                                Text(mode == 0 ? (currentSite?.name ?? "选择站点") : (currentLive?.name ?? "选择直播源"))
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(STVTheme.text)
-                                    .lineLimit(1)
-                                Image(systemName: "chevron.down")
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(STVTheme.secondary)
-                            }
-                            .padding(.horizontal, 10).frame(height: 32)
-                            .frame(maxWidth: 156)
-                            .background(STVTheme.glass, in: Capsule())
-                            .overlay { Capsule().strokeBorder(STVTheme.glassBorder) }
-                        }.buttonStyle(.plain)
-                    }
-                    Button { Router.push(.tvboxConfig) } label: {
-                        Image(systemName: "gearshape")
-                            .font(.subheadline)
-                            .foregroundStyle(STVTheme.text)
-                            .frame(width: 32, height: 32)
-                            .background(STVTheme.glass, in: Circle())
-                            .overlay { Circle().strokeBorder(STVTheme.glassBorder) }
-                    }.buttonStyle(.plain)
-                }
-                .padding(.horizontal, 16).padding(.vertical, 8)
-
-                if let activeRepo {
-                    if mode == 0 {
-                        if let currentSite {
-                            TVBoxVodCatalogPane(repoId: activeRepo.id, site: currentSite, allSites: sites)
-                        } else {
-                            emptySection("当前配置仓没有可用的点播站点", cta: "去配置片源")
-                        }
-                    } else {
-                        if let currentLive {
-                            TVBoxLiveCatalogPane(repoId: activeRepo.id, live: currentLive)
-                        } else {
-                            emptySection("当前配置仓没有可用的直播列表", cta: "去配置直播源")
-                        }
-                    }
-                } else {
-                    emptyRoot
-                }
-            }
+        /// `paired`: what `SiteBlock` depends on besides the config, read here so that the page follows it.
+        @MainActor init(_ store: TVBoxStore, adult: Bool, paired: Bool) {
+            let repo = store.activeRepo
+            let sites = repo.map { store.visibleSites($0, adult: adult) } ?? []
+            let lives = repo.map { store.visibleLives($0) } ?? []
+            let lastSite = repo.flatMap { store.state.lastSite[$0.id] }, lastLive = repo.flatMap { store.state.lastLive[$0.id] }
+            var site = sites.first { $0.uid == lastSite }
+            if site == nil { site = sites.first { repo?.block($0.site.kind) == nil } }
+            self.repo = repo
+            self.sites = sites
+            self.lives = lives
+            self.site = site ?? sites.first
+            live = lives.first { $0.uid == lastLive } ?? lives.first
+            stamp = TVBoxStore.stamp(repo)
         }
-        .toolbar(.hidden, for: .navigationBar)
-        .compatOnChange(of: activeRepo?.id) {
-            if currentSite == nil && !lives.isEmpty { mode = 1 }
+
+        /// The current site cannot run yet.
+        @MainActor var block: SiteBlock? { site.flatMap { s in repo?.block(s.site.kind) } }
+        @MainActor var searchable: [String] {
+            guard let repo else { return [] }
+            return sites.filter { $0.site.searchable && repo.block($0.site.kind) == nil }.map(\.uid)
         }
-        .sheet(isPresented: $showPicker) {
-            if let activeRepo {
-                NavigationStack {
-                    List {
-                        if mode == 0 {
-                            ForEach(sites) { s in
-                                Button {
-                                    selectedSiteKey = s.key; showPicker = false
-                                } label: {
-                                    HStack {
-                                        Circle().fill(s.key == currentSite?.key ? STVTheme.accent : Color(red: 0.37, green: 0.82, blue: 0.54)).frame(width: 7, height: 7)
-                                        Text(s.name).foregroundStyle(s.key == currentSite?.key ? STVTheme.accent : STVTheme.text)
-                                        Spacer()
-                                        Text("\(s.categories.count) 分类").font(.caption).foregroundStyle(STVTheme.secondary)
-                                    }
-                                }
-                            }
-                        } else {
-                            ForEach(lives) { l in
-                                Button {
-                                    selectedLiveId = l.id; showPicker = false
-                                } label: {
-                                    HStack {
-                                        Circle().fill(l.id == currentLive?.id ? STVTheme.accent : Color(red: 1.0, green: 0.42, blue: 0.42)).frame(width: 7, height: 7)
-                                        Text(l.name).foregroundStyle(l.id == currentLive?.id ? STVTheme.accent : STVTheme.text)
-                                        Spacer()
-                                        if !l.channels.isEmpty { Text("\(l.channels.count) 频道").font(.caption).foregroundStyle(STVTheme.secondary) }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .navigationTitle(mode == 0 ? "切换点播站点" : "切换直播源")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button("切换配置仓") { showPicker = false; Router.push(.tvboxConfig) }
-                        }
-                    }
-                }
-                .presentationDetents([.medium, .large])
-            }
-        }
-    }
-
-    private func segmentTab(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: on ? 21 : 18, weight: on ? .heavy : .semibold))
-                    .foregroundStyle(on ? STVTheme.text : STVTheme.secondary)
-                Capsule()
-                    .fill(on ? STVTheme.accent : .clear)
-                    .frame(width: 22, height: 3)
-            }
-        }.buttonStyle(.plain)
-    }
-
-    private var emptyRoot: some View {
-        VStack(spacing: 12) {
-            Spacer()
-            Text("TVBox 点播与直播").font(.title3.weight(.heavy)).foregroundStyle(STVTheme.text)
-            Text("导入你的 HTTP(S) TVBox 配置或 M3U/TXT 直播源，支持多配置仓一键切换、多线路直链解析与横屏秒切台。")
-                .font(.subheadline).foregroundStyle(STVTheme.secondary).multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            Button { Router.push(.tvboxConfig) } label: {
-                Text("配置 TVBox 片源")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(STVTheme.bg)
-                    .padding(.horizontal, 24).frame(height: 44)
-                    .background(STVTheme.text, in: Capsule())
-            }.buttonStyle(.plain).padding(.top, 8)
-            Spacer()
-        }
-    }
-
-    private func emptySection(_ msg: String, cta: String) -> some View {
-        VStack(spacing: 14) {
-            Spacer()
-            Text(msg).font(.subheadline).foregroundStyle(STVTheme.secondary)
-            Button { Router.push(.tvboxConfig) } label: {
-                Text(cta)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(STVTheme.bg)
-                    .padding(.horizontal, 20).frame(height: 36)
-                    .background(STVTheme.text, in: Capsule())
-            }.buttonStyle(.plain)
-            Spacer()
-        }
-    }
-}
-
-private struct TVBoxVodCatalogPane: View {
-    let repoId: String
-    let site: TVBoxRepoSite
-    let allSites: [TVBoxRepoSite]
-    @ObservedObject private var store = TVBoxStore.shared
-
-    @State private var query = ""
-    @State private var submittedQuery = ""
-    @State private var searchAllSites = false
-    @State private var selCat = 0
-    @State private var items: [(site: TVBoxRepoSite, series: HGSeries)] = []
-    @State private var page = 1
-    @State private var hasMore = true
-    @State private var loading = false
-    @State private var errorMsg: String?
-
-    private var cats: [(id: String, name: String)] {
-        [("", "最新")] + site.categories.map { ($0.id, $0.name) }
-    }
-
-    @Environment(\.layoutMetrics) private var layout
-    private var cardWidth: CGFloat {
-        let count = CGFloat(layout.posterCols)
-        return max(1, (layout.width - 32 - (count - 1) * 10) / count)
-    }
-    private var cardHeight: CGFloat { cardWidth * 2.86 / 2 }
-    private var cols: [GridItem] {
-        Array(repeating: GridItem(.fixed(cardWidth), spacing: 10, alignment: .top), count: layout.posterCols)
     }
 
     var body: some View {
-        let taskKey = "\(site.key)|\(selCat)|\(submittedQuery)|\(searchAllSites)"
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                // 搜索胶囊
+        let s = Subject(store, adult: gate.unlocked, paired: paired)
+        content(s)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .liquidTopBar { header(s) }
+            .dsAmbient(cool: hub.mode == .live)
+            .toolbar(.hidden, for: .navigationBar)
+            .overlay { if hub.acting { DSBusyOverlay(label: "正在执行…") } }
+            .animation(DS.panel, value: hub.acting)
+            .sheet(isPresented: $picking) { if let repo = s.repo { picker(repo, s) } }
+            .tvboxTrustDialog($asking)
+            .dsDialog("提示", isPresented: Binding(get: { hub.message != nil }, set: { if !$0 { hub.message = nil } }), message: hub.message) {
+                [.primary("知道了", disabled: { false }, {})]
+            }
+            .compatOnChange(of: s.stamp) { hub.search.clear() }
+            .task(id: "\(s.repo?.id ?? "")|\(s.sites.isEmpty)|\(s.lives.isEmpty)") {
+                if s.sites.isEmpty && !s.lives.isEmpty { hub.mode = .live } else if s.lives.isEmpty && !s.sites.isEmpty { hub.mode = .vod }
+            }
+            .onReceive(BridgeStatus.pairing) { if $0 != paired { paired = $0 } }
+            .onAppear { hub.search.resume() }
+            .onDisappear { hub.search.pause() }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("screen.tvbox")
+            #if DEBUG
+            .task { await TVBoxFixture.seedIfRequested() }
+            #endif
+            .tvboxShot("trust") { asking = store.activeRepo }
+            .tvboxShot("sites") { picking = true }
+            .tvboxShot("live,unlock") { hub.mode = .live }
+            .tvboxShot("lives") { hub.mode = .live; picking = true }
+            .tvboxShot("config,list,menu,rename,paste,manual,parse") { Router.push(.tvboxConfig) }
+            .tvboxShot("bridge") { TVBoxConfigView.openBridge() }
+    }
+
+    // MARK: Header
+
+    private func header(_ s: Subject) -> some View {
+        VStack(spacing: 8) {
+            topRow(s)
+            if let repo = s.repo, repo.error == nil {
+                if repo.needsTrust { trustBanner(repo) }
+                if hub.mode == .vod {
+                    if let site = s.site {
+                        VodBar(pane: hub.site(site.uid, s.stamp), search: hub.search, site: site, searchable: s.searchable, blocked: s.block != nil)
+                    }
+                } else if let live = s.live {
+                    LiveBar(pane: hub.live(live.uid, s.stamp))
+                }
+            }
+        }
+        .padding(.top, 4).padding(.bottom, 8)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+    }
+
+    private func topRow(_ s: Subject) -> some View {
+        HStack(spacing: 10) {
+            SegmentedTabs(items: HubMode.allCases, selection: $hub.mode, label: \.rawValue, idPrefix: "tvbox.mode").frame(width: 128)
+            LiquidGlassGroup(spacing: 8) {
                 HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(STVTheme.secondary).font(.subheadline)
-                    TextField("搜索 \(site.name)，或聚合全站片源", text: $query)
-                        .font(.subheadline).foregroundStyle(STVTheme.text)
-                        .submitLabel(.search)
-                        .onSubmit { submittedQuery = query.trimmingCharacters(in: .whitespaces) }
-                        .compatOnChange(of: query) { v in if v.trimmingCharacters(in: .whitespaces).isEmpty { submittedQuery = "" } }
-                    Button {
-                        searchAllSites.toggle()
-                        if !query.trimmingCharacters(in: .whitespaces).isEmpty { submittedQuery = query.trimmingCharacters(in: .whitespaces) }
-                    } label: {
-                        Text("全站搜")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(searchAllSites ? STVTheme.accent : STVTheme.text)
-                            .padding(.horizontal, 10).frame(height: 28)
-                            .background(searchAllSites ? STVTheme.accent.opacity(0.20) : STVTheme.glass, in: Capsule())
-                    }.buttonStyle(.plain)
+                    Spacer(minLength: 0)
+                    if hub.mode == .vod {
+                        if let site = s.site { source(site.site.name, site.site.kind) }
+                    } else if let live = s.live { source(live.live.name, live.live.kind) }
+                    NavigationLink(value: Route.tvboxConfig) { DSBarLabel(systemName: "gearshape") }
+                        .buttonStyle(GlassPress())
+                        .accessibilityLabel("TVBox 配置").accessibilityIdentifier("tvbox.config")
                 }
-                .padding(.leading, 14).padding(.trailing, 6).frame(height: 40)
-                .background(STVTheme.glass, in: Capsule())
-                .overlay { Capsule().strokeBorder(STVTheme.glassBorder) }
-                .padding(.horizontal, 16)
-
-                // 分类胶囊
-                if submittedQuery.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 7) {
-                            ForEach(cats.indices, id: \.self) { i in
-                                let on = i == selCat
-                                Button { selCat = i } label: {
-                                    Text(cats[i].name)
-                                        .font(.caption.weight(on ? .semibold : .medium))
-                                        .foregroundStyle(on ? STVTheme.bg : STVTheme.secondary)
-                                        .padding(.horizontal, 13).frame(height: 30)
-                                        .background(on ? STVTheme.text : STVTheme.glass, in: Capsule())
-                                }.buttonStyle(.plain)
-                            }
-                        }.padding(.horizontal, 16)
-                    }
-                }
-
-                // 轻量继续观看条
-                if submittedQuery.isEmpty, let latest = store.recentWatches.first {
-                    Button {
-                        Router.push(.tvboxVod(latest.siteKey, latest.seriesId, latest.title, latest.cover, latest.episodeIndex))
-                    } label: {
-                        HStack(spacing: 10) {
-                            AsyncImage(url: URL(string: latest.cover)) { img in img.resizable().scaledToFill() } placeholder: { STVTheme.elevated }
-                                .frame(width: 56, height: 38).clipShape(RoundedRectangle(cornerRadius: 8))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("\(latest.title) · \(latest.episodeTitle)").font(.caption.weight(.semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
-                                Text("\(latest.siteName)\(latest.lineName.isEmpty ? "" : " · \(latest.lineName)")").font(.caption2).foregroundStyle(STVTheme.secondary).lineLimit(1)
-                            }
-                            Spacer()
-                            Image(systemName: "play.fill").font(.caption).foregroundStyle(STVTheme.bg)
-                                .frame(width: 30, height: 30).background(STVTheme.text, in: Circle())
-                        }
-                        .padding(9)
-                        .background(STVTheme.glass, in: RoundedRectangle(cornerRadius: 14))
-                        .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(STVTheme.glassBorder) }
-                    }.buttonStyle(.plain).padding(.horizontal, 16)
-                }
-
-                // 标题行
-                HStack {
-                    Text(submittedQuery.isEmpty ? (cats.indices.contains(selCat) ? cats[selCat].name : "最新更新") : "搜索「\(submittedQuery)」")
-                        .font(.headline.weight(.bold)).foregroundStyle(STVTheme.text)
-                    Spacer()
-                    Text(searchAllSites && !submittedQuery.isEmpty ? "聚合 \(allSites.count) 站" : "\(site.name) · \(site.categories.count) 分类")
-                        .font(.caption).foregroundStyle(STVTheme.secondary)
-                }.padding(.horizontal, 16)
-
-                // 3 列无框海报网格
-                LazyVGrid(columns: cols, spacing: 12) {
-                    ForEach(items.indices, id: \.self) { idx in
-                        let pair = items[idx]
-                        Button {
-                            Router.push(.tvboxVod(pair.site.key, pair.series.seriesId, pair.series.title, pair.series.cover, 0))
-                        } label: {
-                            VStack(alignment: .leading, spacing: 5) {
-                                ZStack(alignment: .topTrailing) {
-                                    AsyncImage(url: URL(string: pair.series.cover)) { img in img.resizable().scaledToFill() } placeholder: { STVTheme.elevated }
-                                        .frame(width: cardWidth, height: cardHeight)
-                                        .clipped()
-                                    if let sub = pair.series.subtitle, !sub.isEmpty {
-                                        Text(sub)
-                                            .font(.system(size: 10, weight: .semibold)).foregroundStyle(.white)
-                                            .padding(.horizontal, 6).padding(.vertical, 2)
-                                            .background(Color.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 5))
-                                            .padding(6)
-                                    }
-                                }
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                Text(pair.series.title).font(.caption.weight(.semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
-                                Text(pair.series.tags.prefix(2).joined(separator: " · ").nilIfEmpty ?? pair.site.name)
-                                    .font(.caption2).foregroundStyle(STVTheme.secondary).lineLimit(1)
-                            }
-                            .frame(width: cardWidth, alignment: .leading)
-                        }.buttonStyle(.plain)
-                        .onAppear {
-                            if idx >= items.count - 4, hasMore, !loading {
-                                Task { await loadMore() }
-                            }
-                        }
-                    }
-                }.padding(.horizontal, 16)
-
-                if loading {
-                    ProgressView().frame(maxWidth: .infinity).padding(20)
-                } else if let errorMsg {
-                    Button("\(errorMsg) · 点击重试") { Task { await loadMore() } }
-                        .font(.caption).foregroundStyle(STVTheme.secondary).frame(maxWidth: .infinity).padding(20)
-                } else if items.isEmpty {
-                    Text("暂无内容，试试切换分类或站点").font(.caption).foregroundStyle(STVTheme.secondary).frame(maxWidth: .infinity).padding(20)
-                }
-            }.padding(.bottom, 24)
+            }
         }
-        .task(id: taskKey) {
-            items = []; page = 1; hasMore = true; errorMsg = nil
-            await loadMore()
+        .padding(.horizontal, 16)
+    }
+
+    private func source(_ name: String, _ kind: SiteKind?) -> some View {
+        Button { picking = true } label: {
+            HStack(spacing: 6) {
+                if let kind { TVBoxKindBadge(kind: kind) }
+                Text(name).font(.system(size: 14, weight: .semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold)).foregroundStyle(STVTheme.secondary)
+            }
+            .padding(.leading, kind == nil ? 14 : 9).padding(.trailing, 12).frame(height: 44)
+            .contentShape(Capsule())
+            .liquidGlassCapsule(interactive: true)
+        }
+        .buttonStyle(GlassPress())
+        .accessibilityLabel(hub.mode == .vod ? "当前站点 \(name)" : "当前直播源 \(name)")
+        .accessibilityIdentifier("tvbox.source")
+    }
+
+    private func trustBanner(_ repo: TVBoxRepo) -> some View {
+        Button { asking = repo } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "shield.lefthalf.filled").font(.system(size: 16, weight: .medium)).foregroundStyle(STVTheme.accentWarm)
+                Text("「\(repo.name)」含 JAR / JS / Python 站点，信任后才会运行").dsFont(13, relativeTo: .footnote).foregroundStyle(STVTheme.text)
+                    .lineLimit(2).multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                MiniButtonLabel(title: "查看")
+            }
+            .padding(.leading, 14).padding(.trailing, 10).padding(.vertical, 8)
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .liquidGlass(corner: 20, tone: .tinted(STVTheme.warmSoft), interactive: true)
+        }
+        .buttonStyle(GlassPress())
+        .padding(.horizontal, 16)
+        .accessibilityIdentifier("tvbox.trust")
+    }
+
+    // MARK: Content
+
+    @ViewBuilder private func content(_ s: Subject) -> some View {
+        if !store.loaded {
+            DSLoading()
+        } else if let repo = s.repo {
+            if let e = repo.error {
+                HubState("配置无法读取", systemImage: "exclamationmark.triangle", message: e, actionTitle: "去配置管理") { Router.push(.tvboxConfig) }
+            } else {
+                KeptPages(current: hub.mode, limit: 2) { mode in
+                    if mode == .vod { vod(repo, s) } else { live(repo, s) }
+                }
+            }
+        } else {
+            HubState("还没有 TVBox 配置", systemImage: "tv", message: "支持 CMS、T4、JS、Python、JAR 站点和 M3U / TXT 直播，也支持多仓与加密配置。", actionTitle: "添加配置") { Router.push(.tvboxConfig) }
         }
     }
 
-    private func loadMore() async {
-        guard !loading, hasMore else { return }
-        loading = true
-        defer { loading = false }
-        do {
-            if !submittedQuery.isEmpty && searchAllSites {
-                let q = submittedQuery
-                let targets = Array(allSites.prefix(10))
-                let res: [(TVBoxRepoSite, HGSeries)] = await withTaskGroup(of: [(TVBoxRepoSite, HGSeries)].self) { group in
-                    for s in targets {
-                        group.addTask {
-                            let p = MacCMSProvider(source: .cms(s.key), site: s.toCMSSite())
-                            let list = (try? await p.search(q, page: 1).items) ?? []
-                            return list.map { (s, $0) }
-                        }
-                    }
-                    var out: [(TVBoxRepoSite, HGSeries)] = []
-                    for await arr in group { out.append(contentsOf: arr) }
-                    return out
-                }
-                items = res; hasMore = false; errorMsg = nil
-            } else if !submittedQuery.isEmpty {
-                let p = MacCMSProvider(source: .cms(site.key), site: site.toCMSSite())
-                let r = try await p.search(submittedQuery, page: page)
-                let seen = Set(items.map(\.series.seriesId))
-                items.append(contentsOf: r.items.filter { !seen.contains($0.seriesId) }.map { (site, $0) })
-                hasMore = r.hasMore; page += 1; errorMsg = nil
+    @ViewBuilder private func vod(_ repo: TVBoxRepo, _ s: Subject) -> some View {
+        if let site = s.site {
+            VodPages(pane: hub.site(site.uid, s.stamp), search: hub.search, hub: hub, repo: repo, site: site, block: s.block) { asking = repo }
+        } else {
+            HubState("没有可用的点播站点", systemImage: "film.stack", message: "可以在配置里启用站点，或换一个配置。", actionTitle: "去配置管理") { Router.push(.tvboxConfig) }
+        }
+    }
+
+    @ViewBuilder private func live(_ repo: TVBoxRepo, _ s: Subject) -> some View {
+        if let live = s.live {
+            if let kind = live.live.kind, let block = repo.block(kind) {
+                VodBlocked(repo: repo, kind: kind, block: block) { asking = repo }
             } else {
-                let catId = cats.indices.contains(selCat) ? cats[selCat].id : ""
-                var q = ["ac": "detail", "pg": "\(page)"]
-                if !catId.isEmpty { q["t"] = catId }
-                let o = try await MacCMSProvider.fetch(site.api, q)
-                if catId.isEmpty && page == 1 {
-                    let parsed = MacCMSProvider.parseCategories(o)
-                    if !parsed.isEmpty { store.cacheCategories(repoId: repoId, siteKey: site.key, categories: parsed) }
-                }
-                let r = MacCMSProvider.page(o, source: .cms(site.key), page: page)
-                let seen = Set(items.map(\.series.seriesId))
-                items.append(contentsOf: r.items.filter { !seen.contains($0.seriesId) }.map { (site, $0) })
-                hasMore = r.hasMore; page += 1; errorMsg = nil
+                LivePage(pane: hub.live(live.uid, s.stamp), live: live).id(live.uid)
             }
-        } catch {
-            errorMsg = error.localizedDescription
+        } else {
+            HubState("没有直播源", systemImage: "antenna.radiowaves.left.and.right", message: "当前配置没有启用的直播列表。", actionTitle: "去配置管理") { Router.push(.tvboxConfig) }
+        }
+    }
+
+    // MARK: Pickers
+
+    @ViewBuilder private func picker(_ repo: TVBoxRepo, _ s: Subject) -> some View {
+        if hub.mode == .vod {
+            SitePicker(repo: repo, sites: s.sites, current: s.site?.uid) { choice in
+                picking = false
+                switch choice {
+                case .site(let uid):
+                    store.setLastSite(repo.id, uid)
+                    hub.search.clear()
+                case .config: Router.push(.tvboxConfig)
+                case .bridge: TVBoxConfigView.openBridge()
+                }
+            }
+        } else {
+            LivePicker(repo: repo, lives: s.lives, current: s.live?.uid) { uid in
+                picking = false
+                store.setLastLive(repo.id, uid)
+            }
         }
     }
 }
 
-private struct TVBoxLiveCatalogPane: View {
-    let repoId: String
-    let live: TVBoxRepoLive
-    @ObservedObject private var store = TVBoxStore.shared
+/// Centred message on a page of its own.
+struct HubState: View {
+    let title: String
+    let systemImage: String
+    var message: String? = nil
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
 
-    @State private var channels: [TVBoxLiveChannel] = []
-    @State private var loading = false
-    @State private var errorMsg: String?
-    @State private var selectedGroup = "全部"
-    @State private var activeName: String?
-
-    var body: some View {
-        let groups = ["全部", "收藏"] + Array(NSOrderedSet(array: channels.map(\.group)).compactMap { $0 as? String })
-        let filtered: [TVBoxLiveChannel] = {
-            switch selectedGroup {
-            case "全部": return channels
-            case "收藏": return channels.filter { store.isFavoriteChannel($0.name) }
-            default: return channels.filter { $0.group == selectedGroup }
-            }
-        }()
-        let activeCh = channels.first { $0.name == activeName } ?? filtered.first ?? channels.first
-        let activeGlobalIdx = activeCh.flatMap { ch in channels.firstIndex(where: { $0.name == ch.name }) } ?? 0
-
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                // 单焦点直播预览框
-                if let activeCh {
-                    Button { Router.push(.tvboxLive(repoId, live.id, activeGlobalIdx)) } label: {
-                        ZStack {
-                            LinearGradient(colors: [Color(red: 0.06, green: 0.09, blue: 0.14), Color(red: 0.12, green: 0.15, blue: 0.23), Color(red: 0.05, green: 0.07, blue: 0.09)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                            VStack {
-                                HStack {
-                                    HStack(spacing: 6) {
-                                        Circle().fill(Color(red: 1.0, green: 0.42, blue: 0.42)).frame(width: 7, height: 7)
-                                        Text("LIVE · HLS").font(.caption2.weight(.semibold)).foregroundStyle(.white)
-                                    }
-                                    .padding(.horizontal, 9).padding(.vertical, 4)
-                                    .background(Color.black.opacity(0.6), in: Capsule())
-                                    Spacer()
-                                    Text("线路 1 / \(max(1, activeCh.urls.count))")
-                                        .font(.caption2.weight(.semibold)).foregroundStyle(.white)
-                                        .padding(.horizontal, 9).padding(.vertical, 4)
-                                        .background(Color.black.opacity(0.6), in: Capsule())
-                                }
-                                Spacer()
-                                HStack(alignment: .bottom) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(activeCh.name).font(.headline.weight(.heavy)).foregroundStyle(.white).lineLimit(1)
-                                        Text("\(live.name) · \(activeCh.group)").font(.caption2).foregroundStyle(.white.opacity(0.72))
-                                    }
-                                    Spacer()
-                                    Label("全屏观看", systemImage: "arrow.up.left.and.arrow.down.right")
-                                        .font(.caption.weight(.bold)).foregroundStyle(.black)
-                                        .padding(.horizontal, 13).frame(height: 32)
-                                        .background(.white, in: Capsule())
-                                }
-                            }.padding(14)
-                        }
-                        .frame(height: 170)
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
-                    }.buttonStyle(.plain).padding(.horizontal, 16)
-                }
-
-                // 分组胶囊
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 7) {
-                        ForEach(groups, id: \.self) { g in
-                            let on = g == selectedGroup
-                            Button { selectedGroup = g } label: {
-                                Text(g == "全部" ? "全部 \(channels.count)" : g)
-                                    .font(.caption.weight(on ? .semibold : .medium))
-                                    .foregroundStyle(on ? STVTheme.bg : STVTheme.secondary)
-                                    .padding(.horizontal, 13).frame(height: 30)
-                                    .background(on ? STVTheme.text : STVTheme.glass, in: Capsule())
-                            }.buttonStyle(.plain)
-                        }
-                    }.padding(.horizontal, 16)
-                }
-
-                if loading {
-                    ProgressView().frame(maxWidth: .infinity).padding(28)
-                } else if let errorMsg {
-                    Button("\(errorMsg) · 点击重试") { Task { await load(force: true) } }
-                        .font(.caption).foregroundStyle(STVTheme.secondary).frame(maxWidth: .infinity).padding(28)
-                } else {
-                    VStack(spacing: 0) {
-                        ForEach(Array(filtered.enumerated()), id: \.offset) { idx, ch in
-                            let on = ch.name == activeCh?.name
-                            let fav = store.isFavoriteChannel(ch.name)
-                            let gIdx = channels.firstIndex(where: { $0.name == ch.name }) ?? 0
-                            HStack(spacing: 11) {
-                                Text(String(format: "%02d", idx + 1))
-                                    .font(.caption.weight(.semibold)).foregroundStyle(on ? STVTheme.accent : STVTheme.secondary.opacity(0.65))
-                                    .frame(width: 24)
-                                Text(String(ch.name.prefix(5)))
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(on ? STVTheme.accent : STVTheme.text)
-                                    .frame(width: 46, height: 30)
-                                    .background(on ? STVTheme.accent.opacity(0.16) : STVTheme.glass, in: RoundedRectangle(cornerRadius: 8))
-                                    .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(on ? STVTheme.accent.opacity(0.42) : STVTheme.glassBorder) }
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(ch.name).font(.subheadline.weight(.semibold)).foregroundStyle(on ? STVTheme.accent : STVTheme.text).lineLimit(1)
-                                    Text("\(ch.group) · \(ch.urls.count) 条信号源\(on ? " · 正在预览" : "")")
-                                        .font(.caption2).foregroundStyle(STVTheme.secondary).lineLimit(1)
-                                }
-                                Spacer()
-                                Button { store.toggleFavoriteChannel(ch.name) } label: {
-                                    Image(systemName: fav ? "star.fill" : "star")
-                                        .foregroundStyle(fav ? STVTheme.accentWarm : STVTheme.secondary.opacity(0.6))
-                                }.buttonStyle(.plain)
-                            }
-                            .padding(.vertical, 11)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                activeName = ch.name
-                                Router.push(.tvboxLive(repoId, live.id, gIdx))
-                            }
-                            if idx < filtered.count - 1 { Divider().overlay(STVTheme.text.opacity(0.07)) }
-                        }
-                    }.padding(.horizontal, 16)
-                }
-            }.padding(.bottom, 24)
-        }
-        .task(id: "\(repoId)|\(live.id)") {
-            channels = live.channels
-            if channels.isEmpty { await load(force: false) }
-        }
+    init(_ title: String, systemImage: String, message: String? = nil, actionTitle: String? = nil, action: (() -> Void)? = nil) {
+        self.title = title
+        self.systemImage = systemImage
+        self.message = message
+        self.actionTitle = actionTitle
+        self.action = action
     }
 
-    private func load(force: Bool) async {
-        loading = true
-        defer { loading = false }
-        do {
-            channels = try await store.loadLiveChannels(repoId: repoId, liveId: live.id, forceRefresh: force)
-            errorMsg = nil
-        } catch {
-            errorMsg = error.localizedDescription
+    var body: some View {
+        ScrollView {
+            DSEmptyState(title, systemImage: systemImage, message: message, actionTitle: actionTitle, action: action)
+                .padding(.top, 56)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("tvbox.state")
+        }
+        .compatScrollBounceBasedOnSize()
+    }
+}
+
+/// A site that needs something from the user before it can run.
+struct VodBlocked: View {
+    let repo: TVBoxRepo
+    let kind: SiteKind
+    let block: SiteBlock
+    let onTrust: () -> Void
+
+    var body: some View {
+        switch block {
+        case .trust:
+            HubState("\(kind.badge) 站点尚未启用", systemImage: "shield.lefthalf.filled", message: "这个站点的代码需要你先信任「\(repo.name)」才会运行。", actionTitle: "信任配置", action: onTrust)
+        case .bridge:
+            HubState("JAR 站点需要桥接", systemImage: "personalhotspot", message: "iOS 不能运行 JAR。把同一局域网里的安卓设备配对为桥接后，由它代为运行这个站点。", actionTitle: "去配对") { TVBoxConfigView.openBridge() }
+        case .python:
+            HubState(PythonRuntime.missingMessage, systemImage: "curlybraces", message: "可以换一个站点，或使用带 Python 运行时的版本。")
+        case .unsupported:
+            HubState("不支持的站点类型", systemImage: "questionmark.circle", message: "可以换一个站点。")
         }
     }
 }

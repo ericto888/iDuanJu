@@ -200,17 +200,12 @@ final class LegadoContext {
         case "uuid": return UUID().uuidString.lowercased()
         case "cookieRemove":
             if let u = URL(string: LegadoURL.absolute(s("url"), base: source.bookSourceUrl)) {
-                (HTTPCookieStorage.shared.cookies(for: u) ?? []).forEach(HTTPCookieStorage.shared.deleteCookie)
+                LegadoCookies.remove(for: u)
             }
             return nil
         case "cookieSet":
             if let u = URL(string: LegadoURL.absolute(s("url"), base: source.bookSourceUrl)) {
-                let cookies = s("c").split(separator: ";").compactMap { part -> HTTPCookie? in
-                    let kv = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-                    guard kv.count == 2, let host = u.host else { return nil }
-                    return HTTPCookie(properties: [.name: kv[0], .value: kv[1], .domain: host, .path: "/"])
-                }
-                HTTPCookieStorage.shared.setCookies(cookies, for: u, mainDocumentURL: nil)
+                LegadoCookies.setManual(s("c"), for: u)
             }
             return nil
         case "loginInfo":
@@ -233,11 +228,12 @@ final class LegadoContext {
             guard interactive else { throw LegadoError.rule("这个操作需要在书源的「登录」页里进行") }
             let u = URL(string: LegadoURL.absolute(s("url"), base: source.bookSourceUrl))
             let title = s("title").isEmpty ? source.bookSourceName : s("title")
+            let sourceUA = (try? LegadoURL.headers(ctx: self))?.first { $0.key.caseInsensitiveCompare("User-Agent") == .orderedSame }?.value
             if a["wait"] as? Bool == true {
-                LegadoBrowser.openBlocking(url: u, html: nil, title: title, sourceURL: source.bookSourceUrl)
+                LegadoBrowser.openBlocking(url: u, html: nil, title: title, sourceURL: source.bookSourceUrl, userAgent: sourceUA)
                 return (try? u.map { try LegadoHTTP.fetch(URLRequest(url: $0)).text }) ?? ""
             }
-            Task { @MainActor in await LegadoBrowser.open(url: u, html: nil, title: title, sourceURL: self.source.bookSourceUrl) }
+            Task { @MainActor in await LegadoBrowser.open(url: u, html: nil, title: title, sourceURL: self.source.bookSourceUrl, userAgent: sourceUA) }
             return nil
         case "headers":
             // Guard against a header script that itself calls getHeaderMap().
@@ -246,10 +242,16 @@ final class LegadoContext {
             return (try? LegadoURL.headers(ctx: self)) ?? [:]
         case "androidId": return String(LegadoJS.md5(source.bookSourceUrl).prefix(16))
         case "cookie":
-            guard let u = URL(string: s("url")) else { return "" }
-            let cs = HTTPCookieStorage.shared.cookies(for: u) ?? []
-            if let k = a["k"] as? String { return cs.first { $0.name == k }?.value ?? "" }
-            return cs.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+            guard let u = URL(string: LegadoURL.absolute(s("url"), base: source.bookSourceUrl)) else { return "" }
+            let raw = LegadoCookies.cookieHeader(for: u) ?? ""
+            if let k = a["k"] as? String, !k.isEmpty {
+                for part in raw.split(separator: ";") {
+                    let kv = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                    if kv.count == 2 && kv[0] == k { return kv[1] }
+                }
+                return ""
+            }
+            return raw
         default: return nil
         }
     }

@@ -1,20 +1,18 @@
 package app.iduanju.huangguo
 
 import android.content.Context
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import app.iduanju.IdjApp
 import app.iduanju.core.huangguo.CoverCrypto
 import app.iduanju.core.huangguo.HuangguoClient
 import app.iduanju.core.huangguo.HuangguoSub
+import app.iduanju.ui.components.EmptyState
 import app.iduanju.ui.home.FeedGrid
-import app.iduanju.ui.theme.IdjThemeColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Interceptor
@@ -57,17 +55,14 @@ object CoverDecryptInterceptor : Interceptor {
 @Composable
 /** iOS splits 黄果 across two pages: 「黄果」 = 视频站 + App 源, 「AI剧」 → 黄果 AI 站 ([aiOnly]). */
 fun HuangguoFeedPage(onOpen: (String) -> Unit, aiOnly: Boolean = false) {
-    val c = IdjThemeColors
     if (!IdjApp.instance.cms.adultUnlocked) {
-        Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-            Text("黄果为成人片源，默认隐藏。\n在「我的 → 片源管理」开启成人内容后显示。", color = c.secondary, fontSize = 14.sp, textAlign = TextAlign.Center, lineHeight = 20.sp)
-        }
+        EmptyState("黄果为成人片源，默认隐藏", Modifier.padding(top = 80.dp), note = "在「我的 → 片源管理」开启成人内容后显示。", icon = Icons.Rounded.Lock)
         return
     }
     val hg = IdjApp.instance.huangguo
-    val base = if (aiOnly) HuangguoClient.aiChannels.map { "ai/" + it.slug to it.title } else HuangguoClient.videoChannels.map { "video/" + it.slug to it.title }
-    var cats by remember { mutableStateOf(base) }
-    LaunchedEffect(Unit) {
+    val base = remember(aiOnly) { if (aiOnly) HuangguoClient.aiChannels.map { "ai/" + it.slug to it.title } else HuangguoClient.videoChannels.map { "video/" + it.slug to it.title } }
+    var cats by remember(aiOnly) { mutableStateOf(base) }
+    LaunchedEffect(aiOnly) {
         if (!aiOnly) runCatching { withContext(Dispatchers.IO) { hg.legacyChannels() } }.getOrNull()?.let { tabs -> cats = base + tabs.map { "legacy/" + it.slug to "App·" + it.title } }
     }
     FeedGrid(if (aiOnly) "huangguo-ai" else "huangguo", cats, { cat, page ->

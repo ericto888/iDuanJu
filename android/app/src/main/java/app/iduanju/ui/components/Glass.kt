@@ -96,7 +96,7 @@ object GlassStylePref {
     }
 
     var style: GlassStyle by mutableStateOf(
-        prefs?.getString(KEY, null)?.let { n -> GlassStyle.entries.firstOrNull { it.name == n } } ?: GlassStyle.LIQUID,
+        prefs?.getString(KEY, null)?.let { n -> GlassStyle.entries.firstOrNull { it.name == n } } ?: GlassStyle.FROSTED,
     )
         private set
 
@@ -137,14 +137,15 @@ val LocalRootBackdrop = compositionLocalOf<Backdrop?> { null }
 private class GlassPalette(private val dark: Boolean) {
     private val liquidBase = if (dark) Color.Black else Color.White
     /** Lens-path tint: 0.58 / 0.56 at 通透度 0 → 0.05 / 0.03 at 100 %. */
-    fun liquidTint(s: Float) = liquidBase.copy(alpha = if (dark) glassLerp(0.58f, 0.05f, s) else glassLerp(0.56f, 0.03f, s))
-    val frostTint = if (dark) Color(0xFF1C1E24).copy(alpha = 0.72f) else Color.White.copy(alpha = 0.68f)
-    val frostFallback = if (dark) Color(0xFF1C1E24).copy(alpha = 0.84f) else Color.White.copy(alpha = 0.90f)
-    val rimTop = Color.White.copy(alpha = if (dark) 0.26f else 0.60f)
-    val rimBottom = Color.White.copy(alpha = if (dark) 0.06f else 0.20f)
-    val frostBorder = if (dark) Color.White.copy(alpha = 0.12f) else Color.Black.copy(alpha = 0.08f)
-    val sheen = Color.White.copy(alpha = if (dark) 0.10f else 0.22f)
-    val shadow = Color.Black.copy(alpha = if (dark) 0.24f else 0.12f)
+    fun liquidTint(s: Float, least: Float) =
+        liquidBase.copy(alpha = (if (dark) glassLerp(0.58f, 0.05f, s) else glassLerp(0.56f, 0.03f, s)).coerceAtLeast(least))
+    val frostTint = if (dark) Color(0xFF1C1E24).copy(alpha = 0.78f) else Color.White.copy(alpha = 0.76f)
+    val frostFallback = if (dark) Color(0xFF1C1E24).copy(alpha = 0.90f) else Color.White.copy(alpha = 0.94f)
+    val rimTop = Color.White.copy(alpha = if (dark) 0.12f else 0.45f)
+    val rimBottom = Color.White.copy(alpha = if (dark) 0.03f else 0.12f)
+    val frostBorder = if (dark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.06f)
+    val sheen = Color.White.copy(alpha = if (dark) 0.05f else 0.14f)
+    val shadow = Color.Black.copy(alpha = if (dark) 0.22f else 0.10f)
 }
 
 /**
@@ -156,7 +157,8 @@ private class GlassPalette(private val dark: Boolean) {
  *   denser frosted fill + soft hairline for FROSTED). [fallbackAlpha] scales the sheer LIQUID fallback fill
  *   (x0.36 → 0.18..0.44 dark, x0.28 → 0.14..0.36 light); FROSTED always uses its high-readability fill.
  *
- * [dark] forces the dark palette (player chrome); [base] is the surface colour of LIQUID fallbacks.
+ * [dark] forces the dark palette (player chrome); [base] is the surface colour of LIQUID fallbacks. [veil] is the least
+ * tint whatever the 通透度: bars that carry small labels over pictures stay readable.
  */
 @Composable
 fun Modifier.glassSurface(
@@ -168,6 +170,7 @@ fun Modifier.glassSurface(
     activeOverlay: Color = Color.Transparent,
     fallbackAlpha: Float = 0.90f,
     highlightAlpha: Float = 0.50f,
+    veil: Float = 0f,
 ): Modifier {
     val frosted = GlassStylePref.style == GlassStyle.FROSTED
     val s = GlassStylePref.strength
@@ -175,7 +178,7 @@ fun Modifier.glassSurface(
     val canBlur = backdrop != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
     val hasLens = canBlur && !frosted && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU
     val shadowColor = p.shadow
-    val noLensTint = base.copy(alpha = ((if (dark) 0.50f else 0.54f) * liquidFillScale(s)).coerceIn(0.10f, 0.90f))
+    val noLensTint = base.copy(alpha = ((if (dark) 0.50f else 0.54f) * liquidFillScale(s)).coerceIn(maxOf(0.10f, veil), 0.90f))
     val edge = if (frosted) {
         Modifier.border(0.7.dp, p.frostBorder, shape)
     } else {
@@ -189,7 +192,7 @@ fun Modifier.glassSurface(
                 effects = {
                     vibrancy()
                     if (hasLens) {
-                        blur(glassLerp(12f, 1f, s).dp.toPx())
+                        blur(glassLerp(12f, 1f, s).coerceAtLeast(if (veil > 0f) 9f else 0f).dp.toPx())
                         lens(
                             refractionHeight = glassLerp(8f, 14f, s).dp.toPx(),
                             refractionAmount = glassLerp(12f, 32f, s).dp.toPx(),
@@ -223,7 +226,7 @@ fun Modifier.glassSurface(
                     drawRect(
                         when {
                             frosted -> p.frostTint
-                            hasLens -> p.liquidTint(s)
+                            hasLens -> p.liquidTint(s, veil)
                             else -> noLensTint
                         },
                     )
@@ -241,43 +244,46 @@ fun Modifier.glassSurface(
                     // high-readability frosted fill (0.84 dark / 0.90 light) + matte hairline
                     Modifier.background(p.frostFallback)
                 } else {
-                    // crystal-clear sheer glass + liquid-lens specular: bright top rim sheen -> clear centre -> bottom caustic
-                    // 通透度 sets the density (0.68 / 0.72 at 0 → 0.16 / 0.12 at 100 %); [fallbackAlpha] scales it per surface.
-                    val sheer = if (dark) glassLerp(0.68f, 0.16f, s) else glassLerp(0.72f, 0.12f, s)
-                    val liquidAlpha = (sheer * fallbackAlpha / 0.90f).coerceIn(0.06f, 0.80f)
+                    // Subtle translucent surface without harsh fake specular gradients when no live backdrop is sampled.
+                    val sheer = if (dark) glassLerp(0.76f, 0.42f, s) else glassLerp(0.84f, 0.56f, s)
+                    val liquidAlpha = (sheer * fallbackAlpha / 0.90f).coerceIn(maxOf(0.28f, veil), 0.90f)
                     Modifier
                         .background(base.copy(alpha = liquidAlpha))
                         .background(
                             Brush.verticalGradient(
-                                0f to Color.White.copy(alpha = if (dark) 0.22f else 0.55f),
-                                0.42f to Color.Transparent,
-                                0.74f to Color.Transparent,
-                                1f to Color.White.copy(alpha = if (dark) 0.10f else 0.28f),
+                                0f to Color.White.copy(alpha = if (dark) 0.06f else 0.20f),
+                                0.35f to Color.Transparent,
                             ),
                         )
                 },
             )
             .then(if (activeOverlay.alpha > 0f) Modifier.background(activeOverlay) else Modifier)
-            .then(if (frosted) edge else Modifier.border(1.dp, Brush.verticalGradient(listOf(p.rimTop, p.rimBottom)), shape))
+            .then(if (frosted) edge else Modifier.border(0.6.dp, Brush.verticalGradient(listOf(p.rimTop, p.rimBottom)), shape))
     }
 }
+
+/** Tint floor of the tab bar and the rail. */
+@Composable
+fun dockVeil(): Float = if (IdjThemeColors.dark) 0.50f else 0.62f
+
+/** Unselected tab: stronger than secondary, as pictures move under the glass. */
+@Composable
+fun dockLabel(): Color = IdjThemeColors.text.copy(alpha = 0.76f)
 
 /**
  * Top->bottom specular rim of a Liquid Glass capsule. With [accent] the rim glows in that colour (selected chips).
  * Light mode fades into a faint dark hairline so a white rim still reads on a light page.
  */
 fun liquidRimBrush(dark: Boolean, accent: Color? = null): Brush = when {
-    accent != null -> Brush.verticalGradient(listOf(accent.copy(alpha = 0.90f), accent.copy(alpha = 0.32f)))
-    dark -> Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.36f), Color.White.copy(alpha = 0.06f)))
-    else -> Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.95f), Color.Black.copy(alpha = 0.10f)))
+    accent != null -> Brush.verticalGradient(listOf(accent.copy(alpha = 0.65f), accent.copy(alpha = 0.25f)))
+    dark -> Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.14f), Color.White.copy(alpha = 0.04f)))
+    else -> Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.08f), Color.Black.copy(alpha = 0.05f)))
 }
 
-/** Liquid-lens specular sheen: bright top highlight -> clear centre -> soft bottom caustic. */
+/** Liquid-lens specular sheen: subtle top highlight -> clear centre. */
 fun liquidSheenBrush(dark: Boolean, strong: Boolean = false): Brush = Brush.verticalGradient(
-    0f to Color.White.copy(alpha = if (dark) (if (strong) 0.24f else 0.14f) else (if (strong) 0.62f else 0.46f)),
-    0.48f to Color.Transparent,
-    0.80f to Color.Transparent,
-    1f to Color.White.copy(alpha = if (dark) 0.08f else 0.22f),
+    0f to Color.White.copy(alpha = if (dark) (if (strong) 0.08f else 0.04f) else (if (strong) 0.22f else 0.12f)),
+    0.45f to Color.Transparent,
 )
 
 /**
@@ -352,7 +358,7 @@ fun GlassIconButton(
             .pressClick(0.92f, enabled = enabled, label = label, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, label, tint = tint, modifier = Modifier.size(iconSize))
+        Icon(icon, null, tint = tint, modifier = Modifier.size(iconSize))
     }
 }
 
@@ -596,7 +602,7 @@ fun GlassNavigationRail(
         Column(
             Modifier
                 .width(68.dp)
-                .glassSurface(shape = RailShape, backdrop = backdrop, shadowRadius = 14.dp)
+                .glassSurface(shape = RailShape, backdrop = backdrop, shadowRadius = 14.dp, veil = dockVeil())
                 .padding(vertical = 10.dp, horizontal = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -628,7 +634,7 @@ fun GlassNavigationRail(
                     Spacer(Modifier.height(3.dp))
                     Text(
                         label,
-                        color = if (on) c.text else c.secondary,
+                        color = if (on) c.text else dockLabel(),
                         fontSize = 11.sp,
                         lineHeight = 13.sp,
                         maxLines = 1,

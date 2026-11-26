@@ -18,39 +18,30 @@ struct NovelExploreView: View {
     @State private var generation = UUID()
     @State private var controlHeight: CGFloat = 0
     private let accent = STVTheme.accent
-    private var sources: [LegadoSource] { LegadoSourceStore.shared.sources.filter { $0.isOn && $0.supported && ($0.isRSS || !($0.exploreUrl ?? "").isEmpty) } }
+    @ObservedObject private var sourceStore = LegadoSourceStore.shared
+    private var sources: [LegadoSource] { sourceStore.sources.filter { $0.isOn && $0.supported && ($0.isRSS || !($0.exploreUrl ?? "").isEmpty) } }
     private var groups: [String] { categories.reduce(into: [String]()) { if !$0.contains($1.group) { $0.append($1.group) } } }
     private var groupCategories: [LegadoClient.ExploreCategory] { categories.filter { $0.group == group && !$0.isControl } }
     private var currentSourceName: String { sources.first(where: { $0.id == sourceID })?.bookSourceName ?? "选择书源" }
 
-    @State private var scrolled = false
     @State private var searching = false
     @Namespace private var catUnderlineNS
     private let podiumCols = Array(repeating: GridItem(.flexible(), spacing: 11, alignment: .top), count: 3)
 
     var body: some View {
+        let sources = self.sources
         NavigationStack {
-            VStack(spacing: 0) {
-                topBar.dsPinned(scrolled)
+            Group {
                 if sources.isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: "books.vertical").font(.system(size: 30)).foregroundStyle(STVTheme.tertiary)
-                        Text("先添加书源").font(.system(size: 16, weight: .semibold)).foregroundStyle(STVTheme.text)
-                        Text("发现页显示书源实际提供的分类与榜单。").font(.system(size: 13)).foregroundStyle(STVTheme.secondary)
-                        Button { managing = true } label: { PillButtonLabel(title: "导入 / 管理书源", small: true) }.buttonStyle(PressScale()).padding(.top, 6)
+                    ScrollView {
+                        DSEmptyState("先添加书源", systemImage: "books.vertical", message: "发现页显示书源实际提供的分类与榜单。", actionTitle: "导入 / 管理书源") { managing = true }
+                            .padding(.top, 80)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    if groups.count > 1 {
-                        groupBar.padding(.top, 6)
-                        if !groupCategories.isEmpty { categoryChipsBar.padding(.top, 8).padding(.bottom, 6) }
-                    } else if !groupCategories.isEmpty {
-                        singleGroupCategoryTabs.padding(.top, 6).padding(.bottom, 6)
-                    }
-                    if categories.contains(where: { $0.group == group && $0.isControl }) { sourceControls.padding(.bottom, 6) }
-                    results.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    results
                 }
             }
+            .liquidTopBar { header(sources) }
             .dsAmbient(cool: true)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: LegadoSearchItem.self) { NovelWebDetailView(items: [$0]) }
@@ -63,23 +54,40 @@ struct NovelExploreView: View {
         }
     }
 
-    private var topBar: some View {
-        HStack(spacing: 10) {
-            DSBackButton { dismiss() }
-            Text("小说榜单").font(.system(size: 21, weight: .heavy)).foregroundStyle(STVTheme.text).lineLimit(1)
-            Spacer(minLength: 4)
-            if !sources.isEmpty {
-                Button { choosingSource = true } label: {
-                    CapsuleLabel(title: currentSourceName, trailingIcon: "chevron.down")
+    /// Floating header: glass actions, board / category tabs, the source's own filters.
+    private func header(_ sources: [LegadoSource]) -> some View {
+        VStack(spacing: 0) {
+            LiquidGlassGroup(spacing: 8) {
+                HStack(spacing: 8) {
+                    DSBackButton { dismiss() }
+                    Text("小说榜单").dsFont(20, .heavy, relativeTo: .title3).foregroundStyle(STVTheme.text).lineLimit(1).minimumScaleFactor(0.8)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer(minLength: 4)
+                    if !sources.isEmpty {
+                        Button { choosingSource = true } label: {
+                            CapsuleLabel(title: currentSourceName, trailingIcon: "chevron.down")
+                        }
+                        .buttonStyle(GlassPress())
+                        .accessibilityIdentifier("novel.rank.source")
+                    }
+                    RoundIconButton(systemName: "magnifyingglass", size: 44) { searching = true }
+                        .accessibilityLabel("搜书")
+                        .accessibilityIdentifier("novel.rank.search")
                 }
-                .buttonStyle(PressScale())
-                .accessibilityIdentifier("novel.rank.source")
             }
-            RoundIconButton(systemName: "magnifyingglass") { searching = true }
-                .accessibilityIdentifier("novel.rank.search")
+            .padding(.horizontal, 16)
+            .padding(.top, 2).padding(.bottom, 6)
+            if !sources.isEmpty {
+                if groups.count > 1 {
+                    groupBar.padding(.top, 4)
+                    if !groupCategories.isEmpty { categoryChipsBar.padding(.top, 6) }
+                } else if !groupCategories.isEmpty {
+                    singleGroupCategoryTabs.padding(.top, 4)
+                }
+                if categories.contains(where: { $0.group == group && $0.isControl }) { sourceControls.padding(.top, 4) }
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 6)
+        .padding(.bottom, 6)
     }
 
     private var groupBar: some View {
@@ -102,7 +110,7 @@ struct NovelExploreView: View {
                 HStack(spacing: 8) {
                     ForEach(groupCategories) { cat in
                         let on = cat.id == categoryID
-                        Button { withAnimation(DS.select) { select(cat) } } label: { Text(cat.title) }
+                        Button { DS.tick(); withAnimation(DS.select) { select(cat) } } label: { Text(cat.title) }
                             .buttonStyle(ToneChipStyle(on: on, small: true))
                             .disabled(busy)
                             .id(cat.id)
@@ -172,7 +180,7 @@ struct NovelExploreView: View {
                     }
                 }
 
-                if busy { ProgressView().tint(STVTheme.secondary).frame(maxWidth: .infinity).padding(28) }
+                if busy { DSLoading() }
                 else if let error {
                     VStack(alignment: .leading, spacing: 10) {
                         Label("这个栏目暂时不可用", systemImage: "wifi.exclamationmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(STVTheme.text)
@@ -195,7 +203,6 @@ struct NovelExploreView: View {
         }
         .id(categoryID)
         .transition(.opacity)
-        .compatOnScrolled(threshold: 4) { scrolled = $0 }
     }
 
     private func podiumView(_ topThree: [LegadoSearchItem]) -> some View {
@@ -287,19 +294,15 @@ struct NovelExploreView: View {
     }
 
     private var sourceSheet: some View {
-        NavigationStack {
-            List(sources) { source in
-                Button { sourceID = source.id; choosingSource = false } label: {
-                    HStack {
-                        Text(source.bookSourceName).foregroundStyle(source.id == sourceID ? STVTheme.accent : STVTheme.text)
-                        Spacer()
-                        if source.id == sourceID { Image(systemName: "checkmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(STVTheme.accent) }
-                    }
-                    .frame(minHeight: 44)
-                }
-                .listRowBackground(STVTheme.card)
-            }.novelScreen().compatPresentationCornerRadius(28).navigationTitle("切换榜单来源").toolbar { ToolbarItem(placement: .navigationBarLeading) { NovelBackButton { choosingSource = false } } }
+        let list = sources
+        return DSSheet("切换榜单来源", subtitle: "共 \(list.count) 个书源") {
+            DSOptionList(options: list.map(\.id), selected: sourceID, label: { id in list.first { $0.id == id }?.bookSourceName ?? id },
+                         note: { id in list.first { $0.id == id }?.bookSourceGroup }) { id in
+                sourceID = id
+                choosingSource = false
+            }
         }
+        .dsSheetChrome()
     }
 
     private var sourceControls: some View {
@@ -310,12 +313,16 @@ struct NovelExploreView: View {
                         if c.type == "text" {
                             ExploreTextControl(category: c, enabled: !busy) { performControl(c, value: $0) }
                         } else if c.type == "select" {
-                            Menu { ForEach(c.chars, id: \.self) { value in Button(value) { performControl(c, value: value) } } } label: { Text((c.displayTitle.isEmpty ? c.title : c.displayTitle) + "：" + c.value + " ▾") }
+                            Menu { ForEach(c.chars, id: \.self) { value in Button(value) { performControl(c, value: value) } } } label: {
+                                ControlChip(title: (c.displayTitle.isEmpty ? c.title : c.displayTitle) + "：" + c.value + " ▾")
+                            }
                         } else {
-                            Button((c.type == "toggle" ? c.value : "") + (c.displayTitle.isEmpty ? c.title : c.displayTitle)) { performControl(c) }
+                            let on = (c.type == "toggle" ? c.value : "").contains("●") || c.title.hasPrefix("●")
+                            Button { DS.tick(); performControl(c) } label: { ControlChip(title: (c.type == "toggle" ? c.value : "") + (c.displayTitle.isEmpty ? c.title : c.displayTitle), on: on) }
+                                .buttonStyle(PressScale())
                         }
                     }
-                    .font(.system(size: 13)).buttonStyle(.bordered).disabled(busy)
+                    .disabled(busy)
                     .layoutValue(key: ExploreBasisKey.self, value: c.flexBasis)
                     .layoutValue(key: ExploreGrowKey.self, value: c.flexGrow)
                     .layoutValue(key: ExploreWrapKey.self, value: c.wrapBefore)
@@ -422,6 +429,21 @@ private struct ExploreControlsLayout: Layout {
     }
 }
 
+/// Full-cell chip: source filters are laid out by flex basis, so the chip fills the width it is given.
+private struct ControlChip: View {
+    let title: String
+    var on = false
+    @Environment(\.isEnabled) private var enabled
+    var body: some View {
+        Text(title).font(.system(size: 13, weight: on ? .semibold : .regular)).lineLimit(1).minimumScaleFactor(0.8)
+            .foregroundStyle(on ? STVTheme.accent : STVTheme.text)
+            .padding(.horizontal, 12).frame(minHeight: 34).frame(maxWidth: .infinity)
+            .background(Capsule().fill(on ? STVTheme.accentSoft : STVTheme.glass))
+            .contentShape(Capsule())
+            .opacity(enabled ? 1 : 0.5)
+    }
+}
+
 private struct ExploreTextControl: View {
     let category: LegadoClient.ExploreCategory
     let enabled: Bool
@@ -432,8 +454,8 @@ private struct ExploreTextControl: View {
         self.category = category; self.enabled = enabled; self.onValue = onValue; _text = State(initialValue: category.value)
     }
     var body: some View {
-        TextField(category.displayTitle.isEmpty ? category.title : category.displayTitle, text: $text)
-            .textFieldStyle(.roundedBorder).frame(minWidth: 140).disabled(!enabled)
+        DSTextField(category.displayTitle.isEmpty ? category.title : category.displayTitle, text: $text)
+            .frame(minWidth: 160).disabled(!enabled)
             .compatOnChange(of: text) { value in
                 pending?.cancel()
                 guard value != category.value else { return }

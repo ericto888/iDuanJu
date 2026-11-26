@@ -1,6 +1,29 @@
 import SwiftUI
 import AVKit
 
+/// Playback position, polled four times per second. Its own object, so only the transport follows it; the page and the cover
+/// used to be rebuilt on every tick.
+@MainActor
+private final class AudioClock: ObservableObject {
+    @Published var elapsed = 0.0
+    @Published var duration = 0.0
+    @Published var playing = false
+    @Published var failed = false
+    weak var player: AVPlayer?
+
+    func tick() {
+        guard let player else { return }
+        let now = player.timeControlStatus == .playing
+        if now != playing { playing = now }
+        let t = player.currentTime().seconds, d = player.currentItem?.duration.seconds ?? 0
+        let e = t.isFinite ? max(t, 0) : 0, len = d.isFinite ? max(d, 0) : 0
+        if abs(e - elapsed) > 0.05 { elapsed = e }
+        if len != duration { duration = len }
+        if player.currentItem?.status == .failed, !failed { failed = true }
+    }
+    func reset() { player = nil; elapsed = 0; duration = 0; playing = false; failed = false }
+}
+
 struct NovelMediaPlayer: View {
     let source: LegadoSource
     let chapters: [LegadoChapter]
@@ -10,17 +33,13 @@ struct NovelMediaPlayer: View {
     @State private var selected: Int?
     @State private var player: AVPlayer?
     @State private var token: String?
-    @State private var elapsed = 0.0
-    @State private var duration = 0.0
-    @State private var drag: Double?
-    @State private var playing = false
+    @StateObject private var clock = AudioClock()
     @State private var showQueue = false
     @State private var failure: String?
     @State private var retry = 0
     private var index: Int { selected ?? startIndex }
     private var title: String { book["name"] ?? source.bookSourceName }
     private var chapterName: String { chapters.indices.contains(index) ? chapters[index].title : title }
-    private func clock(_ seconds: Double) -> String { String(format: "%d:%02d", Int(seconds) / 60, Int(seconds) % 60) }
 
     var body: some View {
         Group {
@@ -35,76 +54,80 @@ struct NovelMediaPlayer: View {
 
     private var audio: some View {
         VStack(spacing: 16) {
-            HStack {
-                Button { dismiss() } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }.accessibilityLabel("关闭播放")
-                Spacer(); Text("有声书").font(.headline); Spacer()
-                Button { showQueue = true } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }.accessibilityLabel("章节列表")
+            LiquidGlassGroup(spacing: 10) {
+                HStack {
+                    LiquidGlassIconButton(systemName: "chevron.down", label: "关闭播放", size: 44, onMedia: true) { dismiss() }
+                    Spacer()
+                    Text("有声书").dsFont(16, .semibold, relativeTo: .headline).foregroundStyle(.white)
+                    Spacer()
+                    LiquidGlassIconButton(systemName: "list.bullet", label: "章节列表", size: 44, onMedia: true) { showQueue = true }
+                }
             }
             GeometryReader { geo in
                 if geo.size.width > geo.size.height {
                     HStack(spacing: 26) {
-                        cover(side: min(geo.size.width * 0.40, geo.size.height * 0.90))
-                        VStack(spacing: 16) { transport }.frame(maxWidth: .infinity)
+                        artwork.frame(width: min(geo.size.width * 0.40, geo.size.height * 0.90), height: min(geo.size.width * 0.40, geo.size.height * 0.90))
+                        panel.frame(maxWidth: .infinity)
                     }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    VStack(spacing: 16) {
-                        GeometryReader { area in cover(side: min(area.size.width * 0.86, area.size.height * 0.9, 320)).frame(maxWidth: .infinity, maxHeight: .infinity) }
-                        transport
+                    VStack(spacing: 22) {
+                        let side = min(geo.size.width * 0.86, max(geo.size.height - 320, 160), 340)
+                        artwork.frame(width: side, height: side).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        panel
                     }
                 }
             }
-        }.padding(.horizontal, 26).foregroundStyle(.primary).tint(.primary).dsAmbient(cool: true)
+        }
+        .padding(.horizontal, 20).padding(.bottom, 12)
+        .background {
+            ZStack {
+                LinearGradient(colors: [GeneratedBookCover.clothColors(title).0, .black], startPoint: .top, endPoint: .bottom)
+                if let cover = book["cover"], !cover.isEmpty { CoverBackdrop(url: cover) }
+                Color.black.opacity(0.34)
+            }
+            .ignoresSafeArea()
+        }
+        .preferredColorScheme(.dark)
         .sheet(isPresented: $showQueue) {
-            NavigationStack { List(chapters.indices, id: \.self) { i in Button { selected = i; showQueue = false } label: {
-                HStack { Text(chapters[i].title); Spacer(); if i == index { Image(systemName: "waveform") } }
-            } }.navigationTitle("章节列表") }
+            DSSheet("章节列表", subtitle: "共 \(chapters.count) 章") {
+                DSOptionList(options: Array(chapters.indices), selected: index, label: { chapters.indices.contains($0) ? chapters[$0].title : "" }) { i in selected = i; showQueue = false }
+            }
+            .dsSheetChrome()
         }
         .task(id: "\(index)-\(retry)") { await playAudio() }
-        .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
-            guard let player else { return }
-            playing = player.timeControlStatus == .playing
-            let t = player.currentTime().seconds, d = player.currentItem?.duration.seconds ?? 0
-            elapsed = t.isFinite ? max(t, 0) : 0; duration = d.isFinite ? max(d, 0) : 0
-            if player.currentItem?.status == .failed { failure = "本章暂时无法播放" }
-        }
+        .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in clock.tick() }
+        .onReceive(clock.$failed) { if $0 { failure = "本章暂时无法播放" } }
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
             if let item = notification.object as? AVPlayerItem, item === player?.currentItem, index + 1 < chapters.count { selected = index + 1 }
         }
         .onDisappear { stop() }
     }
 
-    private func cover(side: CGFloat) -> some View {
-        ZStack {
-            Color.indigo.opacity(0.13)
-            Circle().fill(Color(red: 0.18, green: 0.17, blue: 0.24)).frame(width: side * 0.87)
-            ForEach(4..<13) { ring in
-                Circle().strokeBorder(.white.opacity(0.13), lineWidth: 1).frame(width: side * CGFloat(ring) / 15)
-            }
-            Circle().fill(.indigo.opacity(0.9)).frame(width: side * 0.31)
-            Image(systemName: "headphones").font(.system(size: side * 0.14)).foregroundStyle(.white)
-            if let cover = book["cover"], let url = URL(string: cover), !cover.isEmpty {
-                AsyncImage(url: url) { phase in if let image = phase.image { image.resizable().scaledToFill() } }
-            }
-        }.frame(width: side, height: side).clipShape(RoundedRectangle(cornerRadius: 18))
+    private var artwork: some View {
+        BookArt(url: book["cover"], title: title, author: book["author"], maxPixelSize: CoverPixels.hero)
+            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .background { RoundedRectangle(cornerRadius: 26, style: .continuous).fill(Color.black.shadow(.drop(color: .black.opacity(0.45), radius: 26, y: 18))).padding(1) }
     }
 
-    @ViewBuilder private var transport: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(chapterName).font(.title2.bold()).lineLimit(2)
-            Text(title).foregroundStyle(.secondary).lineLimit(1)
-            if let failure { Button(failure + " · 重试") { retry += 1 } }
-            Slider(value: Binding(get: { drag ?? min(elapsed, duration) }, set: { drag = $0 }), in: 0...max(duration, 1), onEditingChanged: { editing in
-                if !editing, let target = drag { player?.seek(to: CMTime(seconds: target, preferredTimescale: 600)); drag = nil }
-            }).disabled(duration <= 0).accessibilityLabel("播放进度")
-            HStack { Text(clock(drag ?? elapsed)).accessibilityValue(String(format: "已播放 %.2f 秒", elapsed)).accessibilityIdentifier("novel.media.status"); Spacer(); Text(clock(duration)) }.font(.caption.monospacedDigit())
+    /// Floating glass transport panel.
+    private var panel: some View {
+        VStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(chapterName).dsFont(20, .bold, relativeTo: .title3).foregroundStyle(.white).lineLimit(2)
+                Text(title).dsFont(14, relativeTo: .subheadline).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
+                if let failure {
+                    Button { retry += 1 } label: { MiniButtonLabel(title: failure + " · 重试", tint: .white, ground: .white.opacity(0.16)) }.buttonStyle(PressScale()).padding(.top, 4)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            AudioScrubber(clock: clock)
+            AudioTransport(clock: clock, loading: player == nil && failure == nil, usable: player != nil && failure == nil,
+                           previous: index > 0 ? { selected = index - 1 } : nil,
+                           next: index + 1 < chapters.count ? { selected = index + 1 } : nil)
         }
-        HStack(spacing: 36) {
-            Button { selected = index - 1 } label: { Image(systemName: "backward.end.fill").frame(width: 44, height: 44) }.disabled(index <= 0).accessibilityLabel("上一章")
-            Button { if playing { player?.pause() } else { if duration > 0 && elapsed >= duration { player?.seek(to: .zero) }; player?.play() } } label: {
-                if player == nil && failure == nil { ProgressView().frame(width: 64, height: 64) } else { Image(systemName: playing ? "pause.circle.fill" : "play.circle.fill").font(.system(size: 60)) }
-            }.disabled(player == nil || failure != nil).accessibilityLabel(playing ? "暂停" : "播放")
-            Button { selected = index + 1 } label: { Image(systemName: "forward.end.fill").frame(width: 44, height: 44) }.disabled(index + 1 >= chapters.count).accessibilityLabel("下一章")
-        }.font(.title2).padding(.vertical, 12)
+        .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 14)
+        .liquidGlass(corner: 34, tone: .panel, onMedia: true)
+        .onGlassSurface()
     }
 
     private func mediaURL(_ i: Int) async throws -> URL {
@@ -124,11 +147,66 @@ struct NovelMediaPlayer: View {
             let url = try await mediaURL(index)
             token = LocalHLSProxy.token(of: url.absoluteString)
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
-            let next = AVPlayer(url: url); player = next; next.play()
+            let next = AVPlayer(url: url); player = next; clock.player = next; next.play()
         } catch { if !Task.isCancelled { failure = error.localizedDescription } }
     }
     @MainActor private func stop() {
-        player?.pause(); player = nil; playing = false; elapsed = 0; duration = 0; drag = nil
+        player?.pause(); player = nil; clock.reset()
         if let token { LocalHLSProxy.shared.release(token) }; token = nil
+    }
+}
+
+private struct AudioScrubber: View {
+    @ObservedObject var clock: AudioClock
+    @State private var drag: Double?
+    private func text(_ seconds: Double) -> String { String(format: "%d:%02d", Int(seconds) / 60, Int(seconds) % 60) }
+    var body: some View {
+        VStack(spacing: 2) {
+            DSSlider(value: Binding(get: { drag ?? min(clock.elapsed, clock.duration) }, set: { drag = $0 }), range: 0...max(clock.duration, 1), step: nil,
+                     tint: .white, track: .white.opacity(0.24), valueLabel: { text($0) }) { editing in
+                if !editing, let target = drag { clock.player?.seek(to: CMTime(seconds: target, preferredTimescale: 600)); clock.elapsed = target; drag = nil }
+            }
+            .disabled(clock.duration <= 0).accessibilityLabel("播放进度")
+            HStack {
+                Text(text(drag ?? clock.elapsed)).accessibilityValue(String(format: "已播放 %.2f 秒", clock.elapsed)).accessibilityIdentifier("novel.media.status")
+                Spacer()
+                Text(text(clock.duration))
+            }
+            .font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.72))
+        }
+    }
+}
+
+private struct AudioTransport: View {
+    @ObservedObject var clock: AudioClock
+    let loading: Bool
+    let usable: Bool
+    let previous: (() -> Void)?
+    let next: (() -> Void)?
+    var body: some View {
+        HStack(spacing: 28) {
+            step("backward.end.fill", "上一章", previous)
+            Button {
+                if clock.playing { clock.player?.pause() } else {
+                    if clock.duration > 0 && clock.elapsed >= clock.duration { clock.player?.seek(to: .zero) }
+                    clock.player?.play()
+                }
+            } label: {
+                ZStack {
+                    Circle().fill(.white).frame(width: 66, height: 66)
+                    if loading { DSSpinner(size: 26, tint: .black) }
+                    else { Image(systemName: clock.playing ? "pause.fill" : "play.fill").font(.system(size: 26, weight: .bold)).foregroundStyle(.black).offset(x: clock.playing ? 0 : 2).compatSymbolReplace() }
+                }
+                .contentShape(Circle())
+            }
+            .buttonStyle(PressScale()).disabled(!usable).opacity(usable || loading ? 1 : 0.5)
+            .accessibilityLabel(clock.playing ? "暂停" : "播放")
+            step("forward.end.fill", "下一章", next)
+        }
+    }
+
+    private func step(_ icon: String, _ label: String, _ action: (() -> Void)?) -> some View {
+        Button { action?() } label: { Image(systemName: icon).font(.system(size: 22, weight: .semibold)).foregroundStyle(.white).frame(width: 56, height: 56).contentShape(Circle()) }
+            .buttonStyle(PressScale()).disabled(action == nil).opacity(action == nil ? 0.35 : 1).accessibilityLabel(label)
     }
 }

@@ -3,6 +3,8 @@ package app.iduanju.novel
 import android.app.PendingIntent
 import android.content.Context
 import app.iduanju.ui.player.DecoderCaps
+import app.iduanju.ui.player.MediaKinds
+import app.iduanju.ui.player.PlayerFactory
 import android.content.Intent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -123,7 +125,7 @@ object NovelPlayback {
     }
 
     private fun create(app: Context) {
-        val exo = ExoPlayer.Builder(app, DecoderCaps.renderers(app)).setHandleAudioBecomingNoisy(true).setWakeMode(C.WAKE_MODE_NETWORK).build()
+        val exo = ExoPlayer.Builder(app, DecoderCaps.renderers(app)).setLoadControl(PlayerFactory.loadControl(app)).setHandleAudioBecomingNoisy(true).setWakeMode(C.WAKE_MODE_NETWORK).build()
         exo.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 // The service holds the notification and keeps the process foreground; Media3 promotes it while playing.
@@ -206,6 +208,7 @@ object NovelPlayback {
             .addInterceptor { it.proceed(guardedMediaRequest(it.request(), media.url)) }
             .addNetworkInterceptor { it.proceed(guardedMediaRequest(it.request(), media.url)) }.build()
         val item = MediaItem.Builder().setUri(media.url).setMediaId(index.toString())
+            .apply { MediaKinds.guess(media.url)?.mime?.let { setMimeType(it) } }
             .setMediaMetadata(MediaMetadata.Builder().setTitle(queue.titles.getOrElse(index) { queue.book }).setArtist(queue.book).build()).build()
         return DefaultMediaSourceFactory(OkHttpDataSource.Factory(client).setDefaultRequestProperties(media.headers))
             .setLoadErrorHandlingPolicy(refusedFails).createMediaSource(item)

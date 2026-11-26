@@ -1,21 +1,46 @@
 import SwiftUI
 
 enum TGFmt {
+    // Building a DateFormatter costs more than laying the card out: one per format, shared.
+    private static let thisYear = formatter("M月d日 HH:mm"), older = formatter("yyyy年M月d日")
+    private static func formatter(_ format: String) -> DateFormatter {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = format
+        return f
+    }
     static func date(_ d: Date?) -> String {
         guard let d else { return "" }
         let s = Date().timeIntervalSince(d)
         if s < 60 { return "刚刚" }
         if s < 3600 { return "\(Int(s / 60)) 分钟前" }
         if s < 86400 { return "\(Int(s / 3600)) 小时前" }
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "zh_CN")
-        f.dateFormat = Calendar.current.isDate(d, equalTo: Date(), toGranularity: .year) ? "M月d日 HH:mm" : "yyyy年M月d日"
-        return f.string(from: d)
+        return (Calendar.current.isDate(d, equalTo: Date(), toGranularity: .year) ? thisYear : older).string(from: d)
     }
 }
 
-/// What a post card asks its feed to do.
-struct TGActions {
+/// Post text with tappable links. Link detection runs once per text, not once per body.
+@MainActor enum TGText {
+    private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    private final class Box { let value: AttributedString; init(_ v: AttributedString) { value = v } }
+    private static let cache: NSCache<NSString, Box> = { let c = NSCache<NSString, Box>(); c.countLimit = 400; return c }()
+    static func attributed(_ text: String) -> AttributedString {
+        if let hit = cache.object(forKey: text as NSString) { return hit.value }
+        var a = AttributedString(text)
+        let ns = text as NSString
+        for m in detector?.matches(in: text, range: NSRange(location: 0, length: ns.length)) ?? [] {
+            guard let url = m.url, let r = Range(m.range, in: text),
+                  let lo = AttributedString.Index(r.lowerBound, within: a), let hi = AttributedString.Index(r.upperBound, within: a) else { continue }
+            a[lo..<hi].link = url
+        }
+        cache.setObject(Box(a), forKey: text as NSString)
+        return a
+    }
+}
+
+/// What a post card asks its feed to do. One reference per feed: closures inside a struct never compare equal, so every card
+/// re-ran its body whenever anything in the feed changed.
+final class TGActions {
     var openImages: (TGPost, Int) -> Void = { _, _ in }
     var playVideo: (TGPost, Int) -> Void = { _, _ in }
     var download: (TGPost, Int) -> Void = { _, _ in }
@@ -42,7 +67,7 @@ struct TGPostCard: View {
     }
 
     private var folded: some View {
-        Button { withAnimation(.compatSnappy) { unfolded = true } } label: {
+        Button { withAnimation(DS.panel) { unfolded = true } } label: {
             HStack(spacing: 8) {
                 Image(systemName: "eye.slash").font(.caption)
                 Text("已屏蔽 · \(channel?.displayName ?? "@" + post.channel)").font(.caption.weight(.semibold))
@@ -51,10 +76,11 @@ struct TGPostCard: View {
                 Text("展开").font(.caption)
             }
             .foregroundStyle(STVTheme.secondary)
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 14).frame(minHeight: 44)
+            .background(STVTheme.glass, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScale(scale: 0.99))
         .accessibilityIdentifier("tg.folded.\(post.id)")
     }
 
@@ -64,7 +90,7 @@ struct TGPostCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Text(channel?.displayName ?? "@" + post.channel).font(.subheadline.weight(.semibold)).foregroundStyle(STVTheme.accent).lineLimit(1)
-                    if channel?.isAdult == true { Text("18+").font(.caption2.weight(.bold)).foregroundStyle(.white).padding(.horizontal, 4).background(Color.red.opacity(0.7), in: Capsule()) }
+                    if channel?.isAdult == true { DSStatus(text: "18+", tone: .warn) }
                     Spacer(minLength: 0)
                     if verdict.blocked { Label("已屏蔽", systemImage: "eye.slash").font(.caption2).foregroundStyle(STVTheme.secondary) }
                 }
@@ -87,7 +113,7 @@ struct TGPostCard: View {
 
     private var avatar: some View {
         Group {
-            if let a = channel?.avatar, !a.isEmpty { CoverView(url: a, corner: 20) }
+            if let a = channel?.avatar, !a.isEmpty { CoverView(url: a, corner: 20, maxPixelSize: CoverPixels.thumb) }
             else {
                 Circle().fill(STVTheme.elevated)
                     .overlay(Text(String((channel?.displayName ?? post.channel).prefix(1))).font(.headline).foregroundStyle(STVTheme.text))
@@ -98,27 +124,15 @@ struct TGPostCard: View {
 
     private var textBlock: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(attributed).font(.body).foregroundStyle(STVTheme.text).lineLimit(expanded ? nil : 8)
+            // No `.textSelection` here: it copies the whole text only (the long-press menu already does) and puts a text
+            // interaction on every card of the feed.
+            Text(TGText.attributed(post.text)).font(.body).foregroundStyle(STVTheme.text).lineLimit(expanded ? nil : 8)
                 .tint(STVTheme.accent)
-                .textSelection(.enabled)
-            if !expanded && (post.text.count > 260 || post.text.filter { $0 == "\n" }.count > 7) {
-                Button("全文") { expanded = true }.font(.subheadline).foregroundStyle(STVTheme.accent)
+            if !expanded && (post.text.utf16.count > 260 || post.text.lazy.filter { $0 == "\n" }.prefix(8).count > 7) {
+                Button { withAnimation(DS.panel) { expanded = true } } label: { Text("全文").font(.subheadline.weight(.medium)).foregroundStyle(STVTheme.accent).contentShape(Rectangle().inset(by: -8)) }
+                    .buttonStyle(.plain)
             }
         }
-    }
-
-    /// Plain text with tappable URLs.
-    private var attributed: AttributedString {
-        var a = AttributedString(post.text)
-        let ns = post.text as NSString
-        if let det = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
-            for m in det.matches(in: post.text, range: NSRange(location: 0, length: ns.length)) {
-                guard let url = m.url, let r = Range(m.range, in: post.text),
-                      let lo = AttributedString.Index(r.lowerBound, within: a), let hi = AttributedString.Index(r.upperBound, within: a) else { continue }
-                a[lo..<hi].link = url
-            }
-        }
-        return a
     }
 
     private func previewCard(_ p: TGLinkPreview) -> some View {
@@ -131,11 +145,12 @@ struct TGPostCard: View {
                     if !p.desc.isEmpty { Text(p.desc).font(.caption).foregroundStyle(STVTheme.secondary).lineLimit(3) }
                 }
                 Spacer(minLength: 0)
-                if !p.image.isEmpty { CoverView(url: p.image, corner: 6).frame(width: 54, height: 54) }
+                if !p.image.isEmpty { CoverView(url: p.image, corner: 8, maxPixelSize: CoverPixels.thumb).frame(width: 54, height: 54) }
             }
-            .padding(8)
-            .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-        }.buttonStyle(.plain)
+            .padding(10)
+            .background(STVTheme.glass, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(Rectangle())
+        }.buttonStyle(PressScale(scale: 0.99))
     }
 
     private var buttons: some View {
@@ -144,9 +159,10 @@ struct TGPostCard: View {
                 Button {
                     if let bot = TGBotLink(url: b.url) { actions.bot(bot) } else if let u = URL(string: b.url) { openURL(u) }
                 } label: {
-                    Text(b.text).font(.subheadline).foregroundStyle(STVTheme.text).frame(maxWidth: .infinity).frame(height: 34)
-                        .background(STVTheme.text.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                }.buttonStyle(.plain)
+                    Text(b.text).font(.subheadline).foregroundStyle(STVTheme.text).lineLimit(1).frame(maxWidth: .infinity, minHeight: 40)
+                        .background(STVTheme.glass, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .contentShape(Rectangle())
+                }.buttonStyle(PressScale(scale: 0.98))
             }
         }
     }
@@ -161,12 +177,12 @@ struct TGPostCard: View {
                     .foregroundStyle(STVTheme.accent).buttonStyle(.plain)
             }
             if post.media.contains(where: { $0.video != nil || $0.kind == .photo }) {
-                Button { actions.download(post, firstDownloadable) } label: { Image(systemName: "arrow.down.circle") }
-                    .foregroundStyle(STVTheme.secondary).buttonStyle(.plain)
+                Button { actions.download(post, firstDownloadable) } label: { Image(systemName: "arrow.down.circle").contentShape(Rectangle().inset(by: -10)) }
+                    .foregroundStyle(STVTheme.secondary).buttonStyle(PressScale())
                     .accessibilityLabel("下载").accessibilityIdentifier("tg.download.\(post.id)")
             }
-            Button { if let u = URL(string: post.permalink) { openURL(u) } } label: { Image(systemName: "paperplane") }
-                .foregroundStyle(STVTheme.secondary).buttonStyle(.plain).accessibilityLabel("在 Telegram 中打开")
+            Button { if let u = URL(string: post.permalink) { openURL(u) } } label: { Image(systemName: "paperplane").contentShape(Rectangle().inset(by: -10)) }
+                .foregroundStyle(STVTheme.secondary).buttonStyle(PressScale()).accessibilityLabel("在 Telegram 中打开")
         }
     }
 
@@ -192,9 +208,17 @@ struct TGMediaGrid: View {
         if m.count == 1 {
             cell(0).aspectRatio(m[0].kind == .photo ? 4 / 3 : 16 / 9, contentMode: .fit).frame(maxWidth: .infinity)
         } else {
-            let cols = m.count <= 4 ? 2 : 3
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: cols), spacing: 4) {
-                ForEach(m.indices, id: \.self) { i in cell(i).aspectRatio(1, contentMode: .fit) }
+            let cols = m.count <= 4 ? 2 : 3, rows = (m.count + cols - 1) / cols
+            // At most ten items: a lazy grid inside a lazy row only adds layout passes.
+            VStack(spacing: 4) {
+                ForEach(0..<rows, id: \.self) { r in
+                    HStack(spacing: 4) {
+                        ForEach(0..<cols, id: \.self) { c in
+                            let i = r * cols + c
+                            if i < m.count { cell(i).aspectRatio(1, contentMode: .fit) } else { Color.clear.aspectRatio(1, contentMode: .fit) }
+                        }
+                    }
+                }
             }
         }
     }
@@ -205,10 +229,12 @@ struct TGMediaGrid: View {
             if it.kind == .photo { actions.openImages(post, i) } else { actions.playVideo(post, i) }
         } label: {
             ZStack {
-                CoverView(url: it.thumb, corner: 8).blur(radius: it.spoiler ? 18 : 0)
+                if it.spoiler { CoverBackdrop(url: it.thumb) }
+                else { CoverView(url: it.thumb, corner: 0, maxPixelSize: post.media.count == 1 ? CoverPixels.hero : CoverPixels.poster) }
                 if it.kind != .photo {
-                    Image(systemName: it.video == nil ? "paperplane.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 38)).foregroundStyle(.white.opacity(0.9)).shadow(radius: 4)
+                    Image(systemName: it.video == nil ? "paperplane.fill" : "play.fill")
+                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                        .frame(width: 44, height: 44).background(.black.opacity(0.42), in: Circle())
                     if it.duration > 0 {
                         Text(Fmt.clock(it.duration)).font(.caption2.monospacedDigit().weight(.semibold)).foregroundStyle(.white)
                             .padding(.horizontal, 5).padding(.vertical, 2).background(.black.opacity(0.55), in: Capsule())
@@ -216,9 +242,10 @@ struct TGMediaGrid: View {
                     }
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScale(scale: 0.98))
+        .accessibilityLabel(it.kind == .photo ? "图片 \(i + 1)" : "视频 \(i + 1)")
         .accessibilityIdentifier("tg.media.\(post.id).\(i)")
     }
 }

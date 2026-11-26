@@ -35,6 +35,7 @@ import app.iduanju.core.hongguo.HGSeries
 import app.iduanju.core.hongguo.HGSeriesDetail
 import app.iduanju.core.hongguo.SeasonParser
 import app.iduanju.ui.components.DS
+import app.iduanju.ui.components.glassPill
 import app.iduanju.ui.components.glassSurface
 import app.iduanju.ui.components.pressClick
 import app.iduanju.ui.theme.IdjDarkColors
@@ -184,13 +185,14 @@ internal fun NextDramaCountdownCard(
     onSwap: () -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
+    backdrop: com.kyant.backdrop.Backdrop? = null,
 ) {
     val pc = IdjDarkColors
     // Only the caption follows the per-frame countdown, and only when the whole second changes.
     val secondsLeft by remember(secondsLeftProvider) { derivedStateOf(secondsLeftProvider) }
     Column(
         modifier.widthIn(max = 380.dp).fillMaxWidth()
-            .glassSurface(RoundedCornerShape(24.dp), dark = true, base = Color(0xFF15171C), shadowRadius = 22.dp, fallbackAlpha = 0.62f)
+            .glassSurface(RoundedCornerShape(24.dp), backdrop = backdrop, dark = true, base = PlayerGlass, shadowRadius = 22.dp, fallbackAlpha = 0.62f, activeOverlay = Color.Black.copy(0.22f))
             .padding(14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -230,7 +232,7 @@ internal fun NextDramaCountdownCard(
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             // 立即播放: accent capsule whose fill sweeps left → right with the countdown (draw-phase read only).
-            Row(Modifier.weight(1f).height(38.dp).clip(CircleShape).background(pc.accent.copy(0.28f))
+            Row(Modifier.weight(1f).heightIn(min = 40.dp).clip(CircleShape).background(pc.accent.copy(0.28f))
                 .drawBehind {
                     val f = progressProvider().coerceIn(0f, 1f)
                     if (f > 0f) drawRect(pc.accent, size = androidx.compose.ui.geometry.Size(size.width * f, size.height))
@@ -242,14 +244,14 @@ internal fun NextDramaCountdownCard(
                 Spacer(Modifier.width(4.dp))
                 Text("立即播放", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
-            Row(Modifier.height(38.dp).glassSurface(CircleShape, dark = true, shadowRadius = 0.dp, fallbackAlpha = 0.5f)
+            Row(Modifier.heightIn(min = 40.dp).glassPill(CircleShape, dark = true)
                 .pressClick(0.94f, enabled = !loading, label = "换一部", onClick = onSwap).padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.Refresh, null, tint = Color.White.copy(if (loading) 0.4f else 1f), modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
                 Text("换一部", color = Color.White.copy(if (loading) 0.4f else 0.92f), fontSize = 13.sp)
             }
-            Box(Modifier.height(38.dp).clip(CircleShape).pressClick(0.94f, label = "取消", onClick = onCancel).padding(horizontal = 12.dp),
+            Box(Modifier.heightIn(min = 40.dp).clip(CircleShape).pressClick(0.94f, label = "取消", onClick = onCancel).padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center) {
                 Text("取消", color = Color.White.copy(0.7f), fontSize = 13.sp)
             }

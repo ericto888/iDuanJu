@@ -1,0 +1,93 @@
+{
+  "lenientJson": [
+    { "name": "line and block comments", "input": "// head\n{\"a\":1,/* x */\"b\":\"//not\",}\n", "expect": { "a": 1, "b": "//not" } },
+    { "name": "single quotes, bare keys, trailing commas", "input": "{a:'x',\"list\":[1,2,],}", "expect": { "a": "x", "list": [1, 2] } },
+    { "name": "hash comment lines", "input": "# c\n{\"a\":\"#keep\"\n# c2\n}", "expect": { "a": "#keep" } },
+    { "name": "bom and raw newline in string", "input": "﻿{\"a\":\"x\ny\"}", "expect": { "a": "x\ny" } }
+  ],
+  "resolve": [
+    { "base": "https://h.example/dir/cfg.json", "ref": "./jar/a.jar", "expect": "https://h.example/dir/jar/a.jar" },
+    { "base": "https://h.example/dir/cfg.json", "ref": "../js/x.js", "expect": "https://h.example/js/x.js" },
+    { "base": "https://h.example/dir/cfg.json", "ref": "https://o.example/y.py", "expect": "https://o.example/y.py" },
+    { "base": "https://h.example/dir/cfg.json", "ref": "csp_Foo", "expect": "csp_Foo" },
+    { "base": "https://h.example/dir/cfg.json?x=1", "ref": "./ext/a.json", "expect": "https://h.example/dir/ext/a.json" }
+  ],
+  "decode": [
+    { "name": "plain", "input": "{\"sites\":[]}", "key": "", "expect": "{\"sites\":[]}" },
+    { "name": "base64 after 8 chars and **", "input": "GIF89a-binary-junkAbCd1234**eyJzaXRlcyI6W119", "key": "", "expect": "{\"sites\":[]}" }
+  ],
+  "spiderRef": [
+    { "input": "https://h.example/a.jar;md5;0cc175b9c0f1b6a831c399e269772661", "expect": { "url": "https://h.example/a.jar", "md5": "0cc175b9c0f1b6a831c399e269772661", "image": false } },
+    { "input": "img+https://h.example/a.png", "expect": { "url": "https://h.example/a.png", "md5": "", "image": true } },
+    { "input": "https://h.example/a.jar", "expect": { "url": "https://h.example/a.jar", "md5": "", "image": false } }
+  ],
+  "siteKind": [
+    { "type": 0, "api": "https://h.example/api.php", "expect": "cms-xml" },
+    { "type": 1, "api": "https://h.example/api.php/provide/vod/", "expect": "cms-json" },
+    { "type": 4, "api": "https://h.example/t4", "expect": "remote" },
+    { "type": 3, "api": "csp_XBPQ", "expect": "jar" },
+    { "type": 3, "api": "https://h.example/drpy2.min.js", "expect": "js" },
+    { "type": 3, "api": "./py/a.py", "expect": "py" },
+    { "type": 3, "api": "https://h.example/a.py?v=2", "expect": "py" },
+    { "type": 3, "api": "py_foo", "expect": "py" },
+    { "type": 9, "api": "x", "expect": "unsupported" }
+  ],
+  "picture": [
+    { "input": "http://i.example/a.jpg@Referer=http://r.example/@User-Agent=UA 1", "expect": { "url": "http://i.example/a.jpg", "headers": { "Referer": "http://r.example/", "User-Agent": "UA 1" } } },
+    { "input": "http://i.example/a.jpg@Headers={\"Cookie\":\"a=1\"}", "expect": { "url": "http://i.example/a.jpg", "headers": { "Cookie": "a=1" } } },
+    { "input": "//i.example/a.jpg", "expect": { "url": "https://i.example/a.jpg", "headers": {} } }
+  ],
+  "playLines": [
+    { "from": "qq$$$m3u8", "url": "第1集$aaa#第2集$bbb$$$01$https://v.example/1.m3u8#02$https://v.example/2.m3u8",
+      "expect": [
+        { "name": "qq", "eps": [["第1集", "aaa"], ["第2集", "bbb"]] },
+        { "name": "m3u8", "eps": [["01", "https://v.example/1.m3u8"], ["02", "https://v.example/2.m3u8"]] }
+      ] },
+    { "from": "one", "url": "https://v.example/only.mp4", "expect": [{ "name": "one", "eps": [["正片", "https://v.example/only.mp4"]] }] },
+    { "from": "a$$$b", "url": "$$$02$x", "expect": [{ "name": "b", "eps": [["02", "x"]] }] },
+    { "from": "", "url": "1$u1#$u2", "expect": [{ "name": "线路1", "eps": [["1", "u1"], ["第2集", "u2"]] }] }
+  ],
+  "streamUrl": [
+    { "input": "https://v.example/a.m3u8|User-Agent=UA%201&Referer=https://r.example/", "expect": { "url": "https://v.example/a.m3u8", "headers": { "User-Agent": "UA 1", "Referer": "https://r.example/" }, "label": "" } },
+    { "input": "http://1.2.3.4:8080/live/1$源A", "expect": { "url": "http://1.2.3.4:8080/live/1", "headers": {}, "label": "源A" } },
+    { "input": "rtmp://l.example/app/s", "expect": { "url": "rtmp://l.example/app/s", "headers": {}, "label": "" } },
+    { "input": "https://v.example/a.m3u8?t=1$2", "expect": { "url": "https://v.example/a.m3u8?t=1", "headers": {}, "label": "2" } }
+  ],
+  "playerResult": [
+    { "name": "direct with header string", "input": { "parse": 0, "url": "https://v.example/a.m3u8", "header": "{\"User-Agent\":\"UA\"}" },
+      "expect": { "parse": 0, "jx": 0, "urls": [["", "https://v.example/a.m3u8"]], "headers": { "User-Agent": "UA" }, "playUrl": "", "subs": [], "danmaku": "" } },
+    { "name": "quality array", "input": { "parse": "0", "url": ["1080P", "https://v.example/1.m3u8", "720P", "https://v.example/2.m3u8"], "header": { "Referer": "https://r.example" } },
+      "expect": { "parse": 0, "jx": 0, "urls": [["1080P", "https://v.example/1.m3u8"], ["720P", "https://v.example/2.m3u8"]], "headers": { "Referer": "https://r.example" }, "playUrl": "", "subs": [], "danmaku": "" } },
+    { "name": "needs parse", "input": { "parse": 1, "jx": "1", "url": "https://v.qq.example/x.html", "flag": "qq" },
+      "expect": { "parse": 1, "jx": 1, "urls": [["", "https://v.qq.example/x.html"]], "headers": {}, "playUrl": "", "subs": [], "danmaku": "" } },
+    { "name": "playUrl, subs, danmaku list", "input": { "parse": 0, "playUrl": "json:https://p.example/?url=", "url": "abc", "subs": [{ "name": "中", "url": "https://s.example/a.srt", "lang": "zh", "format": "application/x-subrip" }], "danmaku": [{ "name": "d", "url": "https://d.example/1.xml" }] },
+      "expect": { "parse": 0, "jx": 0, "urls": [["", "abc"]], "headers": {}, "playUrl": "json:https://p.example/?url=", "subs": [["中", "https://s.example/a.srt", "zh", "application/x-subrip"]], "danmaku": "https://d.example/1.xml" } }
+  ],
+  "isVideoUrl": [
+    { "url": "https://v.example/path/a.m3u8?x=1", "expect": true },
+    { "url": "https://v.example/path/a.mp4", "expect": true },
+    { "url": "https://p.example/?url=https://v.example/a.m3u8", "expect": false },
+    { "url": "https://v.example/a.html", "expect": false },
+    { "url": "https://v.example/style.css?x=.mp4", "expect": false },
+    { "url": "https://v.example/obj/tos-cn-v-0000/abc", "expect": true }
+  ],
+  "liveText": [
+    { "name": "txt", "input": "央视,#genre#\nCCTV1,http://1.2.3.4:80/a$主#http://b.example/b.m3u8\nCCTV1,http://c.example/c.m3u8\n卫视_123,#genre#\n湖南,https://d.example/d.flv|User-Agent=X\n",
+      "expect": [
+        { "name": "央视", "pass": "", "channels": [{ "name": "CCTV1", "urls": ["http://1.2.3.4:80/a$主", "http://b.example/b.m3u8", "http://c.example/c.m3u8"] }] },
+        { "name": "卫视", "pass": "123", "channels": [{ "name": "湖南", "urls": ["https://d.example/d.flv|User-Agent=X"] }] }
+      ] },
+    { "name": "m3u", "input": "#EXTM3U x-tvg-url=\"https://e.example/e.xml\" catchup=\"append\" catchup-source=\"?b=${(b)yyyyMMddHHmmss}\"\n#EXTINF:-1 tvg-id=\"c1\" tvg-name=\"CCTV-1\" tvg-logo=\"https://l.example/1.png\" group-title=\"央视\",CCTV1 综合\n#EXTVLCOPT:http-user-agent=UA9\n#EXTVLCOPT:http-referrer=https://r.example/\nhttps://a.example/1.m3u8\n#EXTINF:-1 group-title=\"央视\",CCTV1 综合\nhttps://a.example/1b.m3u8\n",
+      "expect": [
+        { "name": "央视", "pass": "", "channels": [{ "name": "CCTV1 综合", "logo": "https://l.example/1.png", "tvgId": "c1", "tvgName": "CCTV-1", "urls": ["https://a.example/1.m3u8", "https://a.example/1b.m3u8"], "headers": { "User-Agent": "UA9", "Referer": "https://r.example/" } }] }
+      ] },
+    { "name": "json groups", "input": "[{\"group\":\"g\",\"channel\":[{\"name\":\"n\",\"urls\":[\"https://a.example/x.m3u8\"],\"logo\":\"https://l.example/n.png\"}]}]",
+      "expect": [{ "name": "g", "pass": "", "channels": [{ "name": "n", "logo": "https://l.example/n.png", "urls": ["https://a.example/x.m3u8"] }] }] }
+  ],
+  "epgUrl": [
+    { "template": "https://e.example/?ch={name}&date={date}", "name": "CCTV1", "date": "2026-11-25", "expect": "https://e.example/?ch=CCTV1&date=2026-11-25" }
+  ],
+  "siteUid": [
+    { "repo": "abc", "key": "csp_X", "expect": "8c33e35183c9" }
+  ]
+}

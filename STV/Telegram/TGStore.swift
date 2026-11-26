@@ -40,11 +40,28 @@ final class TGStore: ObservableObject {
         if let e = ProcessInfo.processInfo.environment["STV_TG_CHANNELS"] {
             channels = e.split(separator: ",").map { TGChannel(username: String($0)) }
         }
-        if Self.isolated { return }   // fixture runs: in-memory rules / posts only
+        if Self.isolated { cacheLoaded = true; return }   // fixture runs: in-memory rules / posts only
         #endif
         loadSettings()
-        for c in channels { posts[c.id] = load(c.id) }
+        // Up to 600 posts per channel: read and decoded off the main thread, then merged under whatever arrived meanwhile.
+        let files = channels.map { ($0.id, file($0.id)) }
+        Task {
+            let cached = await Task.detached(priority: .userInitiated) {
+                files.compactMap { id, url -> (String, [TGPost])? in
+                    (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode([TGPost].self, from: $0) }.map { (id, $0) }
+                }
+            }.value
+            for (id, old) in cached where channel(id) != nil {
+                let fresh = posts[id]
+                posts[id] = old
+                if let fresh { merge(fresh, into: id) }
+            }
+            cacheLoaded = true
+        }
     }
+
+    /// The on-disk posts have been read (the feed may still be empty).
+    @Published private(set) var cacheLoaded = false
 
     /// DEBUG fixture runs never read or write the user's saved rules / cache.
     static var isolated: Bool {
@@ -295,7 +312,6 @@ final class TGStore: ObservableObject {
     // MARK: Persistence
 
     private func file(_ id: String) -> URL { dir.appendingPathComponent(id + ".json") }
-    private func load(_ id: String) -> [TGPost]? { (try? Data(contentsOf: file(id))).flatMap { try? JSONDecoder().decode([TGPost].self, from: $0) } }
     private func save(_ id: String) {
         #if DEBUG
         if ProcessInfo.processInfo.environment["STV_TG_FIXTURE_DIR"] != nil { return }

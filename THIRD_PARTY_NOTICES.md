@@ -31,10 +31,49 @@ Pornhub / YouPorn / RedTube (mediaDefinitions) were cross-checked against its ex
   also bundled as `STV/Resources/Licenses/quickjs-ng-LICENSE.txt` and shown in 开源许可.
 - `idj_sandbox.c/.h` (eval-less sandbox wrapper, interrupt deadline, host bridge) is this app's own code.
 
+## CPython — PSF License 2.0 (iOS, optional Python runtime for TVBox Python spiders)
+- https://github.com/python/cpython 3.13.18 with the Apple-platform patches of BeeWare Python-Apple-support, downloaded at
+  build time as the unmodified release asset `Python-3.13-iOS-support.b18.tar.gz` of
+  https://github.com/beeware/Python-Apple-support (tag 3.13-b18, MIT build scripts; SHA-256 pinned in
+  `scripts/fetch-ios-python.sh`). Not in this repository; builds with `IDJ_PYTHON=0` do not contain it.
+- Shipped as `Frameworks/Python.framework`, one framework per extension module and `python/lib/stdlib.pyz`.
+  Changes: architectures thinned, symbols and install names stripped/rewritten, standard library trimmed and byte-compiled
+  (`scripts/embed-ios-python.sh`).
+- Statically included in the shipped binaries: Expat 2 (MIT), libffi 3.4.7 (MIT), mpdecimal 4.0.0 (BSD-2-Clause),
+  bzip2 1.0.8 (bzip2 license), liblzma / XZ Utils 5.6.4 (0BSD), HACL* (MIT), BLAKE2 (CC0), mimalloc (MIT), SipHash (MIT),
+  dtoa, Mersenne Twister and others named in the texts. zlib is the system library. OpenSSL is not shipped (`_ssl` and
+  `_hashlib` are left out; TLS goes through the app).
+- Texts: `STV/Resources/Licenses/CPython-LICENSE.txt` and `CPython-components.txt` (bundled, shown in 开源许可).
+- `Packages/PythonHost` and `PythonRuntime.swift` are this app's own code; they declare the parts of the C API they call.
+
 ## Rhino — Mozilla Public License 2.0
 - https://github.com/mozilla/rhino, version 1.7.15, unmodified Maven dependency `org.mozilla:rhino`.
 - Android book-source JavaScript evaluation runs interpreted, with a class shutter and explicit host bridge; no Java class or filesystem access is exposed to source scripts.
 - License: `STV/Resources/Licenses/Rhino-MPL-2.0.txt` (also bundled with Android). The shared Legado compatibility prelude is this project's own code.
+
+## TVBox engine (Android and the shared script runtime)
+- The config, spider, live and proxy behaviour follows the publicly documented TVBox / CatVod interface; the Kotlin engine
+  (`android/core/.../core/tvbox`), the Java host API (`android/app/src/main/java/com/github/catvod`), the JavaScript runtime
+  (`shared/tvbox/js`, except crypto-js below) and the Python runtime (`shared/tvbox/py`) are this project's own code. Class and
+  method names of the host API are the interface jars are compiled against. No spider, jar or source is bundled.
+- **crypto-js 4.2.0 — MIT** (https://github.com/brix/crypto-js), from the Maven Central webjar `org.webjars.npm:crypto-js:4.2.0`;
+  comments stripped and the UMD wrapper replaced by an ES module. The licence text is kept at the top of
+  `shared/tvbox/js/lib/crypto-js.js`.
+- **Gson 2.11.0 — Apache-2.0** (https://github.com/google/gson), unmodified Maven dependency; used by the host API and by jars
+  compiled against the host's copy.
+- **okhttp-dnsoverhttps / mockwebserver 4.12.0 — Apache-2.0** (https://github.com/square/okhttp); mockwebserver is test-only.
+- **kotlinx.coroutines 1.9.0 — Apache-2.0**. **GraalVM Polyglot / GraalJS 24.1.1 — UPL-1.0**, test-only (runs the shared
+  JavaScript runtime in JVM tests, never packaged).
+- **Chaquopy 16.1.0 — MIT** (https://github.com/chaquo/chaquopy) with CPython 3.11 (PSF License), only in builds made with
+  `-Pidj.python=true`, together with the pip packages requests (Apache-2.0), urllib3 (MIT), certifi (MPL-2.0), idna
+  (BSD-3-Clause), charset-normalizer (MIT), lxml (BSD-3-Clause, with libxml2 / libxslt, MIT), pycryptodome (BSD-2-Clause /
+  public domain), pyquery (BSD-3-Clause), cssselect (BSD-3-Clause), beautifulsoup4 and soupsieve (MIT), typing_extensions (PSF).
+
+## Media3 streaming modules (Android player)
+- **androidx.media3 1.5.1 — Apache-2.0**: exoplayer-hls, exoplayer-dash, exoplayer-smoothstreaming, exoplayer-rtsp,
+  datasource-okhttp and datasource-rtmp, unmodified Maven dependencies.
+- **io.antmedia:rtmp-client 3.2.0 — Apache-2.0** (https://github.com/mekya/LibRtmp-Client-for-Android), unmodified Maven
+  dependency of datasource-rtmp; it wraps librtmp from RTMPDump (LGPL-2.1).
 
 ## JMComic-Crawler-Python — MIT (algorithm reference only)
 - https://github.com/hect0x7/JMComic-Crawler-Python — the public 18comic image segment algorithm
@@ -100,5 +139,5 @@ data, not device identities or session credentials. No captured SDK token is use
 by the current player signer. Native synthetic vectors test arithmetic only;
 server availability is checked separately.
 
-All components above (Apache-2.0, MIT, BSD-2-Clause, WTFPL, BSL-1.0, Unlicense, LGPL-2.1/LGPL-3.0 with exception, GPL-3.0-only) are
+All components above (Apache-2.0, MIT, BSD-2-Clause, PSF-2.0, 0BSD, bzip2, WTFPL, BSL-1.0, Unlicense, LGPL-2.1/LGPL-3.0 with exception, GPL-3.0-only) are
 compatible with distributing the whole work under GPL-3.0. This project itself is licensed under **GPL-3.0** (see `LICENSE`).

@@ -19,6 +19,12 @@ data class HGSeries(
 
 data class HGEpisode(val ep: Int, val vid: String, val duration: Int = 0, val title: String = "", val page: String? = null, val media: String? = null)
 
+/** One playback line (线路) of a multi-line title: same episodes, different upstream (`vod_play_from`). */
+data class HGPlayLine(val id: String, val name: String, val episodes: List<HGEpisode>)
+
+/** External subtitle delivered together with a stream (TVBox `subs`). */
+data class HGSubtitle(val name: String, val url: String, val language: String? = null, val format: String? = null)
+
 data class HGCelebrity(val id: String = "", val name: String = "", val avatar: String = "", val role: String = "", val intro: String = "")
 
 data class HGActorProfile(val actor: HGCelebrity, val related: List<HGCelebrity>)
@@ -43,6 +49,10 @@ data class HGSeriesDetail(
     var ratingCount: String = "",
     var hotText: String = "",
     var source: String = "红果短剧",
+    /** All playback lines (TVBox / multi-line sources); empty for single-line sources. [episodes] is always the default line. */
+    var lines: List<HGPlayLine> = emptyList(),
+    /** Live channel list: [episodes] are channels (`page` = group name) and there is no timeline to seek. */
+    var isLive: Boolean = false,
 )
 
 data class HGPage(
@@ -74,6 +84,11 @@ data class HGStream(
     val kind: HGStreamKind = HGStreamKind.mp4Clear,
     val backupURL: String? = null,
     val headers: Map<String, String> = emptyMap(),
+    val subtitles: List<HGSubtitle> = emptyList(),
+    /** MIME hint from the source (TVBox `format`), used to pick the media source before opening the URL. */
+    val format: String? = null,
+    /** May lead into the local network; false for TVBox configs without that permission. */
+    val lan: Boolean = true,
 ) {
     val id: String get() = streamId
 }
@@ -87,6 +102,8 @@ data class HGResolvedVideo(
     val err: String? = null,
     val streams: List<HGStream> = emptyList(),
     var note: String? = null,
+    /** TVBox 弹幕 (XML / JSON) address, when the source provides one. */
+    val danmaku: String? = null,
 )
 
 enum class HGRankGenre(val label: String) {

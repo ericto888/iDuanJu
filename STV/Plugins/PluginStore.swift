@@ -376,43 +376,26 @@ enum PluginInstaller {
     }
 
     /// Text pasted / scanned by the user: a manifest URL, a subscription URL, an M3U URL, a bundle JSON or an M3U list.
-    enum Pasted { case plugin(PendingInstall), subscription(String), tvbox(TVBoxImport.Config) }
+    enum Pasted { case plugin(PendingInstall), subscription(String), tvbox(String) }
     static func interpret(_ text: String) async throws -> Pasted {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if M3UImport.isChannelList(t) { return .plugin(try prepareM3U(t, url: nil, name: nil, origin: "粘贴")) }
-        if let data = t.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           o["sites"] != nil || o["spider"] != nil || o["lives"] != nil {
-            return .tvbox(try TVBoxImport.parse(data))
-        }
+        if TVBoxConfig.isConfig(t) { return .tvbox(t) }
         if t.hasPrefix("http://") || t.hasPrefix("https://") {
             let data = try await download(t, limit: 2 << 20)
             if let list = String(data: data, encoding: .utf8), M3UImport.isChannelList(list) {
                 return .plugin(try prepareM3U(list, url: t, name: nil, origin: t))
             }
             if let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                if o["sites"] != nil || o["spider"] != nil || o["lives"] != nil { return .tvbox(try TVBoxImport.parse(data)) }
                 if o["plugins"] != nil || o["cms"] != nil { return .subscription(t) }
                 if o["manifest"] != nil { return .plugin(try prepare(bundle: data, origin: t)) }
                 if o["schema"] != nil { return .plugin(try await prepare(manifestData: data, manifestURL: t, origin: t)) }
             }
-            throw PluginError.install("这个链接不是插件 manifest / .idjplugin / 订阅列表 / M3U")
+            if let decoded = try? TVBoxDecoder.decode(data), TVBoxConfig.isConfig(decoded) { return .tvbox(t) }
+            throw PluginError.install("这个链接不是插件 manifest / .idjplugin / 订阅列表 / M3U / TVBox 配置")
         }
         guard let data = t.data(using: .utf8) else { throw PluginError.install("无法识别") }
         return .plugin(try prepare(bundle: data, origin: "粘贴"))
-    }
-
-    /// A reviewed M3U channel list becomes a static video plugin, under the same rules as scripts/source-compat/m3u_to_idj.py.
-    static func prepareLive(_ live: TVBoxImport.Live) async throws -> PendingInstall {
-        let raw = String(decoding: try await download(live.url, limit: 2 << 20), as: UTF8.self)
-        if M3UImport.isChannelList(raw) { return try prepareM3U(raw, url: live.url, name: live.name, origin: "TVBox") }
-        var lines = ["#EXTM3U"]
-        for line in raw.split(whereSeparator: \.isNewline) {
-            guard let split = line.firstIndex(of: ",") else { continue }
-            let title = line[..<split].trimmingCharacters(in: .whitespaces)
-            let url = line[line.index(after: split)...].trimmingCharacters(in: .whitespaces)
-            if !title.isEmpty, url.hasPrefix("https://") { lines += ["#EXTINF:-1," + title, url] }
-        }
-        return try prepareM3U(lines.joined(separator: "\n"), url: live.url, name: live.name, origin: "TVBox")
     }
 
     static func prepareM3U(_ text: String, url: String?, name: String?, origin: String) throws -> PendingInstall {
@@ -426,7 +409,10 @@ enum PluginInstaller {
     }
 
     static func prepare(manifestURL: String, origin: String) async throws -> PendingInstall {
-        let data = try await download(manifestURL, limit: 256 << 10)
+        let data = try await download(manifestURL, limit: 2 << 20)
+        if let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any], o["manifest"] != nil {
+            return try prepare(bundle: data, origin: origin)
+        }
         return try await prepare(manifestData: data, manifestURL: manifestURL, origin: origin)
     }
 

@@ -22,6 +22,8 @@ extension DramaSource {
     var isAdult: Bool {
         if let p = pluginID { return PluginStore.snapshot(p)?.manifest.adult ?? true }
         if let k = cmsKey { return CMSStore.site(k)?.adult ?? true }
+        if let u = tvboxUID { return TVBoxStore.isAdult(u) }
+        if tvboxLiveUID != nil { return false }
         return isLongVideo && self != .telegram
     }
     var isBuiltin: Bool { !isAdult }
@@ -31,7 +33,7 @@ extension DramaSource {
     /// Mainstream tube sites (desktop pages carry the HLS master).
     var isTube: Bool { [.eporner, .xvideos, .xnxx, .pornhub, .youporn, .redtube, .hqporner].contains(self) }
     /// MissAV exposes resolutions of one stream (画质); the others expose alternative servers (播放源).
-    var streamSectionTitle: String { self == .missav ? "画质" : "播放源" }
+    var streamSectionTitle: String { tvboxLiveUID != nil ? "线路" : self == .missav || tvboxUID != nil ? "画质" : "播放源" }
     var siteHost: String {
         switch self {
         case .hongguo: "hongguo"
@@ -51,6 +53,8 @@ extension DramaSource {
         default:
             if let p = pluginID { PluginStore.snapshot(p)?.manifest.httpDomains.first ?? p }
             else if let k = cmsKey { URL(string: CMSStore.site(k)?.api ?? "")?.host ?? k }
+            else if let u = tvboxUID { TVBoxStore.site(u).map { TVBoxUrl.host($0.api).nonEmptyOr($0.name) } ?? u }
+            else if let u = tvboxLiveUID { TVBoxStore.live(u).map { TVBoxUrl.host($0.url).nonEmptyOr($0.name) } ?? u }
             else { rawValue }
         }
     }
@@ -82,6 +86,8 @@ enum Sites {
         if let replacement = PluginStore.overridePlugin(for: s) { return JSVideoProvider(source: s, overridePluginID: replacement.id) }
         if s.pluginID != nil { return JSVideoProvider(source: s) }
         if let k = s.cmsKey { return CMSStore.site(k).map { MacCMSProvider(source: s, site: $0) } }
+        if let u = s.tvboxUID { return TVBoxProvider(source: s, uid: u) }
+        if let u = s.tvboxLiveUID { return TVBoxLiveProvider(source: s, uid: u) }
         let p: SiteProvider?
         switch s {
         case .jable: p = JableProvider()

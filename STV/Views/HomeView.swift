@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 enum HomeTab: Hashable {
     case hongguo(HGRankGenre)
@@ -171,22 +172,76 @@ enum HomeSource: Hashable, Identifiable {
     }
 }
 
-/// Caches the first page of each rank board for the home cards.
+/// Each board publishes independently: loading one category only invalidates its own shelf.
 @MainActor
-final class BoardCache: ObservableObject {
-    static let shared = BoardCache()
-    @Published var items: [String: [HGSeries]] = [:]
-    @Published var loading: Set<String> = []
-    @Published var failed: Set<String> = []
-    @Published var errors: [String: Error] = [:]
-    func load(_ b: BoardSpec, force: Bool = false) {
-        guard !loading.contains(b.id), force || items[b.id] == nil else { return }
-        loading.insert(b.id); failed.remove(b.id); errors[b.id] = nil
+final class BoardFeed: ObservableObject {
+    enum State { case idle, loaded([HGSeries]), failed(Error) }
+    let board: BoardSpec
+    @Published private(set) var state: State = .idle
+    private var loading = false
+
+    init(_ board: BoardSpec) { self.board = board }
+    var items: [HGSeries] { if case .loaded(let items) = state { return items }; return [] }
+    var error: Error? { if case .failed(let error) = state { return error }; return nil }
+
+    func load(force: Bool = false) {
+        guard !loading else { return }
+        if case .loaded = state, !force { return }
+        loading = true
         Task {
-            do { items[b.id] = try await b.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items; errors[b.id] = nil }
-            catch { failed.insert(b.id); errors[b.id] = error }
-            loading.remove(b.id)
+            defer { loading = false }
+            do { state = .loaded(try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items) }
+            catch { if items.isEmpty { state = .failed(error) } }
         }
+    }
+}
+
+@MainActor
+final class BoardCache {
+    static let shared = BoardCache()
+    private var feeds: [String: BoardFeed] = [:]
+    func feed(_ board: BoardSpec) -> BoardFeed {
+        if let feed = feeds[board.id] { return feed }
+        let feed = BoardFeed(board)
+        feeds[board.id] = feed
+        return feed
+    }
+}
+
+/// The hero observes only the candidate boards used for its own TOP5 selection.
+@MainActor
+final class HomeHeroSelection: ObservableObject {
+    @Published private(set) var picks: [HGSeries] = []
+    @Published private(set) var board: BoardSpec?
+    private var ids: [String] = []
+    private var feeds: [BoardFeed] = []
+    private var subscriptions = Set<AnyCancellable>()
+
+    func configure(_ boards: [BoardSpec], fallback: Bool) {
+        let candidates = fallback ? boards : Array(boards.prefix(1))
+        let nextIDs = candidates.map(\.id)
+        guard nextIDs != ids else {
+            candidates.forEach { BoardCache.shared.feed($0).load() }
+            return
+        }
+        ids = nextIDs
+        subscriptions.removeAll()
+        feeds = candidates.map { BoardCache.shared.feed($0) }
+        for feed in feeds {
+            feed.objectWillChange.sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.refresh() }
+            }.store(in: &subscriptions)
+        }
+        feeds.forEach { $0.load() }
+        refresh()
+    }
+
+    private func refresh() {
+        let loaded = feeds.filter { !$0.items.isEmpty }
+        let chosen = loaded.first { $0.items.count >= 5 } ?? loaded.first
+        if board?.id != chosen?.board.id { board = chosen?.board }
+        let next = Array(chosen?.items.prefix(5) ?? [])
+        if picks != next { picks = next }
     }
 }
 
@@ -380,32 +435,39 @@ struct HomeView: View {
     private var header: some View {
         VStack(spacing: 0) {
             if !headerHidden {
-                HStack(spacing: 0) {
-                    NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
-                        DSSearchBarLabel()
-                            .padding(.leading, 16).frame(height: 46).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityIdentifier("home.search")
-                    Button { showChannels = true } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
-                            Text("筛选").font(.system(size: 14, weight: .medium))
+                LiquidGlassGroup(spacing: 10) {
+                    HStack(spacing: 10) {
+                        NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
+                            DSSearchBarLabel()
+                                .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
+                                .liquidGlassCapsule(interactive: true)
                         }
-                        .foregroundStyle(STVTheme.text)
-                        .padding(.horizontal, 16).frame(height: 46).contentShape(Rectangle())
-                    }.buttonStyle(PressScale()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
+                        .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
+                        Button { showChannels = true } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
+                                Text("筛选").font(.system(size: 14, weight: .medium))
+                            }
+                            .foregroundStyle(STVTheme.text)
+                            .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
+                            .liquidGlassCapsule(interactive: true)
+                        }
+                        .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
+                    }
                 }
-                .background(STVTheme.glass, in: Capsule())
-                .overlay { Capsule().strokeBorder(STVTheme.glassBorder, lineWidth: 1) }
                 .padding(.horizontal, 16)
-                .transition(.move(edge: .top).combined(with: .opacity))
+                .transition(.asymmetric(
+                    insertion: .move(edge: .top).combined(with: .opacity),
+                    removal: .move(edge: .top).combined(with: .opacity)
+                ))
             }
-            HomeChannelBar(items: HomeSource.all, selection: $source, label: \.label, ink: headerInk) { showChannels = true }
+            HomeChannelBar(items: HomeSource.all, selection: $source, label: \.label, ink: STVTheme.text) { showChannels = true }
                 .padding(.leading, 20)
-                .padding(.top, pinned ? 14 : 18)
+                .padding(.top, 12)
         }
         .padding(.top, 8)
-        .padding(.bottom, pinned ? 10 : 0)
-        .dsPinned(pinned)
+        .padding(.bottom, 8)
+        .background { LiquidEdgeFade(visible: pinned) }
         .animation(.easeOut(duration: 0.22), value: pinned)
         .zIndex(1)
     }
@@ -418,7 +480,7 @@ struct HomeView: View {
             // it would be a dark band in light mode, so use a soft tint of the page colour instead.
             if url != nil { Color(red: 0.08, green: 0.10, blue: 0.15) } else { STVTheme.elevated }
             if let url {
-                CoverView(url: url, corner: 0).blur(radius: 48).opacity(0.75).id(url)
+                CoverBackdrop(url: url).opacity(0.75).id(url)
                     .transition(.opacity)
             }
         }
@@ -476,8 +538,7 @@ private struct HomeFeedPage: View {
     @State private var legacyChannels: [HuangguoChannel] = []
     @State private var legacyError: Error?
     @State private var heroIndex = 0
-    @ObservedObject private var cache = BoardCache.shared
-    @ObservedObject private var library = LibraryStore.shared
+    @StateObject private var heroSelection = HomeHeroSelection()
     private let gutter: CGFloat = 16
     /// DEBUG `STV_HOME_SCROLL=bottom` opens the feed scrolled to the end (simulator screenshots).
     private static var debugAnchor: UnitPoint? {
@@ -513,9 +574,7 @@ private struct HomeFeedPage: View {
                             .padding(.top, 16)
                             .transition(.opacity)
                     }
-                    if source == .hongguo, !library.continueWatching.isEmpty {
-                        HomeContinueRow(items: library.continueWatching).padding(.top, 24)
-                    }
+                    if source == .hongguo { HomeContinueSection() }
                     sections
                 }
             }
@@ -540,13 +599,14 @@ private struct HomeFeedPage: View {
         .compatDefaultScrollAnchor(Self.debugAnchor)
         .compatOnScrolled(threshold: 4) { onScrolled($0) }
         .accessibilityIdentifier("home.page.\(source.label)")
-        .refreshable { if tab == .actorRank { await ActorRankStore.shared.reload() } else { boards.forEach { cache.load($0, force: true) } } }
+        .refreshable { if tab == .actorRank { await ActorRankStore.shared.reload() } else { boards.forEach { BoardCache.shared.feed($0).load(force: true) } } }
         .task(id: tab) {
             heroIndex = 0
             if case .huangguo(.legacy) = tab, legacyChannels.isEmpty { await loadLegacy() }
         }
         .onAppear { loadHomeBoards(); reportHero() }
         .compatOnChange(of: tab) { loadHomeBoards() }
+        .compatOnChange(of: boards.map(\.id)) { _ in loadHomeBoards() }
         .compatOnChange(of: heroKey) { reportHero() }
         .compatOnChange(of: heroPicks.count) { count in
             if heroIndex >= count { heroIndex = 0 }
@@ -592,62 +652,41 @@ private struct HomeFeedPage: View {
         }
     }
 
-    /// Prefer the first board that actually returned content. A site's recommendation endpoint
-    /// can be empty while its newest/category feeds are healthy; don't let that suppress TOP5.
-    private var heroBoard: BoardSpec? {
-        let loaded = boards.filter { !(cache.items[$0.id] ?? []).isEmpty }
-        return loaded.first { (cache.items[$0.id]?.count ?? 0) >= 5 } ?? loaded.first
-    }
+    private var heroBoard: BoardSpec? { heroSelection.board }
 
     private func loadHomeBoards() {
-        // Huangguo AI/video need a fallback when the first recommendation endpoint is empty.
-        // Load their category candidates so the TOP5 carousel can use the first healthy feed.
+        let fallback: Bool
         switch tab {
-        case .huangguo(.ai), .huangguo(.video):
-            boards.forEach { cache.load($0) }
-        default:
-            boards.prefix(1).forEach { cache.load($0) }
+        case .huangguo(.ai), .huangguo(.video): fallback = true
+        default: fallback = false
         }
+        heroSelection.configure(boards, fallback: fallback)
     }
 
-    private var heroPicks: [HGSeries] {
-        guard let board = heroBoard, let items = cache.items[board.id] else { return [] }
-        return Array(items.prefix(5))
-    }
+    private var heroPicks: [HGSeries] { heroSelection.picks }
 
     @ViewBuilder private var sections: some View {
         if case .huangguo(.legacy) = tab, legacyChannels.isEmpty {
             if let legacyError { ErrorStateView(error: legacyError) { Task { await loadLegacy() } } }
             else { cardsSkeleton }
         } else {
-            if let e = boards.lazy.compactMap({ cache.errors[$0.id] }).first(where: { $0.verifyTarget != nil }) {
-                ErrorStateView(error: e) { boards.forEach { cache.load($0, force: true) } }
-            }
-            ForEach(Array(boards.enumerated()), id: \.element.id) { n, b in
-                Group {
-                    if let items = cache.items[b.id], !items.isEmpty {
-                        // 第一个榜单一律跳过 hero 里已展示的剧（数据不够时也跳过，只剩标题和「全部」）。
-                        let heroIds = Set(heroPicks.map(\.id))
-                        let rest = b.id == heroBoard?.id ? items.filter { !heroIds.contains($0.id) } : items
-                        HomeShelf(title: b.title, note: nil, items: Array(rest.prefix(12)), more: b)
-                    } else if cache.failed.contains(b.id) {
-                        HomeShelf(title: b.title, note: cache.errors[b.id]?.verifyTarget != nil ? "需要验证，点上方「去验证」" : "加载失败，下拉重试", items: [], more: b)
-                    } else {
-                        VStack(alignment: .leading, spacing: 12) {
-                            DSSectionHeader(title: b.title)
-                            cardsSkeleton.padding(.horizontal, gutter)
-                        }
-                    }
-                }
-                .padding(.top, n == 0 && heroPicks.isEmpty && library.continueWatching.isEmpty ? 18 : 24)
-                .onAppear { cache.load(b) }
+            ForEach(Array(boards.enumerated()), id: \.element.id) { n, board in
+                HomeBoardSection(
+                    feed: BoardCache.shared.feed(board),
+                    board: board,
+                    heroIDs: Set(heroPicks.map(\.id)),
+                    isHeroBoard: board.id == heroBoard?.id,
+                    landscape: { if case .site(let site) = tab { return site.isLongVideo }; return false }(),
+                    topPadding: n == 0 && heroPicks.isEmpty ? 18 : 24,
+                    gutter: gutter
+                )
             }
         }
     }
 
     private var cardsSkeleton: some View {
         let landscape: Bool = { if case .site(let s) = tab { return s.isLongVideo } else { return false } }()
-        return LazyVGrid(columns: HomeSection.columns(landscape: landscape), spacing: 16) {
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: landscape ? 2 : 3), spacing: 16) {
             ForEach(0..<(landscape ? 2 : 3), id: \.self) { _ in
                 VStack(alignment: .leading, spacing: 8) {
                     ShimmerBlock().aspectRatio(landscape ? 16/9 : 3/4, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12))
@@ -659,6 +698,52 @@ private struct HomeFeedPage: View {
 
     private func loadLegacy() async {
         do { legacyChannels = try await HuangguoClient.shared.legacyChannels(); legacyError = nil } catch { legacyError = error }
+    }
+}
+
+/// A single shelf observes only its own board feed.
+private struct HomeBoardSection: View {
+    @ObservedObject var feed: BoardFeed
+    let board: BoardSpec
+    let heroIDs: Set<String>
+    let isHeroBoard: Bool
+    let landscape: Bool
+    let topPadding: CGFloat
+    let gutter: CGFloat
+
+    var body: some View {
+        Group {
+            if let error = feed.error {
+                ErrorStateView(error: error) { feed.load(force: true) }
+            } else if case .loaded = feed.state {
+                let rest = isHeroBoard ? feed.items.filter { !heroIDs.contains($0.id) } : feed.items
+                HomeShelf(title: board.title, note: rest.isEmpty ? "暂无更多内容" : nil, items: Array(rest.prefix(12)), more: board)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    DSSectionHeader(title: board.title)
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: landscape ? 2 : 3), spacing: 16) {
+                        ForEach(0..<(landscape ? 2 : 3), id: \.self) { _ in
+                            VStack(alignment: .leading, spacing: 8) {
+                                ShimmerBlock().aspectRatio(landscape ? 16/9 : 3/4, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12))
+                                ShimmerBlock().frame(height: 12).frame(maxWidth: 90)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, gutter)
+                }
+            }
+        }
+        .padding(.top, topPadding)
+        .onAppear { feed.load() }
+    }
+}
+
+/// Watch history publishes independently of the home feed; progress ticks do not redraw other shelves.
+private struct HomeContinueSection: View {
+    @ObservedObject private var library = LibraryStore.shared
+    var body: some View {
+        let items = Array(library.continueWatching.prefix(10))
+        if !items.isEmpty { HomeContinueRow(items: items).padding(.top, 24) }
     }
 }
 
@@ -950,7 +1035,7 @@ private struct DynamicSiteFeed: View {
     }
 
     private var cardsSkeleton: some View {
-        LazyVGrid(columns: HomeSection.columns(landscape: source.isLongVideo), spacing: 16) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: source.isLongVideo ? 2 : 3), spacing: 16) {
             ForEach(0..<(source.isLongVideo ? 2 : 3), id: \.self) { _ in
                 VStack(alignment: .leading, spacing: 8) {
                     ShimmerBlock().aspectRatio(source.isLongVideo ? 16/9 : 3/4, contentMode: .fit)
@@ -1284,7 +1369,7 @@ private struct PosterHero: View {
         let url = picks.indices.contains(index) ? picks[index].cover : ""
         return ZStack {
             Color(red: 0.14, green: 0.10, blue: 0.10)
-            CoverView(url: url, corner: 0).blur(radius: 40).scaleEffect(1.5).opacity(0.85).id(url).transition(.opacity)
+            CoverBackdrop(url: url).opacity(0.9).id(url).transition(.opacity)
             LinearGradient(colors: [.black.opacity(0.18), .black.opacity(0.62)], startPoint: .topLeading, endPoint: .bottomTrailing)
         }
         .clipped()
@@ -1298,7 +1383,7 @@ private struct PosterHero: View {
         if landscape {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top, spacing: 14) {
-                    CoverView(url: s.cover, corner: 12)
+                    CoverView(url: s.cover, corner: 12, maxPixelSize: CoverPixels.wide)
                         .frame(width: 176, height: 99)
                         .zoomSource(s.id, ns)
                         .overlay(alignment: .bottomTrailing) { if let p = HomeFmt.progress(s) { HomeBadge(text: p).padding(5) } }
@@ -1320,7 +1405,7 @@ private struct PosterHero: View {
             .padding(14)
         } else {
             HStack(alignment: .top, spacing: 14) {
-                CoverView(url: s.cover, corner: 12)
+                CoverView(url: s.cover, corner: 12, maxPixelSize: CoverPixels.poster)
                     .frame(width: 112, height: 112 * 4 / 3)
                     .overlay {
                         LinearGradient(stops: [.init(color: .clear, location: 0.46), .init(color: .black.opacity(0.62), location: 1)],
@@ -1413,7 +1498,7 @@ struct HomeContinueRow: View {
 
     private func card(_ p: WatchProgress) -> some View {
         HStack(spacing: 12) {
-            CoverView(url: p.series.cover, corner: 8).frame(width: 52, height: 52 * 4 / 3).zoomSource(p.series.id, ns)
+            CoverView(url: p.series.cover, corner: 8, maxPixelSize: CoverPixels.thumb).frame(width: 52, height: 52 * 4 / 3).zoomSource(p.series.id, ns)
             VStack(alignment: .leading, spacing: 0) {
                 Text(p.series.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
                 Text(line(p)).font(.system(size: 12)).foregroundStyle(STVTheme.secondary).lineLimit(1).padding(.top, 2)
@@ -1531,7 +1616,7 @@ struct HomePosterCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Color.clear
                 .aspectRatio(landscape ? 16/9 : 3/4, contentMode: .fit)
-                .overlay { CoverView(url: series.cover, corner: 0) }
+                .overlay { CoverView(url: series.cover, corner: 0, maxPixelSize: series.isLandscapeCover ? CoverPixels.wide : CoverPixels.poster) }
                 .clipShape(RoundedRectangle(cornerRadius: landscape ? 12 : 10, style: .continuous))
                 .zoomSource(series.id, ns)
                 .overlay(alignment: .bottomTrailing) {
@@ -1571,4 +1656,83 @@ struct BoardListView: View {
         .task { if pager.items.isEmpty { reload() } }
     }
     private func reload() { let b = board; pager.reset { try await b.fetch($0, $1) } }
+}
+
+// MARK: - Floating header plumbing
+
+/// Vertical extent of a view in window coordinates, and the bottom safe area under it.
+struct VSpan: Equatable {
+    var top: CGFloat
+    var bottom: CGFloat
+    var inset: CGFloat = 0
+}
+
+/// Reports where a view really is. Frames scaled by a running navigation transition are skipped.
+private struct SpanReader: View {
+    @Binding var span: VSpan?
+    var body: some View {
+        GeometryReader { g in
+            let f = g.frame(in: .global)
+            let now = abs(f.width - g.size.width) < 0.5 ? VSpan(top: f.minY, bottom: f.maxY, inset: g.safeAreaInsets.bottom) : nil
+            Color.clear.onAppear { set(now) }.compatOnChange(of: now) { set($0) }
+        }
+    }
+    private func set(_ now: VSpan?) {
+        guard let now else { return }
+        if let s = span, abs(s.top - now.top) < 0.5, abs(s.bottom - now.bottom) < 0.5, abs(s.inset - now.inset) < 0.5 { return }
+        span = now
+    }
+}
+
+/// What the pages under the floating home header need: where their content rests and where to report "scrolled".
+struct HomeHeader {
+    /// False outside 发现, where the same pages have a bar of their own.
+    var active = false
+    /// From the header's lower edge to the floating tab bar, in window coordinates; nil until the first layout.
+    var rest: VSpan?
+    /// Where the pager starts, and how far it reaches under the tab bar.
+    var pagerTop: CGFloat = 0
+    var tabBar: CGFloat = 0
+    var onScrolled: (Bool) -> Void = { _ in }
+}
+
+private struct HomeHeaderKey: EnvironmentKey { static let defaultValue = HomeHeader() }
+extension EnvironmentValues {
+    var homeHeader: HomeHeader {
+        get { self[HomeHeaderKey.self] }
+        set { self[HomeHeaderKey.self] = newValue }
+    }
+}
+
+/// Insets from geometry, not from assumptions: a pager cell's position and safe area differ between systems, so a page
+/// compares where its content would start and end with where the header and the tab bar really are.
+private struct HomePageInset: ViewModifier {
+    @Environment(\.homeHeader) private var header
+    @State private var own: VSpan?
+    /// A cell that is not on screen yet can report a frame of its own coordinate space: only believe plausible ones.
+    private var placed: VSpan? { own.flatMap { abs($0.top - header.pagerTop) < 40 ? $0 : nil } }
+    private var top: CGFloat {
+        guard let rest = header.rest else { return 114 }
+        return max(0, rest.top - (placed?.top ?? header.pagerTop))
+    }
+    private var bottom: CGFloat {
+        guard let rest = header.rest, let placed else { return header.tabBar }
+        return max(0, placed.bottom - rest.bottom)
+    }
+    func body(content: Content) -> some View {
+        if header.active {
+            content
+                .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: top) }
+                .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: bottom) }
+                .compatOnScrolled(threshold: 6) { header.onScrolled($0) }
+                .background { SpanReader(span: $own) }
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    /// For the scroll view of a home page: rest below the floating header, scroll under it. No-op outside 发现.
+    func homePageInset() -> some View { modifier(HomePageInset()) }
 }

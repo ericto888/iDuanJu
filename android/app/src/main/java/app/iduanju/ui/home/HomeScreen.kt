@@ -5,13 +5,18 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import app.iduanju.ui.components.*
 
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -19,45 +24,64 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.*
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.iduanju.IdjApp
+import app.iduanju.core.cms.CMSSite
 import app.iduanju.core.hongguo.HGRankGenre
 import app.iduanju.core.hongguo.HGRankSub
 import app.iduanju.core.hongguo.HGSeries
+import app.iduanju.data.WatchProgress
+import app.iduanju.plugin.PluginStore
+import app.iduanju.ui.Routes
 import app.iduanju.ui.theme.IdjThemeColors
 import coil.compose.AsyncImage
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -88,14 +112,15 @@ object BoardCache {
     val failed = mutableStateMapOf<String, String>()
     private val loading = HashSet<String>()
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main.immediate)
-    suspend fun load(b: BoardSpec, force: Boolean = false) {
-        synchronized(loading) { if (b.id in loading || (!force && items.containsKey(b.id))) return; loading.add(b.id) }
+    /** The running request (null when there is nothing to load), for callers that show its progress. */
+    fun load(b: BoardSpec, force: Boolean = false): kotlinx.coroutines.Job? {
+        synchronized(loading) { if (b.id in loading || (!force && items.containsKey(b.id))) return null; loading.add(b.id) }
         // Repository lifetime, not the current composition: even an early navigation away keeps the result.
-        scope.launch {
+        return scope.launch {
             try {
                 android.util.Log.i("IDJ", "board fetch ${b.id}")
                 val r = withContext(Dispatchers.IO) { IdjApp.instance.hongguo.rank(b.sub, b.genre).items }
-                items[b.id] = r; failed.remove(b.id)
+                items[b.id] = r.distinctBy { it.seriesId }; failed.remove(b.id)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e
             } catch (e: Exception) { failed[b.id] = e.message ?: "加载失败"; android.util.Log.w("IDJ", "board ${b.id} failed: $e") }
             finally { synchronized(loading) { loading.remove(b.id) } }
@@ -129,39 +154,76 @@ object HomeFmt {
 
 fun formatCount(n: Long) = HomeFmt.count(n)
 
+/** One home page: a built-in source, a 采集站 or a plugin. [key] is stable across label / order changes. */
+private data class HomePageRef(val key: String, val label: String, val target: Any)
+
+private fun homePages(): List<HomePageRef> {
+    // iOS HomeSource.all: [红果, 黄果, AI剧] + visible sites (采集站 / plugins) + [频道, 漫画, 小说]
+    val app = IdjApp.instance
+    val adult = app.cms.adultUnlocked
+    fun built(s: HomeSource) = HomePageRef(s.name, s.label, s)
+    return buildList {
+        add(built(HomeSource.hongguo))
+        if (adult) add(built(HomeSource.huangguo))
+        add(built(HomeSource.ai))
+        app.cms.visibleSites.filterNot { it.origin.equals("TVBox", ignoreCase = true) || it.origin.startsWith("TVBox") }.forEach { add(HomePageRef("cms:" + it.key, it.name, it)) }
+        app.plugins.visible(adult).filter { it.type == "video" || it.type == "shortdrama" }.forEach { add(HomePageRef("plugin:" + it.id, it.name, it)) }
+        add(built(HomeSource.channels)); add(built(HomeSource.manga)); add(built(HomeSource.novel))
+    }
+}
+
+/** A feed tells the home header whether it is scrolled; the header then pins (iOS `onScrolled`). */
+internal val LocalFeedScrolled = staticCompositionLocalOf<(Boolean) -> Unit> { {} }
+
+@Composable
+internal fun ReportScrolled(scrolled: () -> Boolean) {
+    val report = LocalFeedScrolled.current
+    val latest by rememberUpdatedState(scrolled)
+    LaunchedEffect(report) { snapshotFlow { latest() }.collect { report(it) } }
+}
+
+@Composable
+internal fun ReportScrolled(list: LazyListState) = ReportScrolled { list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 12 }
+
+/** Space the floating tab bar (beside the tablet rail: only the system bar) covers at the bottom of a root page. */
+@Composable
+internal fun rootBottomInset(): Dp =
+    WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + if (LocalLayoutMetrics.current.useRail) 8.dp else 72.dp
+
 @Composable
 fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay: (String) -> Unit = {}, onOpenManga: (String) -> Unit = {}, onImmersiveChanged: (Boolean) -> Unit = {}) {
     val c = IdjThemeColors
-    // iOS HomeSource.all: [红果, 黄果, AI剧] + visible sites (采集站 / plugins) + [频道, 漫画]
-    val adult = IdjApp.instance.cms.adultUnlocked
-    val sites = IdjApp.instance.cms.visibleSites.filterNot { it.origin.equals("TVBox", ignoreCase = true) || it.origin.startsWith("TVBox") }
-    val plugins = IdjApp.instance.plugins.visible(adult).filter { it.type == "video" || it.type == "shortdrama" }
-    val baseSources: List<Any> = if (adult) listOf(HomeSource.hongguo, HomeSource.huangguo, HomeSource.ai) else listOf(HomeSource.hongguo, HomeSource.ai)
-    val pages: List<Any> = baseSources + sites + plugins + listOf(HomeSource.channels, HomeSource.manga, HomeSource.novel)
-    val labels = pages.map { when (it) { is HomeSource -> it.label; is app.iduanju.core.cms.CMSSite -> it.name; else -> (it as app.iduanju.plugin.PluginStore.Installed).name } }
+    val pages by remember { derivedStateOf { homePages() } }
     val pager = rememberPagerState { pages.size }
     LaunchedEffect(HomeJump.label, pages.size) {
-        val i = labels.indexOf(HomeJump.label ?: return@LaunchedEffect)
+        val label = HomeJump.label ?: return@LaunchedEffect
+        val i = pages.indexOfFirst { it.label == label }
         if (i >= 0) { pager.scrollToPage(i); HomeJump.label = null }
     }
     val scope = rememberCoroutineScope()
-    var feedScroll by remember { mutableFloatStateOf(0f) }
-    val feedScrollConnection = remember {
+    val scrolled = remember { mutableStateMapOf<String, Boolean>() }
+    val current by remember { derivedStateOf { pages[pager.currentPage.coerceIn(0, pages.size - 1)] } }
+    val density = LocalDensity.current
+    // 漫画 / 小说 own their lists, so their scroll is followed from outside; the other feeds report it (ReportScrolled).
+    val feedScrollConnection = remember(density) {
+        val offsets = HashMap<String, Float>()
+        val threshold = with(density) { 8.dp.toPx() }
         object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
             override fun onPostScroll(consumed: Offset, available: Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): Offset {
-                feedScroll = (feedScroll - consumed.y).coerceAtLeast(0f)
+                val page = current
+                if (page.target != HomeSource.manga && page.target != HomeSource.novel) return Offset.Zero
+                val v = ((offsets[page.key] ?: 0f) - consumed.y).coerceAtLeast(0f)
+                offsets[page.key] = v
+                if ((scrolled[page.key] == true) != (v > threshold)) scrolled[page.key] = v > threshold
                 return Offset.Zero
             }
         }
     }
-    val source = pages[pager.currentPage.coerceIn(0, pages.size - 1)]
     var novelFullScreen by remember { mutableStateOf(false) }
-    val immersive = source == HomeSource.novel && novelFullScreen
+    val immersive by remember { derivedStateOf { current.target == HomeSource.novel && novelFullScreen } }
     LaunchedEffect(immersive) { onImmersiveChanged(immersive) }
     DisposableEffect(Unit) { onDispose { onImmersiveChanged(false) } }
-    LaunchedEffect(pager.currentPage) { feedScroll = 0f }
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    val pinned by remember(density) { derivedStateOf { feedScroll > with(density) { 8.dp.toPx() } } }
+    val pinned by remember { derivedStateOf { scrolled[current.key] == true } }
 
     // Local backdrop of what sits behind the header: page colour + ambient glow. The header is a sibling drawn on top
     // of this layer, so its search capsule gets real drawBackdrop lens refraction (LIQUID) / blur (FROSTED). The
@@ -177,93 +239,71 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
             // header: search + filter capsule
             if (!immersive) Column(Modifier.dsPinned(pinned).padding(top = 6.dp)) {
                 Row(
-                    Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(46.dp)
+                    Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(IntrinsicSize.Min)
                         // same glass material as the dock / detail chrome (follows 我的 → 玻璃质感)
-                        .glassSurface(RoundedCornerShape(50), backdrop = homeBackdrop, shadowRadius = 0.dp, fallbackAlpha = if (c.dark) 0.60f else 0.80f),
+                        .glassSurface(RoundedCornerShape(50), backdrop = homeBackdrop, shadowRadius = 0.dp, fallbackAlpha = if (c.dark) 0.60f else 0.80f)
+                        .heightIn(min = 46.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(Modifier.weight(1f).fillMaxHeight().clickable(onClick = onSearch).padding(start = 16.dp).semantics { contentDescription = "home.search" },
+                    Row(Modifier.weight(1f).fillMaxHeight().testTag("home.search").pressClick(0.98f, label = "搜索", onClick = onSearch).padding(start = 16.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.Search, null, tint = c.secondary, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(10.dp))
-                        Text("搜索你想看的作品", color = c.secondary, fontSize = 16.sp, maxLines = 1)
+                        Text("搜索你想看的作品", color = c.secondary, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    Row(Modifier.fillMaxHeight().clickable { HomeChannelSheetOpen.value = true }.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxHeight().testTag("home.filter").pressClick(label = "筛选与全部频道") { HomeChannelSheetOpen.value = true }.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.FilterList, null, tint = c.text, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(5.dp))
-                        Text("筛选", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Text("筛选", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                var sheet by HomeChannelSheetOpen
-                ChannelBar(labels, pager.currentPage, c.text, onMore = { sheet = true }) { scope.launch { pager.animateScrollToPage(it) } }
-                if (sheet) ChannelSheet(pages, labels, pager.currentPage, onDismiss = { sheet = false }) { page, sub ->
-                    sheet = false
-                    if (sub != null) HomeSubSel.map[labels[page]] = sub
+                Spacer(Modifier.height(10.dp))
+                ChannelBar(pages, pager.currentPage, onMore = { HomeChannelSheetOpen.value = true }) { scope.launch { pager.animateScrollToPage(it) } }
+                if (HomeChannelSheetOpen.value) ChannelSheet(pages, pager.currentPage, onDismiss = { HomeChannelSheetOpen.value = false }) { page, sub ->
+                    HomeChannelSheetOpen.value = false
+                    if (sub != null) HomeSubSel.map[pages[page].label] = sub
                     scope.launch { pager.animateScrollToPage(page) }
                 }
             }
-            HorizontalPager(pager, Modifier.fillMaxSize().nestedScroll(feedScrollConnection), userScrollEnabled = !immersive, beyondViewportPageCount = 0) { page ->
-                val any = pages.getOrElse(page) { pages.first() }
-                if (any is app.iduanju.core.cms.CMSSite) { SiteFeedPage(any, onOpenDetail); return@HorizontalPager }
-                if (any is app.iduanju.plugin.PluginStore.Installed) { PluginFeedPage(any, onOpenDetail); return@HorizontalPager }
-                val s = any as HomeSource
-                if (s == HomeSource.huangguo) { app.iduanju.huangguo.HuangguoFeedPage(onOpenDetail); return@HorizontalPager }
-                if (s == HomeSource.manga) { app.iduanju.manga.MangaHomePage(onOpenManga); return@HorizontalPager }
-                if (s == HomeSource.novel) {
-                    app.iduanju.novel.NovelScreen(onBack = {}, embedded = true, onFullScreenChange = { novelFullScreen = it })
-                    return@HorizontalPager
-                }
-                if (s == HomeSource.channels) { app.iduanju.tg.ChannelFeedPage(onPlay); return@HorizontalPager }
-                if (s == HomeSource.ai && adult) {
-                    // iOS AI剧: 红果 AI剧 | 黄果 AI 站 (the latter only behind the adult gate)
-                    val aiTabs = listOf("红果 AI剧", "黄果 AI 站")
-                    val sel = (HomeSubSel.map[s.label] ?: 0).coerceIn(0, 1)
-                    Column(Modifier.fillMaxSize()) {
-                        SegmentedTabs(
-                            items = aiTabs,
-                            selected = aiTabs[sel],
-                            label = { it },
-                            onSelect = { HomeSubSel.map[s.label] = aiTabs.indexOf(it) },
-                            modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp),
-                        )
-                        Box(Modifier.weight(1f)) {
-                            if (sel == 1) app.iduanju.huangguo.HuangguoFeedPage(onOpenDetail, aiOnly = true)
-                            else FeedPage(s, onOpenDetail)
-                        }
+            HorizontalPager(pager, Modifier.fillMaxSize().nestedScroll(feedScrollConnection), userScrollEnabled = !immersive, beyondViewportPageCount = 0,
+                key = { pages.getOrNull(it)?.key ?: it }) { index ->
+                val page = pages.getOrElse(index) { pages.first() }
+                val report = remember(page.key) { { on: Boolean -> if ((scrolled[page.key] == true) != on) scrolled[page.key] = on } }
+                CompositionLocalProvider(LocalFeedScrolled provides report) {
+                    when (val target = page.target) {
+                        is CMSSite -> SiteFeedPage(target, onOpenDetail)
+                        is PluginStore.Installed -> PluginFeedPage(target, onOpenDetail)
+                        HomeSource.huangguo -> app.iduanju.huangguo.HuangguoFeedPage(onOpenDetail)
+                        HomeSource.manga -> app.iduanju.manga.MangaHomePage(onOpenManga)
+                        HomeSource.novel -> app.iduanju.novel.NovelScreen(onBack = {}, embedded = true, onFullScreenChange = { novelFullScreen = it })
+                        HomeSource.channels -> app.iduanju.tg.ChannelFeedPage(onPlay)
+                        HomeSource.ai -> AiPage(onOpenDetail)
+                        else -> FeedPage(target as HomeSource, onOpenDetail)
                     }
-                    return@HorizontalPager
-                }
-                if (s.subs().isEmpty()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("「${s.label}」Android 版尚未移植", color = c.secondary, fontSize = 14.sp)
-                    }
-                } else {
-                    FeedPage(s, onOpenDetail)
                 }
             }
         }
     }
 }
 
-/**
- * iOS blurred cover backdrop. Modifier.blur only works on API 31+; on older systems decode a tiny
- * (16×22) thumbnail and let bilinear upscaling soften it, which reads as a heavy blur.
- */
+/** iOS AI剧: 红果 AI剧 | 黄果 AI 站 (the latter only behind the adult gate). */
 @Composable
-private fun BlurBackdrop(url: String?, modifier: Modifier, radius: androidx.compose.ui.unit.Dp, alpha: Float) {
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    val req = remember(url) {
-        coil.request.ImageRequest.Builder(ctx)
-            .data(url)
-            .size(48, 64)
-            .memoryCacheKey("blur:$url")
-            .build()
-    }
-    if (android.os.Build.VERSION.SDK_INT >= 31) {
-        AsyncImage(req, null, modifier.blur((radius / 2).coerceAtMost(12.dp)), contentScale = ContentScale.Crop, alpha = alpha)
-    } else {
-        AsyncImage(req, null, modifier, contentScale = ContentScale.Crop, alpha = alpha, filterQuality = androidx.compose.ui.graphics.FilterQuality.High)
+private fun AiPage(onOpen: (String) -> Unit) {
+    if (!IdjApp.instance.cms.adultUnlocked) { FeedPage(HomeSource.ai, onOpen); return }
+    val aiTabs = remember { listOf("红果 AI剧", "黄果 AI 站") }
+    val sel = (HomeSubSel.map[HomeSource.ai.label] ?: 0).coerceIn(0, 1)
+    Column(Modifier.fillMaxSize()) {
+        SegmentedTabs(
+            items = aiTabs,
+            selected = aiTabs[sel],
+            label = { it },
+            onSelect = { HomeSubSel.map[HomeSource.ai.label] = aiTabs.indexOf(it) },
+            modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp),
+        )
+        Box(Modifier.weight(1f)) {
+            if (sel == 1) app.iduanju.huangguo.HuangguoFeedPage(onOpen, aiOnly = true)
+            else FeedPage(HomeSource.ai, onOpen)
+        }
     }
 }
 
@@ -276,20 +316,14 @@ object HomeSubSel { val map = androidx.compose.runtime.mutableStateMapOf<String,
 object HomeJump { var label by androidx.compose.runtime.mutableStateOf<String?>(null) }
 
 /** iOS HomeChannelSheet: 「频道」 title + 完成, one section per page with its sub-channels as a 3-column grid of chips. */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun ChannelSheet(pages: List<Any>, labels: List<String>, current: Int, onDismiss: () -> Unit, onPick: (Int, Int?) -> Unit) {
+private fun ChannelSheet(pages: List<HomePageRef>, current: Int, onDismiss: () -> Unit, onPick: (Int, Int?) -> Unit) {
     val c = IdjThemeColors
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismiss, sheetState = state, containerColor = c.surface, dragHandle = { BottomSheetDefaults.DragHandle(color = c.text.copy(0.25f)) }) {
-        Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-            Text("频道", color = c.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center))
-            Box(Modifier.align(Alignment.CenterEnd).glassPill(RoundedCornerShape(50)).clickable(onClick = onDismiss).padding(horizontal = 16.dp, vertical = 8.dp)) {
-                Text("完成", color = c.accent, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            }
-        }
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            pages.forEachIndexed { pi, p ->
+    GlassBottomSheet(onDismiss, title = "频道", doneText = "完成", scroll = true) {
+        Column(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            pages.forEachIndexed { pi, page ->
+                val p = page.target
                 val subs: List<String> = when (p) {
                     is HomeSource -> when (p) {
                         HomeSource.huangguo -> listOf("视频站", "App 源")
@@ -297,32 +331,41 @@ private fun ChannelSheet(pages: List<Any>, labels: List<String>, current: Int, o
                         HomeSource.channels, HomeSource.manga -> emptyList()
                         else -> p.subs().map { it.subLabel }
                     }
-                    else -> listOf(labels[pi])
+                    else -> listOf(page.label)
                 }
                 if (subs.isEmpty()) return@forEachIndexed
-                Text(labels[pi], color = c.secondary, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
-                subs.chunked(3).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        row.forEachIndexed { j, t ->
-                            val si = subs.indexOf(t)
-                            val on = pi == current && (HomeSubSel.map[labels[pi]] ?: 0) == si
-                            Box(Modifier.weight(1f).height(44.dp).glassPill(RoundedCornerShape(10.dp), selected = on)
-                                    .clickable { onPick(pi, if (p is HomeSource && p != HomeSource.huangguo) si else null) }, contentAlignment = Alignment.Center) {
-                                Text(t, color = if (on) c.accent else c.text, fontSize = 15.sp, maxLines = 1)
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(page.label, color = c.secondary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
+                    subs.chunked(3).forEach { row ->
+                        Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            row.forEach { t ->
+                                val si = subs.indexOf(t)
+                                val on = pi == current && (HomeSubSel.map[page.label] ?: 0) == si
+                                SheetTile(t, on, Modifier.weight(1f).fillMaxHeight()) { onPick(pi, if (p is HomeSource && p != HomeSource.huangguo) si else null) }
                             }
+                            repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                         }
-                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
             }
-            Spacer(Modifier.height(24.dp))
         }
     }
 }
 
-/** iOS HomeChannelBar: unselected 17 secondary, selected 20 bold + 18x3 accent capsule; selected auto-centred. */
+/** Plain well on the sheet glass (iOS: glass fill, accent 14 % when selected, r10). */
 @Composable
-private fun ChannelBar(items: List<String>, selected: Int, ink: Color, onMore: () -> Unit = {}, onSelect: (Int) -> Unit) {
+private fun SheetTile(text: String, on: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val c = IdjThemeColors
+    Box(modifier.pressClick(0.97f, onClick = onClick).clip(RoundedCornerShape(10.dp)).background(if (on) c.accentSoft else c.glass)
+        .semantics { selected = on }.heightIn(min = 44.dp).padding(horizontal = 6.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
+        Text(text, color = if (on) c.accent else c.text, fontSize = 15.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+            textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** iOS HomeChannelBar: unselected 17 secondary, selected 24 heavy + 26x4 accent capsule; selected auto-centred. */
+@Composable
+private fun ChannelBar(items: List<HomePageRef>, selected: Int, onMore: () -> Unit, onSelect: (Int) -> Unit) {
     val c = IdjThemeColors
     val state = rememberLazyListState()
     LaunchedEffect(selected) {
@@ -330,104 +373,132 @@ private fun ChannelBar(items: List<String>, selected: Int, ink: Color, onMore: (
         val item = info.visibleItemsInfo.firstOrNull { it.index == selected }
         if (item != null) {
             val center = (info.viewportEndOffset - info.viewportStartOffset) / 2
-            state.animateScrollBy((item.offset + item.size / 2 - center).toFloat())
+            state.animateScrollBy((item.offset + item.size / 2 - center).toFloat(), DS.select())
         } else state.animateScrollToItem(selected)
     }
-    Row(Modifier.fillMaxWidth().padding(bottom = 14.dp, start = 20.dp), verticalAlignment = Alignment.Bottom) {
+    Row(Modifier.fillMaxWidth().padding(bottom = 12.dp, start = 20.dp), verticalAlignment = Alignment.Bottom) {
         LazyRow(state = state, modifier = Modifier.weight(1f).fadeEnd(0.9f), horizontalArrangement = Arrangement.spacedBy(22.dp), verticalAlignment = Alignment.Bottom) {
-            itemsIndexed(items) { i, label ->
-                val on = i == selected
-                // `.ttabs`: selected 24 sp heavy with a 26×4 accent bar under its leading edge.
-                Box(Modifier.height(40.dp).clickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, null) { onSelect(i) }
-                    .semantics { contentDescription = "home.channel.$label" }, contentAlignment = Alignment.BottomStart) {
-                    Text(label, color = if (on) ink else (if (ink == Color.White) Color.White.copy(0.66f) else c.secondary),
-                        fontSize = if (on) 24.sp else 17.sp, fontWeight = if (on) FontWeight.ExtraBold else FontWeight.Normal,
-                        modifier = Modifier.padding(bottom = 6.dp), maxLines = 1)
-                    if (on) Box(Modifier.offset(x = 1.dp).size(26.dp, 4.dp).clip(RoundedCornerShape(50)).background(c.accent))
-                }
-            }
-            item { Spacer(Modifier.width(12.dp)) }
+            itemsIndexed(items, key = { _, p -> p.key }, contentType = { _, _ -> "channel" }) { i, page -> ChannelTab(page.label, i == selected) { onSelect(i) } }
+            item("end") { Spacer(Modifier.width(12.dp)) }
         }
-        Box(Modifier.size(44.dp, 40.dp).clickable(onClick = onMore), contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.KeyboardArrowDown, "展开全部频道", tint = if (ink == Color.White) ink.copy(0.85f) else c.secondary)
-        }
+        PlainIconButton(Icons.Filled.KeyboardArrowDown, "展开全部频道", tint = c.secondary, iconSize = 24.dp, onClick = onMore)
+    }
+}
+
+/** `.ttabs`: selected 24 sp heavy with a 26×4 accent bar under its leading edge. */
+@Composable
+private fun ChannelTab(label: String, on: Boolean, onClick: () -> Unit) {
+    val c = IdjThemeColors
+    val bar = animateFloatAsState(if (on) 1f else 0f, DS.select(), label = "channelBar")
+    Box(Modifier.heightIn(min = 44.dp).selectable(on, remember { MutableInteractionSource() }, null, role = Role.Tab, onClick = onClick)
+        .semantics { contentDescription = "home.channel.$label" }, contentAlignment = Alignment.BottomStart) {
+        Text(label, color = if (on) c.text else c.secondary,
+            fontSize = if (on) 24.sp else 17.sp, fontWeight = if (on) FontWeight.ExtraBold else FontWeight.Normal,
+            modifier = Modifier.padding(bottom = 6.dp), maxLines = 1)
+        Box(Modifier.offset(x = 1.dp).size(26.dp, 4.dp).graphicsLayer {
+            alpha = bar.value.coerceIn(0f, 1f); scaleX = bar.value.coerceAtLeast(0f); transformOrigin = TransformOrigin(0f, 0.5f)
+        }.clip(CircleShape).background(c.accent))
     }
 }
 
 
 @Composable
 private fun FeedPage(source: HomeSource, onOpen: (String) -> Unit) {
-    val subs = source.subs()
-    var tab by remember { mutableStateOf(subs.getOrElse(HomeSubSel.map[source.label] ?: 0) { subs.first() }) }
-    LaunchedEffect(HomeSubSel.map[source.label]) { HomeSubSel.map[source.label]?.let { i -> subs.getOrNull(i)?.let { tab = it } } }
-    val boards = (tab as? HomeTab.Hongguo)?.g?.let { g -> g.subs.map { BoardSpec(g, it) } } ?: emptyList()
-    val heroPicks = boards.firstOrNull()?.let { BoardCache.items[it.id] }?.take(5) ?: emptyList()
-    var heroIndex by remember(tab) { mutableIntStateOf(0) }
+    val subs = remember(source) { source.subs() }
+    if (subs.isEmpty()) { EmptyState("「${source.label}」Android 版尚未移植", Modifier.padding(top = 80.dp)); return }
+    val tab = subs.getOrNull(HomeSubSel.map[source.label] ?: 0) ?: subs.first()
+    val boards = remember(tab) { (tab as? HomeTab.Hongguo)?.g?.let { g -> g.subs.map { BoardSpec(g, it) } } ?: emptyList() }
+    val list = rememberSaveable(tab.subLabel, saver = LazyListState.Saver) { LazyListState() }
+    ReportScrolled(list)
     LaunchedEffect(tab) { boards.firstOrNull()?.let { BoardCache.load(it) } }
 
-    @Composable fun subTabs(modifier: Modifier = Modifier) {
-        SegmentedTabs(subs, tab, { it.subLabel }, {
-            tab = it
-            HomeSubSel.map[source.label] = subs.indexOf(it)
-        }, modifier)
+    val subTabs: @Composable (Modifier) -> Unit = { m ->
+        SegmentedTabs(subs, tab, { it.subLabel }, { HomeSubSel.map[source.label] = subs.indexOf(it) }, m)
     }
     if (tab == HomeTab.ActorRank) {
-        app.iduanju.ui.profile.ActorRankList(bottomPadding = 96.dp) { subTabs() }
+        app.iduanju.ui.profile.ActorRankList(rootBottomInset() + 16.dp, list) { subTabs(Modifier.padding(bottom = 6.dp)) }
         return
     }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp + 72.dp)) {
-        if (subs.size > 1) subTabs(Modifier.padding(horizontal = 16.dp).padding(bottom = 16.dp))
-        Column(Modifier.padding(top = 0.dp), verticalArrangement = Arrangement.spacedBy(26.dp)) {
-            if (heroPicks.isNotEmpty()) {
-                PosterHero(boards.first().title, heroPicks, heroIndex, { heroIndex = it }, onOpen)
-            } else HeroSkeleton()
-            val cw = IdjApp.instance.library.continueWatching
-            if (source == HomeSource.hongguo && cw.isNotEmpty()) ContinueRow(cw, onOpen)
-            val heroIds = heroPicks.map { it.seriesId }.toSet()
-            val go = app.iduanju.ui.LocalNavigate.current
-            val shelfCount = LocalLayoutMetrics.current.shelfItemCount
-            boards.forEachIndexed { n, b ->
-                LaunchedEffect(b.id) { BoardCache.load(b) }
-                val items = BoardCache.items[b.id]
-                val rest = if (n == 0) items?.filter { it.seriesId !in heroIds } else items
-                HomeSection(b.title, if (BoardCache.failed.containsKey(b.id) && items == null) "加载失败，下拉重试" else null, rest?.take(shelfCount), onOpen) { go("board/${b.genre.name}/${b.sub.name}") }
+    val library = IdjApp.instance.library
+    val watching by remember { derivedStateOf { library.continueWatching.take(10) } }
+    val scope = rememberCoroutineScope()
+    var refreshing by remember(tab) { mutableStateOf(false) }
+    GlassPullToRefresh(refreshing, {
+        if (!refreshing) scope.launch {
+            refreshing = true
+            try { boards.mapNotNull { BoardCache.load(it, force = true) }.joinAll() } finally { refreshing = false }
+        }
+    }, Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), list, PaddingValues(bottom = rootBottomInset() + 16.dp)) {
+            if (subs.size > 1) item("tabs", "tabs") { subTabs(Modifier.padding(horizontal = 16.dp).padding(bottom = 16.dp)) }
+            item("hero", "hero") { FeedHero(boards.firstOrNull(), onOpen) }
+            if (source == HomeSource.hongguo && watching.isNotEmpty()) item("watching", "watching") {
+                Box(Modifier.padding(top = 24.dp)) { ContinueRow(watching, onOpen) }
             }
+            itemsIndexed(boards, key = { _, b -> b.id }, contentType = { _, _ -> "shelf" }) { n, b -> BoardShelf(b, n == 0, onOpen) }
         }
     }
 }
 
+private const val HERO_PICKS = 5
+
+/** Hero of the first board: its top picks, a skeleton while they load, or a retry block. */
 @Composable
-private fun HeroSkeleton() {
-    val c = IdjThemeColors
-    Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(228.dp).clip(RoundedCornerShape(22.dp)).background(c.surface))
+private fun FeedHero(board: BoardSpec?, onOpen: (String) -> Unit) {
+    val items = board?.let { BoardCache.items[it.id] }
+    val picks = remember(items) { items?.take(HERO_PICKS).orEmpty() }
+    val failed = board?.let { BoardCache.failed[it.id] }
+    when {
+        picks.isNotEmpty() -> PosterHero(board!!.title, picks, onOpen)
+        items == null && failed != null -> ErrorState("加载失败", note = failed) { BoardCache.load(board, force = true) }
+        items == null -> SkeletonBlock(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(if (LocalLayoutMetrics.current.tier == SizeTier.Compact) 178.dp else 204.dp), 22.dp)
+    }
 }
+
+private val HeroShape = RoundedCornerShape(22.dp)
+private val HeroGold = Color(0xFFF2B55C)
+private val NoFontPadding = PlatformTextStyle(includeFontPadding = false)
+private val HeroKicker = TextStyle(fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.6.sp, platformStyle = NoFontPadding)
+private val HeroTitle = TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold, platformStyle = NoFontPadding)
+private val HeroMeta = TextStyle(fontSize = 12.sp, lineHeight = 18.sp, platformStyle = NoFontPadding)
+private val HeroButton = TextStyle(fontSize = 13.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold, platformStyle = NoFontPadding)
+private val HeroScrim = Brush.linearGradient(listOf(Color.Black.copy(0.18f), Color.Black.copy(0.62f)))
+private val HeroSideScrim = Brush.linearGradient(listOf(Color.Black.copy(0.42f), Color.Black.copy(0.70f)))
+private const val HERO_CTA = "查看详情"
+private val CtaPad = 14.dp
+private val CtaIcon = 14.dp
+private val CtaGap = 6.dp
+
+private fun heroKicker(board: String, i: Int) = if (board.isEmpty()) "TOP ${i + 1}" else "$board · TOP ${i + 1}"
+private fun heroMeta(s: HGSeries) = listOf(
+    listOfNotNull(s.tags.take(2).joinToString(" · ").ifEmpty { null }, if (s.episodeCount > 0) "${s.episodeCount} 集" else null).joinToString(" · "),
+    if (s.playCount > 0) DS.count(s.playCount) + "热度" else ""
+).filter { it.isNotEmpty() }
+
+/** Sizes shared by every hero page, measured once per (picks, width, font scale). */
+@Immutable
+private class HeroMetrics(val poster: Dp, val cardHeight: Dp, val ctaWidth: Dp, val pillHeight: Dp, val touchHeight: Dp, val footerHeight: Dp, val stackedFooter: Boolean)
 
 /** Spec 10/11: intrinsic-height poster/info grid. Android font metrics must never
  * consume the footer's measurement budget (a constrained Column shrank the CTA).
  * Measure all real pager titles first so every page shares one sufficient height. */
 @Composable
-private fun PosterHero(board: String, picks: List<HGSeries>, index: Int, setIndex: (Int) -> Unit, onOpen: (String) -> Unit) {
+private fun PosterHero(board: String, picks: List<HGSeries>, onOpen: (String) -> Unit) {
     val pager = rememberPagerState { picks.size }
-    LaunchedEffect(pager.currentPage) { setIndex(pager.currentPage) }
-    // Keyed on settledPage: currentPage flips halfway through the animation, which would restart this
-    // effect and cancel the scroll, leaving the hero stuck between two pages.
-    LaunchedEffect(pager.settledPage, picks.size) {
-        if (picks.size > 1) { delay(6000); if (!pager.isScrollInProgress) pager.animateScrollToPage((pager.settledPage + 1) % picks.size) }
+    // Follows settledPage: currentPage flips halfway through the animation, which would restart the wait
+    // and cancel the scroll, leaving the hero stuck between two pages.
+    LaunchedEffect(pager, picks.size) {
+        if (picks.size > 1) snapshotFlow { pager.settledPage }.collectLatest { page ->
+            delay(6000)
+            if (!pager.isScrollInProgress) heroScrollTo(pager, (page + 1) % picks.size)
+        }
     }
-    val cur = picks.getOrNull(index)
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
-    val kickerStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.6.sp,
-        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false))
-    val titleStyle = androidx.compose.ui.text.TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold,
-        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false))
-    val metaStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, lineHeight = 18.sp,
-        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false))
+    val density = LocalDensity.current
+    val measurer = rememberTextMeasurer()
     // Material Text merges the ambient style (including letter spacing). Measure
     // that same resolved style, not a partial style that underestimates the label.
-    val buttonStyle = LocalTextStyle.current.merge(androidx.compose.ui.text.TextStyle(
-        fontSize = 13.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold,
-        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)))
+    val ambient = LocalTextStyle.current
+    val buttonStyle = remember(ambient) { ambient.merge(HeroButton) }
     val metrics = LocalLayoutMetrics.current
     val scope = rememberCoroutineScope()
     // Tablet: the hero card takes ~62 % and a 「热播速览」 stack fills the rest, so a wide window never shows one
@@ -438,97 +509,107 @@ private fun PosterHero(board: String, picks: List<HGSeries>, index: Int, setInde
         val heroWidth = if (withSide) (maxWidth - sideGap) * 0.62f else maxWidth
         // Preserve the spec's 112 dp poster on phones (132 dp on tablets); narrow windows keep a usable info column.
         val posterMax = if (metrics.tier == SizeTier.Compact) 112.dp else 132.dp
-        val posterWidth = minOf(posterMax, (heroWidth - 28.dp - 14.dp - 160.dp).coerceAtLeast(80.dp))
-        val infoWidth = heroWidth - 28.dp - posterWidth - 14.dp
-        val infoPx = with(density) { infoWidth.roundToPx() }
-        fun textHeight(text: String, style: androidx.compose.ui.text.TextStyle, lines: Int) = with(density) {
-            measurer.measure(text, style, maxLines = lines, overflow = TextOverflow.Ellipsis,
-                constraints = androidx.compose.ui.unit.Constraints(maxWidth = infoPx)).size.height.toDp()
+        val m = remember(picks, board, heroWidth, posterMax, density, measurer, buttonStyle) {
+            val posterWidth = minOf(posterMax, (heroWidth - 28.dp - 14.dp - 160.dp).coerceAtLeast(80.dp))
+            val infoWidth = heroWidth - 28.dp - posterWidth - 14.dp
+            val infoPx = with(density) { infoWidth.roundToPx() }
+            fun textHeight(text: String, style: TextStyle, lines: Int) = with(density) {
+                measurer.measure(text, style, maxLines = lines, overflow = TextOverflow.Ellipsis,
+                    constraints = Constraints(maxWidth = infoPx)).size.height.toDp()
+            }
+            val ctaWidth = with(density) {
+                val labelWidth = measurer.measure(HERO_CTA, buttonStyle, maxLines = 1, softWrap = false).size.width
+                (labelWidth + 2 * CtaPad.roundToPx() + CtaIcon.roundToPx() + CtaGap.roundToPx()).toDp()
+            }
+            val pillHeight = with(density) { 16.sp.toDp() + 12.dp }.coerceAtLeast(32.dp)
+            val touchHeight = maxOf(48.dp, pillHeight)
+            val dotsWidth = if (picks.size > 1) (14 + (picks.size - 1) * 9).dp else 0.dp
+            val stackedFooter = picks.size > 1 && infoWidth < ctaWidth + dotsWidth + 8.dp
+            val footerHeight = touchHeight + if (stackedFooter) 12.dp else 0.dp
+            val infoHeight = picks.mapIndexed { i, s ->
+                val meta = heroMeta(s)
+                4.dp + textHeight(heroKicker(board, i), HeroKicker, 1) + 6.dp + textHeight(s.title, HeroTitle, 2) +
+                    (if (meta.isEmpty()) 0.dp else 7.dp + meta.map { textHeight(it, HeroMeta, 1) }.fold(0.dp) { a, b -> a + b }) +
+                    8.dp + footerHeight
+            }.maxOrNull() ?: 149.dp
+            HeroMetrics(posterWidth, maxOf(posterWidth * 4 / 3, infoHeight) + 28.dp, ctaWidth, pillHeight, touchHeight, footerHeight, stackedFooter)
         }
-        val ctaLabel = "查看详情"
-        val pillPadding = 14.dp
-        val iconSize = 14.dp
-        val iconGap = 6.dp
-        val ctaWidth = with(density) {
-            val labelWidth = measurer.measure(ctaLabel, buttonStyle, maxLines = 1, softWrap = false).size.width
-            (labelWidth + 2 * pillPadding.roundToPx() + iconSize.roundToPx() + iconGap.roundToPx()).toDp()
-        }
-        val visualButtonHeight = with(density) { 16.sp.toDp() + 12.dp }.coerceAtLeast(32.dp)
-        val touchHeight = maxOf(48.dp, visualButtonHeight)
-        val dotsWidth = if (picks.size > 1) (14 + (picks.size - 1) * 9).dp else 0.dp
-        val stackedFooter = picks.size > 1 && infoWidth < ctaWidth + dotsWidth + 8.dp
-        val footerHeight = touchHeight + if (stackedFooter) 12.dp else 0.dp
-        fun kicker(i: Int) = if (board.isEmpty()) "TOP ${i + 1}" else "$board · TOP ${i + 1}"
-        fun metadata(s: HGSeries) = listOf(
-            listOfNotNull(s.tags.take(2).joinToString(" · ").ifEmpty { null }, if (s.episodeCount > 0) "${s.episodeCount} 集" else null).joinToString(" · "),
-            if (s.playCount > 0) DS.count(s.playCount) + "热度" else ""
-        ).filter { it.isNotEmpty() }
-        val infoHeight = picks.mapIndexed { i, s ->
-            4.dp + textHeight(kicker(i), kickerStyle, 1) + 6.dp + textHeight(s.title, titleStyle, 2) +
-                (if (metadata(s).isEmpty()) 0.dp else 7.dp + metadata(s).map { textHeight(it, metaStyle, 1) }.fold(0.dp) { a, b -> a + b }) +
-                8.dp + footerHeight
-        }.maxOrNull() ?: 149.dp
-        val cardHeight = maxOf(posterWidth * 4 / 3, infoHeight) + 28.dp
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(sideGap)) {
-        Box(Modifier.width(heroWidth).height(cardHeight)
-            .shadow(15.dp, RoundedCornerShape(22.dp), ambientColor = Color.Black.copy(0.22f), spotColor = Color.Black.copy(0.22f))
-            .clip(RoundedCornerShape(22.dp)).background(Color(0xFF241A1A))) {
-            androidx.compose.animation.Crossfade(cur?.cover, label = "heroBg") { url ->
-                BlurBackdrop(url, Modifier.fillMaxSize().scale(1.5f), 40.dp, 0.85f)
+            Box(Modifier.width(heroWidth).height(m.cardHeight)
+                .shadow(15.dp, HeroShape, ambientColor = Color.Black.copy(0.22f), spotColor = Color.Black.copy(0.22f))
+                .clip(HeroShape).background(Color(0xFF241A1A))) {
+                HeroBackdrop(picks, pager)
+                Box(Modifier.fillMaxSize().background(HeroScrim))
+                HorizontalPager(pager, Modifier.fillMaxSize().testTag("home.hero.pager")) { i -> picks.getOrNull(i)?.let { HeroPage(i, it, board, picks.size, pager, m, buttonStyle, onOpen) } }
             }
-            Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color.Black.copy(0.18f), Color.Black.copy(0.62f)))))
-            HorizontalPager(pager, Modifier.fillMaxSize().testTag("home.hero.pager")) { i ->
-                val s = picks[i]
-                Row(Modifier.fillMaxSize().testTag("home.hero.page.$i").graphicsLayer { alpha = 1f - kotlin.math.abs(pager.getOffsetDistanceInPages(i)).coerceIn(0f, 1f) * 1.6f }
-                    .pressClick(0.98f, label = "home.hero.page.$i") {
-                        app.iduanju.data.Catalog.rememberPreview(s.seriesId, s.title, s.cover)
-                        onOpen(s.seriesId)
-                    }.padding(14.dp), verticalAlignment = Alignment.Top) {
-                    PosterArt(s.cover, Modifier.size(posterWidth, posterWidth * 4 / 3), badge = HomeFmt.progress(s)?.let { DS.spaced(it) })
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f).fillMaxHeight().padding(top = 3.dp, bottom = 1.dp)) {
-                        Text(kicker(i), Modifier.testTag("home.hero.kicker.$i"), color = Color(0xFFF2B55C), style = kickerStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(s.title, Modifier.padding(top = 6.dp).testTag("home.hero.title.$i"), color = Color.White, style = titleStyle, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        metadata(s).forEachIndexed { j, line ->
-                            Text(line, Modifier.padding(top = if (j == 0) 7.dp else 0.dp).testTag("home.hero.meta.$i.$j"),
-                                color = Color.White.copy(0.74f), style = metaStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        Spacer(Modifier.weight(1f).heightIn(min = 8.dp))
-                        @Composable fun cta() {
-                            // Explicit 48 dp hit slot; the spec's 32 dp white pill stays visually compact.
-                            Box(Modifier.height(touchHeight).width(ctaWidth).testTag("home.hero.cta.$i")
-                                .pressClick(0.98f, label = ctaLabel) { onOpen(s.seriesId) }, contentAlignment = Alignment.Center) {
-                                // Glass CTA over the blurred hero, following 我的 → 液态玻璃 / 毛玻璃.
-                                Row(Modifier.fillMaxWidth().height(visualButtonHeight).testTag("home.hero.pill.$i")
-                                    .glassSurface(CircleShape, dark = true, shadowRadius = 6.dp, fallbackAlpha = 0.70f, activeOverlay = Color.White.copy(alpha = 0.10f))
-                                    .padding(horizontal = pillPadding),
-                                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(iconGap)) {
-                                    Icon(Icons.Filled.PlayArrow, null, Modifier.size(iconSize), tint = Color.White)
-                                    Text(ctaLabel, Modifier.weight(1f).testTag("home.hero.ctaText.$i"), color = Color.White, style = buttonStyle, maxLines = 1, softWrap = false)
-                                }
-                            }
-                        }
-                        @Composable fun dots() {
-                            if (picks.size > 1) Row(Modifier.testTag("home.hero.dots.$i"), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                picks.indices.forEach { n ->
-                                    val w by animateDpAsState(if (n == index) 14.dp else 5.dp, DS.select(), label = "dot")
-                                    Box(Modifier.size(w, 5.dp).clip(RoundedCornerShape(50)).background(if (n == index) Color.White else Color.White.copy(0.4f)))
-                                }
-                            }
-                        }
-                        if (stackedFooter) Column(Modifier.fillMaxWidth().height(footerHeight)) {
-                            cta()
-                            Box(Modifier.fillMaxWidth().height(12.dp), contentAlignment = Alignment.CenterEnd) { dots() }
-                        } else Row(Modifier.fillMaxWidth().height(footerHeight), verticalAlignment = Alignment.CenterVertically) {
-                            cta(); Spacer(Modifier.weight(1f)); dots()
-                        }
-                    }
-                }
+            if (withSide) HeroSideStack(board, picks, pager, Modifier.weight(1f).height(m.cardHeight), onOpen) { i ->
+                scope.launch { heroScrollTo(pager, i) }
             }
         }
-        if (withSide) HeroSideStack(board, picks, index, Modifier.weight(1f).height(cardHeight), onOpen) { i ->
-            scope.launch { pager.animateScrollToPage(i) }
+    }
+}
+
+private suspend fun heroScrollTo(pager: PagerState, page: Int) = pager.animateScrollToPage(page, animationSpec = DS.panel())
+
+/** Poster colours behind the hero; only this layer follows the page change. */
+@Composable
+private fun HeroBackdrop(picks: List<HGSeries>, pager: PagerState) {
+    val cover by remember(picks, pager) { derivedStateOf { picks.getOrNull(pager.currentPage)?.cover } }
+    Crossfade(cover, animationSpec = Motion.fade(Motion.LONG), label = "heroBg") { url -> BlurredCover(url, Modifier.fillMaxSize().scale(1.5f), 0.85f) }
+}
+
+@Composable
+private fun HeroPage(i: Int, s: HGSeries, board: String, count: Int, pager: PagerState, m: HeroMetrics, buttonStyle: TextStyle, onOpen: (String) -> Unit) {
+    Row(Modifier.fillMaxSize().testTag("home.hero.page.$i").graphicsLayer { alpha = 1f - kotlin.math.abs(pager.getOffsetDistanceInPages(i)).coerceIn(0f, 1f) * 1.6f }
+        .pressClick(0.98f, label = "${heroKicker(board, i)}，${s.title}") {
+            app.iduanju.data.Catalog.rememberPreview(s.seriesId, s.title, s.cover)
+            onOpen(s.seriesId)
+        }.padding(14.dp), verticalAlignment = Alignment.Top) {
+        PosterArt(s.cover, Modifier.size(m.poster, m.poster * 4 / 3), badge = HomeFmt.progress(s)?.let { DS.spaced(it) })
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f).fillMaxHeight().padding(top = 3.dp, bottom = 1.dp)) {
+            Text(heroKicker(board, i), Modifier.testTag("home.hero.kicker.$i"), color = HeroGold, style = HeroKicker, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(s.title, Modifier.padding(top = 6.dp).testTag("home.hero.title.$i"), color = Color.White, style = HeroTitle, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            heroMeta(s).forEachIndexed { j, line ->
+                Text(line, Modifier.padding(top = if (j == 0) 7.dp else 0.dp).testTag("home.hero.meta.$i.$j"),
+                    color = Color.White.copy(0.74f), style = HeroMeta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.weight(1f).heightIn(min = 8.dp))
+            val cta: @Composable () -> Unit = { HeroCta(i, m, buttonStyle) { onOpen(s.seriesId) } }
+            if (m.stackedFooter) Column(Modifier.fillMaxWidth().height(m.footerHeight)) {
+                cta()
+                Box(Modifier.fillMaxWidth().height(12.dp), contentAlignment = Alignment.CenterEnd) { HeroDots(i, count, pager) }
+            } else Row(Modifier.fillMaxWidth().height(m.footerHeight), verticalAlignment = Alignment.CenterVertically) {
+                cta(); Spacer(Modifier.weight(1f)); HeroDots(i, count, pager)
+            }
         }
+    }
+}
+
+/** Explicit 48 dp hit slot; the spec's 32 dp pill stays visually compact. */
+@Composable
+private fun HeroCta(i: Int, m: HeroMetrics, style: TextStyle, onClick: () -> Unit) {
+    Box(Modifier.height(m.touchHeight).width(m.ctaWidth).testTag("home.hero.cta.$i")
+        .pressClick(0.98f, label = HERO_CTA, onClick = onClick), contentAlignment = Alignment.Center) {
+        // Glass CTA over the blurred hero, following 我的 → 液态玻璃 / 毛玻璃.
+        Row(Modifier.fillMaxWidth().height(m.pillHeight).testTag("home.hero.pill.$i")
+            .glassSurface(CircleShape, dark = true, shadowRadius = 6.dp, fallbackAlpha = 0.70f, activeOverlay = Color.White.copy(alpha = 0.10f))
+            .padding(horizontal = CtaPad),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CtaGap)) {
+            Icon(Icons.Filled.PlayArrow, null, Modifier.size(CtaIcon), tint = Color.White)
+            Text(HERO_CTA, Modifier.weight(1f).testTag("home.hero.ctaText.$i"), color = Color.White, style = style, maxLines = 1, softWrap = false)
+        }
+    }
+}
+
+@Composable
+private fun HeroDots(i: Int, count: Int, pager: PagerState) {
+    if (count <= 1) return
+    val current = pager.currentPage
+    Row(Modifier.testTag("home.hero.dots.$i").semantics { contentDescription = "第 ${current + 1} 部，共 $count 部" }, horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        repeat(count) { n ->
+            val w by animateDpAsState(if (n == current) 14.dp else 5.dp, DS.select(), label = "dot")
+            Box(Modifier.size(w, 5.dp).clip(CircleShape).background(if (n == current) Color.White else Color.White.copy(0.4f)))
         }
     }
 }
@@ -539,15 +620,15 @@ private fun PosterHero(board: String, picks: List<HGSeries>, index: Int, setInde
  * round arrow opens its detail page.
  */
 @Composable
-private fun HeroSideStack(board: String, picks: List<HGSeries>, current: Int, modifier: Modifier, onOpen: (String) -> Unit, onFocus: (Int) -> Unit) {
-    val others = picks.indices.filter { it != current }.take(3)
+private fun HeroSideStack(board: String, picks: List<HGSeries>, pager: PagerState, modifier: Modifier, onOpen: (String) -> Unit, onFocus: (Int) -> Unit) {
+    val others by remember(picks, pager) { derivedStateOf { picks.indices.filter { it != pager.currentPage }.take(3) } }
     Box(modifier
-        .shadow(15.dp, RoundedCornerShape(22.dp), ambientColor = Color.Black.copy(0.22f), spotColor = Color.Black.copy(0.22f))
-        .clip(RoundedCornerShape(22.dp)).background(Color(0xFF1E1A22))) {
-        androidx.compose.animation.Crossfade(picks.getOrNull(others.firstOrNull() ?: 0)?.cover, label = "heroSideBg") { url ->
-            BlurBackdrop(url, Modifier.fillMaxSize().scale(1.6f), 40.dp, 0.7f)
+        .shadow(15.dp, HeroShape, ambientColor = Color.Black.copy(0.22f), spotColor = Color.Black.copy(0.22f))
+        .clip(HeroShape).background(Color(0xFF1E1A22))) {
+        Crossfade(picks.getOrNull(others.firstOrNull() ?: 0)?.cover, animationSpec = Motion.fade(Motion.LONG), label = "heroSideBg") { url ->
+            BlurredCover(url, Modifier.fillMaxSize().scale(1.6f), 0.7f)
         }
-        Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color.Black.copy(0.42f), Color.Black.copy(0.70f)))))
+        Box(Modifier.fillMaxSize().background(HeroSideScrim))
         Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("热播速览", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
@@ -559,23 +640,23 @@ private fun HeroSideStack(board: String, picks: List<HGSeries>, current: Int, mo
                 others.forEach { i ->
                     val s = picks[i]
                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                        .pressClick(0.98f, label = "home.hero.side.$i") { onFocus(i) }.padding(vertical = 2.dp),
+                        .testTag("home.hero.side.$i").pressClick(0.98f, label = s.title) { onFocus(i) }.padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(36.dp, 48.dp).clip(RoundedCornerShape(7.dp)).background(Color.White.copy(0.1f))) {
                             AsyncImage(s.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                         }
                         Spacer(Modifier.width(10.dp))
-                        Text("${i + 1}", color = Color(0xFFF2B55C), fontSize = 16.sp, fontWeight = FontWeight.Black,
+                        Text("${i + 1}", color = HeroGold, fontSize = 16.sp, fontWeight = FontWeight.Black,
                             fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, modifier = Modifier.width(18.dp))
                         Column(Modifier.weight(1f)) {
                             Text(s.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             val meta = homeShelfMeta(s)
                             if (meta.isNotEmpty()) Text(meta, color = Color.White.copy(0.62f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        Spacer(Modifier.width(6.dp))
-                        Box(Modifier.size(30.dp).clip(CircleShape).background(Color.White.copy(0.14f))
-                            .pressClick(label = "打开 ${s.title}") { onOpen(s.seriesId) }, contentAlignment = Alignment.Center) {
-                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(18.dp), tint = Color.White)
+                        Box(Modifier.size(44.dp).pressClick(label = "打开 ${s.title}") { onOpen(s.seriesId) }, contentAlignment = Alignment.Center) {
+                            Box(Modifier.size(30.dp).clip(CircleShape).background(Color.White.copy(0.14f)), contentAlignment = Alignment.Center) {
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(18.dp), tint = Color.White)
+                            }
                         }
                     }
                 }
@@ -586,28 +667,29 @@ private fun HeroSideStack(board: String, picks: List<HGSeries>, current: Int, mo
 
 @Composable
 fun HomeBadge(text: String, modifier: Modifier = Modifier) {
-    Box(modifier.height(17.dp).clip(RoundedCornerShape(5.dp)).background(Color.Black.copy(0.62f)).padding(horizontal = 5.dp), contentAlignment = Alignment.Center) {
+    Box(modifier.heightIn(min = 17.dp).clip(RoundedCornerShape(5.dp)).background(Color.Black.copy(0.62f)).padding(horizontal = 5.dp), contentAlignment = Alignment.Center) {
         Text(text, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 
-/** ui-redesign 10/11 `.hs`: section header + one horizontal row of 112 dp cells. */
+/** ui-redesign 10/11 `.hs`: one board as section header + horizontal row of 112 dp cells; loads when it is about to show. */
 @Composable
-private fun HomeSection(title: String, note: String?, list: List<HGSeries>?, onOpen: (String) -> Unit, onMore: () -> Unit) {
-    val c = IdjThemeColors
+private fun BoardShelf(b: BoardSpec, first: Boolean, onOpen: (String) -> Unit) {
+    val go = app.iduanju.ui.LocalNavigate.current
     val metrics = LocalLayoutMetrics.current
+    LaunchedEffect(b.id) { BoardCache.load(b) }
+    val items = BoardCache.items[b.id]
+    val failed = items == null && BoardCache.failed.containsKey(b.id)
+    // 第一个榜单一律跳过 hero 里已展示的剧
+    val list = remember(items, first, metrics.shelfItemCount) { items?.drop(if (first) HERO_PICKS else 0)?.take(metrics.shelfItemCount) }
     // Tablet: larger cells and up to 16 items so a 1100 dp shelf fills edge to edge instead of stopping at 60 %.
     val cell = metrics.shelfCardWidth
     val gap = if (metrics.tier == SizeTier.Compact) 10.dp else 14.dp
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionHeader2(title, note) { MoreLink(onClick = onMore) }
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(gap)) {
-            if (list == null) items(if (metrics.tier == SizeTier.Compact) 4 else 9) {
-                Column(Modifier.width(cell)) {
-                    Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(RoundedCornerShape(12.dp)).background(c.glass))
-                    Box(Modifier.padding(top = 8.dp).width(80.dp).height(12.dp).clip(RoundedCornerShape(4.dp)).background(c.glass))
-                }
-            } else items(list, key = { it.seriesId }) { s ->
+    Column(Modifier.padding(top = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SectionHeader2(b.title, if (failed) "加载失败，下拉重试" else null) { MoreLink { go("board/${b.genre.name}/${b.sub.name}") } }
+        if (!failed) LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(gap), userScrollEnabled = list != null) {
+            if (list == null) items(if (metrics.tier == SizeTier.Compact) 4 else 9, key = { "skeleton$it" }, contentType = { "skeleton" }) { PosterSkeleton(Modifier.width(cell)) }
+            else items(list, key = { it.seriesId }, contentType = { "poster" }) { s ->
                 app.iduanju.ui.category.PosterCell(s, null, homeShelfMeta(s), onOpen, Modifier.width(cell))
             }
         }
@@ -624,11 +706,11 @@ private fun homeShelfMeta(s: HGSeries): String {
 @Composable
 fun HomePosterCard(s: HGSeries, onOpen: (String) -> Unit) {
     val c = IdjThemeColors
-    Column(Modifier.clickable {
+    Column(Modifier.pressClick(0.97f) {
         app.iduanju.data.Catalog.rememberPreview(s.seriesId, s.title, s.cover)
         onOpen(s.seriesId)
     }) {
-        Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(RoundedCornerShape(10.dp)).background(c.elevated).border(0.6.dp, c.text.copy(0.12f), RoundedCornerShape(10.dp))) {
+        Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(RoundedCornerShape(10.dp)).background(c.glass).border(0.6.dp, c.text.copy(0.12f), RoundedCornerShape(10.dp))) {
             AsyncImage(s.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             HomeFmt.progress(s)?.let { HomeBadge(it, Modifier.align(Alignment.BottomEnd).padding(5.dp)) }
         }
@@ -642,36 +724,48 @@ fun HomePosterCard(s: HGSeries, onOpen: (String) -> Unit) {
 @Composable
 fun PosterCard(s: HGSeries, onOpen: (String) -> Unit) = HomePosterCard(s, onOpen)
 
-/** ui-redesign 10 `.cw`: 296 dp cards — cover, title, 看到第 N 集 · 共 M 集, progress, round play button. */
+/** ui-redesign 10 `.cw`: 296 dp cards — cover, title, 看到第 N 集 · 共 M 集, progress, round play button; long press deletes the record. */
 @Composable
-internal fun ContinueRow(list: List<app.iduanju.data.WatchProgress>, onOpen: (String) -> Unit, onPlay: ((app.iduanju.data.WatchProgress) -> Unit)? = null) {
-    val c = IdjThemeColors
+internal fun ContinueRow(list: List<WatchProgress>, onOpen: (String) -> Unit, onPlay: ((WatchProgress) -> Unit)? = null) {
     val go = app.iduanju.ui.LocalNavigate.current
     val metrics = LocalLayoutMetrics.current
+    val play: (WatchProgress) -> Unit = onPlay ?: { p -> go(Routes.resume(p)) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionHeader2("继续观看") { MoreLink { go("library/history") } }
         // A full shelf of recent dramas; tablets get 280 dp cards with a wider gap.
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(if (metrics.tier == SizeTier.Compact) 10.dp else 14.dp)) {
-            items(list.take(10), key = { it.seriesId }) { p ->
-                Row(Modifier.width(metrics.continueCardWidth).glassSurface(RoundedCornerShape(18.dp), shadowRadius = 12.dp)
-                    .pressClick(0.98f, label = p.title) { onOpen(p.seriesId) }
-                    .padding(start = 10.dp, end = 12.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Box(Modifier.size(52.dp, 69.dp).clip(RoundedCornerShape(8.dp)).background(c.glass)) {
-                        AsyncImage(p.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(p.title, color = c.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(DS.spaced(p.resumeLabel), color = c.secondary, fontSize = 12.sp, maxLines = 1, modifier = Modifier.padding(top = 2.dp))
-                        DSProgressBar(p.fraction, Modifier.padding(top = 9.dp))
-                    }
-                    Box(Modifier.size(38.dp).clip(CircleShape).background(c.text).pressClick(label = "继续播放 ${p.title}") { if (onPlay != null) onPlay(p) else go("player/${p.seriesId}/${p.episodeIndex}") },
-                        contentAlignment = Alignment.Center) {
-                        Icon(Icons.Filled.PlayArrow, null, Modifier.size(18.dp).offset(x = 1.dp), tint = c.bg)
-                    }
+            items(list.take(10), key = { it.seriesId }, contentType = { "watching" }) { p ->
+                ContinueCard(p, onOpen, play, Modifier.animateItem().width(metrics.continueCardWidth))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContinueCard(p: WatchProgress, onOpen: (String) -> Unit, onPlay: (WatchProgress) -> Unit, modifier: Modifier) {
+    val c = IdjThemeColors
+    var menu by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Row(Modifier.fillMaxWidth().pressLongClick(0.98f, label = p.title, longLabel = "删除观看记录", onLongClick = { menu = true }) { onOpen(p.seriesId) }
+            .dsCard(18.dp).padding(start = 10.dp, end = 9.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(Modifier.size(52.dp, 69.dp).clip(RoundedCornerShape(8.dp)).background(c.glass)) {
+                AsyncImage(p.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(p.title, color = c.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(remember(p.resumeLabel) { DS.spaced(p.resumeLabel) }, color = c.secondary, fontSize = 12.sp, maxLines = 1, modifier = Modifier.padding(top = 2.dp))
+                DSProgressBar(p.fraction, Modifier.padding(top = 9.dp))
+            }
+            Box(Modifier.size(44.dp).pressClick(label = "继续播放 ${p.title}") { onPlay(p) }, contentAlignment = Alignment.Center) {
+                Box(Modifier.size(38.dp).clip(CircleShape).background(c.text), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.PlayArrow, null, Modifier.size(18.dp).offset(x = 1.dp), tint = c.bg)
                 }
             }
+        }
+        GlassMenu(menu, { menu = false }) {
+            GlassMenuItem("删除观看记录", icon = Icons.Outlined.Delete, destructive = true) { menu = false; IdjApp.instance.library.removeProgress(p.seriesId) }
         }
     }
 }

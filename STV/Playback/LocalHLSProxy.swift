@@ -26,10 +26,12 @@ final class LocalHLSProxy: @unchecked Sendable {
         /// 红果 CENC MP4: content key, and the per-range decryptor once the header is read (`prepareCENC`).
         var cencKey: String?
         var cenc: CENCDecryptor.RangePlan?
-        /// Pre-resolved HLS AES-128 key (16 bytes), served locally when present.
+        /// Pre-resolved HLS AES-128 key (16 bytes), served at `/<token>/k.key` when present.
         var hlsKey: Data? = nil
         /// MP4 chunk size (CENC uses small chunks so the header and first frames arrive fast on slow links).
         var chunk = BufferSettings.mp4Chunk
+        /// TVBox: address policy of the playlist and of everything it names (see `LanPolicy`).
+        var lan: Bool? = nil
     }
     static let shared = LocalHLSProxy()
 
@@ -72,8 +74,9 @@ final class LocalHLSProxy: @unchecked Sendable {
     }
 
     /// Proxy URL for an upstream m3u8 (nil if the listener can't start).
-    func playlistURL(_ upstream: String, headers: [String: String], strip: Bool = true, budget: Int = 0, hlsKey: Data? = nil) -> String? {
-        guard let u = register(upstream, headers: headers, strip: strip, budget: budget, kind: "p.m3u8") else { return nil }
+    /// When `hlsKey` (16-byte AES-128 key) is supplied, `#EXT-X-KEY` URIs are rewritten to `/<token>/k.key`.
+    func playlistURL(_ upstream: String, headers: [String: String], strip: Bool = true, budget: Int = 0, hlsKey: Data? = nil, lan: Bool? = nil) -> String? {
+        guard let u = register(upstream, headers: headers, strip: strip, budget: budget, kind: "p.m3u8", lan: lan) else { return nil }
         if let hlsKey, hlsKey.count == 16, let token = Self.token(of: u) {
             lock.lock(); routes[token]?.hlsKey = hlsKey; lock.unlock()
         }
@@ -144,23 +147,26 @@ final class LocalHLSProxy: @unchecked Sendable {
 
     func tdSession(_ token: String) -> TDStreamSession? { route(token)?.td }
 
-    private func register(_ upstream: String, headers: [String: String], strip: Bool, budget: Int, kind: String,strongToken:Bool=false) -> String? {
+    private func register(_ upstream: String, headers: [String: String], strip: Bool, budget: Int, kind: String,strongToken:Bool=false, lan: Bool? = nil) -> String? {
         guard let port = start() else { return nil }
         let token = strongToken ? UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased() : String(UUID().uuidString.prefix(8)).lowercased()
-        let pf = budget > 0 ? makePrefetcher(token, budget, headers, strip) : nil
+        let pf = budget > 0 ? makePrefetcher(token, budget, headers, strip, lan) : nil
         lock.lock()
         if routes.count > 64 { routes.values.forEach { $0.prefetcher?.stop() }; routes = [:] }
-        routes[token] = Route(headers: headers, strip: strip, prefetcher: pf)
+        routes[token] = Route(headers: headers, strip: strip, prefetcher: pf, lan: lan)
         lock.unlock()
         return "http://127.0.0.1:\(port)/\(token)/\(kind)?u=\(Self.b64(upstream))"
     }
 
-    private func makePrefetcher(_ token: String, _ budget: Int, _ headers: [String: String], _ strip: Bool) -> Prefetcher {
+    private func makePrefetcher(_ token: String, _ budget: Int, _ headers: [String: String], _ strip: Bool, _ lan: Bool?) -> Prefetcher {
         let session = self.session
-        return Prefetcher(token: token, budget: budget, headers: headers) { unit, headers in
-            var r = URLRequest(url: unit.url)
-            for (k, v) in headers { r.setValue(v, forHTTPHeaderField: k) }
-            if r.value(forHTTPHeaderField: "User-Agent") == nil { r.setValue(SiteHTTP.userAgent, forHTTPHeaderField: "User-Agent") }
+        // Segments whose bytes must be patched (fake image header) can only be served complete.
+        let follow: @Sendable (PrefetchUnit, [String: String]) -> SegmentFeed = { unit, headers in
+            SegmentFeed(session: session, request: LocalHLSProxy.request(unit.url, headers), lan: lan)
+        }
+        let open = strip ? nil : follow
+        return Prefetcher(token: token, budget: budget, headers: headers, open: open) { unit, headers in
+            var r = Self.request(unit.url, headers)
             if let rg = unit.range { r.setValue("bytes=\(rg.lowerBound)-\(rg.upperBound)", forHTTPHeaderField: "Range") }
             let (d, resp) = try await session.data(for:r)
             let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
@@ -170,6 +176,13 @@ final class LocalHLSProxy: @unchecked Sendable {
             }
             return strip ? Self.stripFakeHeader(d) : d
         }
+    }
+
+    private static func request(_ url: URL, _ headers: [String: String]) -> URLRequest {
+        var r = URLRequest(url: url)
+        for (k, v) in headers { r.setValue(v, forHTTPHeaderField: k) }
+        if r.value(forHTTPHeaderField: "User-Agent") == nil { r.setValue(SiteHTTP.userAgent, forHTTPHeaderField: "User-Agent") }
+        return r
     }
 
     /// Token of a proxy URL we issued (nil for anything else).
@@ -190,9 +203,12 @@ final class LocalHLSProxy: @unchecked Sendable {
     func enablePrefetch(_ token: String, budget: Int) {
         lock.lock(); defer { lock.unlock() }
         guard budget > 0, var r = routes[token], r.prefetcher == nil else { return }
-        r.prefetcher = makePrefetcher(token, budget, r.headers, r.strip)
+        r.prefetcher = makePrefetcher(token, budget, r.headers, r.strip, r.lan)
         routes[token] = r
     }
+
+    /// 0 while the server has not been needed.
+    var boundPort: Int { lock.lock(); defer { lock.unlock() }; return Int(port) }
 
     func setPosition(_ token: String, _ seconds: Double) { route(token)?.prefetcher?.setPosition(seconds) }
 
@@ -291,25 +307,46 @@ final class LocalHLSProxy: @unchecked Sendable {
               let upstream = Self.unb64(String(comps[1].dropFirst(2))), let url = URL(string: upstream),
               url.scheme == "https" || url.scheme == "http" else { return reply(c, 404, "text/plain", Data()) }
         guard let rt = route(segs[0]) else { return reply(c, 404, "text/plain", Data()) }
+        do { try await LanPolicy.check(upstream, lan: rt.lan) } catch { return reply(c, 403, "text/plain", Data(error.localizedDescription.utf8)) }
         let headers = rt.headers
         if segs[1] == "v.mp4" || (rt.guardedNet != nil && segs[1].hasPrefix("v.")) { return await serveMP4(c, token: segs[0], url: url, route: rt, range: rangeHeader, head: parts[0] == "HEAD") }
+        let session = self.session, lan = rt.lan
+        if let slice = Self.slice(rangeHeader), segs[1] == "s.ts" || segs[1] == "r", !rt.strip, rt.guardedNet == nil {
+            // A slice of a bigger file (EXT-X-BYTERANGE) passes through as such: the file itself may be gigabytes.
+            var req = Self.request(url, headers)
+            req.setValue(rangeHeader, forHTTPHeaderField: "Range")
+            let sliced = req
+            func open() -> SegmentFeed { SegmentFeed(session: session, request: sliced, keep: false, lan: lan) }
+            return await relay(c, open(), slice: slice, type: segs[1] == "s.ts" ? "video/mp2t" : "application/octet-stream", own: true, retry: open)
+        }
         if segs[1] == "s.ts", let pf = rt.prefetcher {
             let unit = PrefetchUnit(key: PrefetchStore.key(upstream), url: url, range: nil, start: 0, duration: 0)
+            if let d = pf.cached(unit.key) { return reply(c, 200, "video/mp2t", d) }
+            if let feed = pf.follow(unit) { return await relay(c, feed, retry: { pf.follow(unit) }) }
             do { return reply(c, 200, "video/mp2t", try await pf.data(for: unit.key, fallback: unit)) }
-            catch { return reply(c, 502, "text/plain", Data(error.localizedDescription.utf8)) }
+            catch { return reply(c, Self.status(error), "text/plain", Data(error.localizedDescription.utf8)) }
+        }
+        if segs[1] == "s.ts", !rt.strip, rt.guardedNet == nil {
+            let req = Self.request(url, headers)
+            func open() -> SegmentFeed { SegmentFeed(session: session, request: req, keep: false, lan: lan) }
+            return await relay(c, open(), own: true, retry: open)
         }
         var r = URLRequest(url: url)
         for (k, v) in headers { r.setValue(v, forHTTPHeaderField: k) }
         if r.value(forHTTPHeaderField: "User-Agent") == nil { r.setValue(SiteHTTP.userAgent, forHTTPHeaderField: "User-Agent") }
         do {
-            let (d, resp) = try await data(for:r,route:rt)
+            let d: Data, resp: URLResponse
+            if rt.guardedNet == nil {
+                let got = try await SegmentFeed.fetch(r, session: session, limit: segs[1] == "p.m3u8" ? Self.maxPlaylist : SegmentFeed.limit, lan: lan)
+                (d, resp) = (got.data, got.response)
+            } else { (d, resp) = try await data(for:r,route:rt) }
             let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            guard (200..<300).contains(status) else { return reply(c, 502, "text/plain", Data("upstream \(status)".utf8)) }
+            guard (200..<300).contains(status) else { throw SegmentFeed.Status(code: status) }
             let final = resp.url ?? url
             switch segs[1] {
             case "p.m3u8":
                 let original = rt.guardedNet != nil ? String(decoding:d,as:UTF8.self) : HLSAdFilter.apply(String(decoding: d, as: UTF8.self), base: final)
-                if let pf = rt.prefetcher, let units = HLSMedia.parse(original, base: final), units.allSatisfy({ $0.range == nil }) {
+                if let pf = rt.prefetcher, let units = HLSMedia.parse(original, base: final), units.allSatisfy({ $0.range == nil }), await permitted(units, lan) {
                     pf.setUnits(units)   // the variant AVPlayer actually chose
                 }
                 let text = try rewrite(original, base: final, token: segs[0], guarded: rt.guardedNet != nil, hasStaticKey: rt.hlsKey != nil)
@@ -320,8 +357,27 @@ final class LocalHLSProxy: @unchecked Sendable {
                 reply(c, 200, (resp as? HTTPURLResponse)?.mimeType ?? "application/octet-stream", d)
             }
         } catch {
-            reply(c, 502, "text/plain", Data(error.localizedDescription.utf8))
+            reply(c, Self.status(error), "text/plain", Data(error.localizedDescription.utf8))
         }
+    }
+
+    private static let maxPlaylist = 8 << 20
+
+    /// What the player is told: an upstream 4xx / 5xx as it is, so a dead address is recognised as one.
+    static func status(_ e: Error) -> Int {
+        guard let code = (e as? SegmentFeed.Status)?.code else { return 502 }
+        // a redirect that was not followed
+        return (300..<400).contains(code) ? 403 : (400..<600).contains(code) ? code : 502
+    }
+
+    /// Prefetching goes to the CDN directly: every host of the playlist is judged first.
+    private func permitted(_ units: [PrefetchUnit], _ lan: Bool?) async -> Bool {
+        if lan == nil { return true }
+        var hosts = Set<String>()
+        for u in units where hosts.insert(u.url.host ?? "").inserted {
+            if (try? await LanPolicy.check(u.url.absoluteString, lan: lan)) == nil { return false }
+        }
+        return true
     }
 
     private func route(_ token: String) -> Route? {
@@ -330,6 +386,19 @@ final class LocalHLSProxy: @unchecked Sendable {
     }
 
     // MARK: MP4 (Range → fixed chunks through the prefetch cache)
+
+    /// A part of a resource whose length is not known here.
+    struct Slice: Equatable { var from: Int; var to: Int? }
+
+    /// nil = the whole resource, also for `bytes=0-` (FFmpeg probes every segment with it).
+    static func slice(_ h: String?) -> Slice? {
+        guard let h, h.lowercased().hasPrefix("bytes="), !h.contains(",") else { return nil }
+        let p = h.dropFirst(6).split(separator: "-", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+        guard p.count == 2, let from = Int(p[0]), from >= 0 else { return nil }
+        if p[1].isEmpty { return from == 0 ? nil : Slice(from: from, to: nil) }
+        guard let to = Int(p[1]), to >= from, to < Int.max else { return nil }
+        return Slice(from: from, to: to)
+    }
 
     static func parseRange(_ h: String?, length: Int) -> ClosedRange<Int>? {
         guard let h, h.lowercased().hasPrefix("bytes="), length > 0 else { return nil }
@@ -359,7 +428,8 @@ final class LocalHLSProxy: @unchecked Sendable {
             do { probe = try await data(for:r,route:rt) }
             catch { if attempt == 1 { throw error }; try? await Task.sleep(nanoseconds: 500_000_000) }
         }
-        guard let h = probe?.1 as? HTTPURLResponse, (200..<300).contains(h.statusCode) else { throw URLError(.badServerResponse) }
+        guard let h = probe?.1 as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(h.statusCode) else { throw SegmentFeed.Status(code: h.statusCode) }
         let total = (h.value(forHTTPHeaderField: "Content-Range")?.split(separator: "/").last).flatMap { Int($0) }
             ?? (h.statusCode == 200 ? Int(h.expectedContentLength) : nil)
         guard let total, total > 0 else { throw URLError(.cannotParseResponse) }
@@ -378,7 +448,7 @@ final class LocalHLSProxy: @unchecked Sendable {
     private func serveMP4(_ c: NWConnection, token: String, url: URL, route rt: Route, range: String?, head: Bool) async {
         let total: Int
         do { total = try await mp4Length(token, url, rt) }
-        catch { return reply(c, 502, "text/plain", Data(error.localizedDescription.utf8)) }
+        catch { return reply(c, Self.status(error), "text/plain", Data(error.localizedDescription.utf8)) }
         let partial = range != nil
         guard let want = partial ? Self.parseRange(range, length: total) : 0...(total - 1) else {
             let out = Data("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */\(total)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
@@ -391,7 +461,7 @@ final class LocalHLSProxy: @unchecked Sendable {
         var first: Data?
         if !head {
             do { first = try await mp4Chunk(token, url, rt, indices[0], total) }
-            catch { return reply(c, 502, "text/plain", Data(error.localizedDescription.utf8)) }
+            catch { return reply(c, Self.status(error), "text/plain", Data(error.localizedDescription.utf8)) }
         }
         var out = "HTTP/1.1 \(partial ? "206 Partial Content" : "200 OK")\r\nContent-Type: \(route(token)?.contentType ?? "video/mp4")\r\nAccept-Ranges: bytes\r\n"
         out += "Content-Length: \(want.count)\r\n"
@@ -479,7 +549,8 @@ final class LocalHLSProxy: @unchecked Sendable {
         r.setValue("bytes=\(rg.lowerBound)-\(rg.upperBound)", forHTTPHeaderField: "Range")
         let (d, resp):(Data,URLResponse)
         if let rt=guardedRoute{(d,resp)=try await data(for:r,route:rt)}else{(d,resp)=try await session.data(for:r)}
-        guard let h = resp as? HTTPURLResponse, (200..<300).contains(h.statusCode) else { throw URLError(.badServerResponse) }
+        guard let h = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(h.statusCode) else { throw SegmentFeed.Status(code: h.statusCode) }
         return h.statusCode == 200 && d.count > rg.count ? d.subdata(in: rg.lowerBound..<min(d.count, rg.upperBound + 1)) : d
     }
 
@@ -489,8 +560,64 @@ final class LocalHLSProxy: @unchecked Sendable {
         }
     }
 
+    /// Passes a segment through while it downloads. One retry if the upstream fails before its first byte.
+    /// `own`: nobody else reads this download, it ends with the player's request.
+    private func relay(_ c: NWConnection, _ first: SegmentFeed, slice: Slice? = nil, type: String = "video/mp2t", own: Bool = false, retry: () -> SegmentFeed?) async {
+        var feed = first
+        var resp: HTTPURLResponse?
+        for attempt in 0..<2 {
+            feed.beginRead()
+            do { resp = try await feed.head(); break } catch {
+                feed.endRead()
+                guard attempt == 0, !(error is SegmentFeed.Status), let again = retry(), again !== feed else {
+                    return reply(c, Self.status(error), "text/plain", Data(error.localizedDescription.utf8))
+                }
+                feed = again
+            }
+        }
+        guard let resp else { return reply(c, 502, "text/plain", Data()) }
+        defer {
+            feed.endRead()
+            if own { feed.cancel() }
+        }
+        let known = resp.expectedContentLength > 0 && resp.value(forHTTPHeaderField: "Content-Encoding") == nil ? Int(resp.expectedContentLength) : -1
+        let mime = resp.mimeType.flatMap { $0.hasPrefix("video/") || $0.hasPrefix("audio/") ? $0 : nil }
+        var head: String, skip = 0, left = Int.max
+        if slice != nil, resp.statusCode == 206 {
+            head = "HTTP/1.1 206 Partial Content\r\nContent-Type: \(mime ?? type)\r\n"
+            if let range = resp.value(forHTTPHeaderField: "Content-Range") { head += "Content-Range: \(range)\r\n" }
+            if known > 0 { head += "Content-Length: \(known)\r\n" }
+        } else if let slice, let end = known > 0 ? min(slice.to ?? known - 1, known - 1) : slice.to {
+            // the upstream ignored the range: cut it out here
+            guard slice.from <= end else { return reply(c, 416, "text/plain", Data()) }
+            skip = slice.from
+            left = end - slice.from + 1
+            head = "HTTP/1.1 206 Partial Content\r\nContent-Type: \(mime ?? type)\r\nContent-Range: bytes \(slice.from)-\(end)/\(known > 0 ? String(known) : "*")\r\nContent-Length: \(left)\r\n"
+        } else {
+            head = "HTTP/1.1 200 OK\r\nContent-Type: \(type)\r\n"
+            if known > 0 { head += "Content-Length: \(known)\r\n" }
+        }
+        head += "Cache-Control: no-store\r\nConnection: close\r\n\r\n"
+        guard await send(c, Data(head.utf8)) else { return c.cancel() }
+        var offset = 0
+        while left > 0, var chunk = try? await feed.bytes(from: offset), !chunk.isEmpty {
+            offset += chunk.count
+            if skip > 0 {
+                let n = min(skip, chunk.count)
+                skip -= n
+                chunk = Data(chunk.dropFirst(n))
+                if chunk.isEmpty { continue }
+            }
+            if chunk.count > left { chunk = Data(chunk.prefix(left)) }
+            left -= chunk.count
+            guard await send(c, chunk) else { break }   // player hung up (seek)
+        }
+        c.cancel()
+    }
+
     private func reply(_ c: NWConnection, _ status: Int, _ type: String, _ body: Data) {
-        let reason = [200: "OK", 206: "Partial Content", 404: "Not Found", 405: "Method Not Allowed", 502: "Bad Gateway"][status] ?? "Error"
+        let reason = [200: "OK", 206: "Partial Content", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 410: "Gone",
+                      416: "Range Not Satisfiable", 502: "Bad Gateway"][status] ?? "Error"
         var out = Data("HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".utf8)
         out.append(body)
         c.send(content: out, completion: .contentProcessed { _ in c.cancel() })

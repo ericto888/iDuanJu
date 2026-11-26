@@ -212,9 +212,7 @@ struct NextDramaOverlayCard: View {
         }
         .padding(18)
         .frame(maxWidth: 360)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.white.opacity(0.16), lineWidth: 1))
-        .shadow(color: .black.opacity(0.45), radius: 22, y: 12)
+        .playerPanel(28)
         .task(id: pick.series.seriesId) {
             remaining = total
             while !Task.isCancelled && remaining > 0 {

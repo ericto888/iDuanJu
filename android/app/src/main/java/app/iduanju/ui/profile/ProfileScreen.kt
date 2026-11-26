@@ -1,37 +1,47 @@
 package app.iduanju.ui.profile
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.iduanju.IdjApp
+import app.iduanju.data.HongguoWebAccount
+import app.iduanju.data.WatchProgress
 import app.iduanju.ui.LocalNavigate
+import app.iduanju.ui.components.*
+import app.iduanju.ui.home.rootBottomInset
+import app.iduanju.ui.theme.IdjDarkColors
 import app.iduanju.ui.theme.IdjThemeColors
+import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
+private class FavoriteItem(val sid: String, val title: String, val cover: String)
+
 /**
- * iOS ProfileView: 我的 · 继续观看 · 我的收藏, then grouped link rows —
+ * iOS ProfileView: 我的 · 红果账号 · 继续观看 · 我的收藏, then grouped link rows —
  * (观看历史 / 剧星榜 / 我的收藏) (Telegram 频道 / 漫画 / 下载管理) (片源管理 / 插件 / 开源许可) (maintenance), footer.
  * Settings live on their own pages (片源管理, 插件) instead of being laid out inline.
  */
@@ -45,111 +55,71 @@ fun ProfileScreen(onOpenDetail: (String) -> Unit = {}) {
     val scope = rememberCoroutineScope()
     var message by remember { mutableStateOf<String?>(null) }
     var confirmLogout by remember { mutableStateOf(false) }
+    // Most rows sit far above the footer that shows the outcome, so it is also announced as a toast.
+    val notify: (String) -> Unit = { message = it; GlassToast.show(it) }
 
     LaunchedEffect(Unit) { ia.hgWebAccount.refreshProfile() }
 
-    Column(
-        Modifier.fillMaxSize().background(c.bg).statusBarsPadding().verticalScroll(rememberScrollState())
-            .padding(vertical = 12.dp).padding(bottom = 100.dp),
+    val watching by remember { derivedStateOf { lib.continueWatching.take(10) } }
+    val favorites by remember {
+        derivedStateOf { lib.favorites.entries.sortedByDescending { it.value.third }.take(6).map { FavoriteItem(it.key, it.value.first, it.value.second) } }
+    }
+    val ver = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "" }
+    val cols = LocalLayoutMetrics.current.posterCols
+
+    LazyColumn(
+        Modifier.fillMaxSize().background(c.bg).statusBarsPadding(),
+        contentPadding = PaddingValues(top = 12.dp, bottom = rootBottomInset() + 12.dp),
         verticalArrangement = Arrangement.spacedBy(22.dp),
     ) {
-        Text("我的", color = c.text, fontWeight = FontWeight.Black, fontSize = 32.sp, modifier = Modifier.padding(horizontal = 16.dp))
-        if (lib.history.isNotEmpty()) app.iduanju.ui.home.ContinueRow(lib.continueWatching, onOpenDetail)
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("我的收藏", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Text("全部 ${lib.favorites.size}", color = c.secondary, fontSize = 15.sp, modifier = Modifier.clickable { go("library/favorites") })
-            }
-            val favs = lib.favorites.entries.sortedByDescending { it.value.third }.take(6)
-            if (favs.isEmpty()) Text("在播放页右侧点 ♥ 收藏", color = c.secondary, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp))
-            else Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                favs.chunked(3).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        row.forEach { (sid, v) ->
-                            Column(Modifier.weight(1f).clickable { onOpenDetail(sid) }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Box(Modifier.fillMaxWidth().aspectRatio(0.75f).clip(RoundedCornerShape(10.dp)).background(c.elevated)) {
-                                    coil.compose.AsyncImage(v.second, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                                }
-                                Text(v.first, color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
+        item("title", "title") {
+            Text("我的", color = c.text, fontWeight = FontWeight.Black, fontSize = 32.sp, modifier = Modifier.padding(horizontal = 16.dp).semantics { heading() })
+        }
+        item("account", "account") {
+            AccountCard(ia.hgWebAccount.profile, ia.hgWebAccount.lastSyncNote, { go("hongguo-login") }) { confirmLogout = true }
+        }
+        if (watching.isNotEmpty()) item("watching", "shelf") { ContinueShelf(watching, onOpenDetail, { go("library/history") }) { lib.removeProgress(it) } }
+        item("favorites", "header") {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("我的收藏", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).semantics { heading() })
+                    Text("全部 ${lib.favorites.size}", color = c.secondary, fontSize = 15.sp, modifier = Modifier.pressClick { go("library/favorites") })
+                }
+                if (favorites.isEmpty()) Text("在播放页右侧点 ♥ 收藏", color = c.secondary, fontSize = 15.sp, modifier = Modifier.padding(horizontal = 16.dp))
+                else Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    favorites.chunked(cols).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            row.forEach { f -> CoverCell(f.title, f.cover, Modifier.weight(1f)) { onOpenDetail(f.sid) } }
+                            repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
                         }
-                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
             }
         }
-        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            Group("红果账号") {
-                val hgProfile = ia.hgWebAccount.profile
-                if (hgProfile == null) {
-                    LinkRow("登录红果账号", ProfileIcons.key, sub = "使用红果 App 扫码登录，看剧进度同步到红果", trailing = "去登录") { go("hongguo-login") }
-                } else {
-                    Row(
-                        Modifier.fillMaxWidth().clickable { confirmLogout = true }.padding(horizontal = 14.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier.size(32.dp).clip(CircleShape).background(c.accentSoft),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (hgProfile.avatarUrl.isNotEmpty()) {
-                                coil.compose.AsyncImage(hgProfile.avatarUrl, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                            } else {
-                                Text(hgProfile.nickname.take(1), color = c.accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("红果账号 · ${hgProfile.nickname}", color = c.text, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(ia.hgWebAccount.lastSyncNote ?: "已登录 · 看剧进度自动同步到红果", color = c.secondary, fontSize = 12.sp, lineHeight = 16.sp)
-                        }
-                        Text("退出", color = c.secondary, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp))
-                    }
-                }
-            }
-            Group {
+        item("library", "group") {
+            GroupItem {
                 LinkRow("观看历史", ProfileIcons.history, trailing = lib.history.size.takeIf { it > 0 }?.toString()) { go("library/history") }
                 RowDivider()
                 LinkRow("剧星榜", ProfileIcons.star) { go("actorRank") }
                 RowDivider()
                 LinkRow("我的收藏", ProfileIcons.heart, trailing = "${lib.favorites.size}") { go("library/favorites") }
             }
-            val adult = ia.cms.adultUnlocked
-            Group {
-                LinkRow("Telegram 频道", ProfileIcons.telegram, trailing = "${ia.tg.visible(adult).size} 个") { go("home/channels") }
+        }
+        item("content", "group") {
+            GroupItem {
+                LinkRow("Telegram 频道", ProfileIcons.telegram, trailing = "${ia.tg.visible(ia.cms.adultUnlocked).size} 个") { go("home/channels") }
                 RowDivider()
                 LinkRow("漫画", ProfileIcons.manga, trailing = ia.manga.favorites.size.takeIf { it > 0 }?.let { "收藏 $it" }) { go("home/manga") }
                 RowDivider()
                 LinkRow("小说", ProfileIcons.manga, sub = "TXT、阅读书源、搜索与发现") { go("novel") }
                 RowDivider()
-                LinkRow("下载管理", ProfileIcons.download, trailing = "暂未支持") { message = "Android 版暂不支持离线下载" }
+                LinkRow("下载管理", ProfileIcons.download, trailing = "暂未支持") { notify("Android 版暂不支持离线下载") }
             }
-            Group("外观") {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("玻璃质感", color = c.text, fontSize = 16.sp)
-                    app.iduanju.ui.components.SegmentedTabs(
-                        items = app.iduanju.ui.components.GlassStyle.entries,
-                        selected = app.iduanju.ui.components.GlassStylePref.style,
-                        label = { it.label },
-                        onSelect = { app.iduanju.ui.components.GlassStylePref.update(it) },
-                    )
-                    if (app.iduanju.ui.components.GlassStylePref.style == app.iduanju.ui.components.GlassStyle.LIQUID) {
-                        val strength = app.iduanju.ui.components.GlassStylePref.strength
-                        Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("通透度", color = c.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                            Text("${(strength * 100).roundToInt()}%", color = c.secondary, fontSize = 13.sp)
-                        }
-                        Slider(
-                            value = strength,
-                            onValueChange = { app.iduanju.ui.components.GlassStylePref.updateStrength(it) },
-                            valueRange = 0f..1f,
-                            colors = SliderDefaults.colors(thumbColor = c.accent, activeTrackColor = c.accent, inactiveTrackColor = c.text.copy(alpha = 0.12f)),
-                            modifier = Modifier.fillMaxWidth().testTag("profile.glass.strength"),
-                        )
-                    }
-                }
-            }
-            Group {
+        }
+        item("look", "group") { GroupItem("外观") { AppearanceRows() } }
+        item("manage", "group") {
+            GroupItem {
+                val adult = ia.cms.adultUnlocked
                 LinkRow("片源管理", ProfileIcons.sources, trailing = if (adult) "红果 · 黄果" else "红果") { go("sources") }
                 RowDivider()
                 val n = ia.plugins.plugins.count { !it.adult || adult } + ia.cms.sites.count { !it.adult || adult }
@@ -159,42 +129,142 @@ fun ProfileScreen(onOpenDetail: (String) -> Unit = {}) {
                 RowDivider()
                 val up = ia.updater
                 LinkRow("检查更新", ProfileIcons.update, trailing = if (up.checking) "检查中…" else up.currentVersion.joinToString(".")) {
-                    scope.launch { up.manualCheck()?.let { message = it } }
+                    scope.launch { up.manualCheck()?.let(notify) }
                 }
             }
-            Group {
-                ActRow("重置红果设备注册", ProfileIcons.reset, scope, { message = it }) { withContext(Dispatchers.IO) { ia.hongguo.resetDevice() }; "已重置红果设备" }
+        }
+        item("maintenance", "group") {
+            GroupItem {
+                ActRow("重置红果设备注册", ProfileIcons.reset, scope, notify) { withContext(Dispatchers.IO) { ia.hongguo.resetDevice() }; "已重置红果设备" }
                 RowDivider()
-                if (adult) {
-                    ActRow("重置黄果访客会话", ProfileIcons.key, scope, { message = it }) { withContext(Dispatchers.IO) { ia.huangguo.resetSession() }; "已清除黄果会话" }
+                if (ia.cms.adultUnlocked) {
+                    ActRow("重置黄果访客会话", ProfileIcons.key, scope, notify) { withContext(Dispatchers.IO) { ia.huangguo.resetSession() }; "已清除黄果会话" }
                     RowDivider()
                 }
-                ActRow("清空封面缓存", ProfileIcons.photos, scope, { message = it }) {
+                ActRow("清空封面缓存", ProfileIcons.photos, scope, notify) {
                     coil.Coil.imageLoader(ctx).let { l -> l.memoryCache?.clear(); withContext(Dispatchers.IO) { l.diskCache?.clear() } }; "封面缓存已清空"
                 }
                 RowDivider()
-                ActRow("清空播放缓存", ProfileIcons.trash, scope, { message = it }) { withContext(Dispatchers.IO) { java.io.File(ctx.cacheDir, "hg-play").deleteRecursively() }; "播放缓存已清空" }
+                ActRow("清空播放缓存", ProfileIcons.trash, scope, notify) { withContext(Dispatchers.IO) { java.io.File(ctx.cacheDir, "hg-play").deleteRecursively() }; "播放缓存已清空" }
             }
-            val ver = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "" }
+        }
+        item("footer", "footer") {
             Text(message ?: "所有数据由本机直连上游，观看记录和收藏只保存在本机。\ni短剧 $ver",
-                color = if (message != null) c.accent else c.secondary, fontSize = 12.sp, lineHeight = 18.sp)
+                color = if (message != null) c.accent else c.secondary, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 16.dp))
         }
     }
 
-    if (confirmLogout) {
-        AlertDialog(
-            onDismissRequest = { confirmLogout = false },
-            title = { Text("退出红果账号？") },
-            text = { Text("退出后将停止同步看剧进度到红果网页端，本地观看记录不受影响。") },
-            confirmButton = {
-                TextButton({
-                    ia.hgWebAccount.logout()
-                    confirmLogout = false
-                    message = "已退出红果账号"
-                }) { Text("退出", color = c.accentWarm) }
-            },
-            dismissButton = { TextButton({ confirmLogout = false }) { Text("取消") } },
-        )
+    if (confirmLogout) GlassConfirm(
+        onDismissRequest = { confirmLogout = false },
+        title = "退出红果账号？",
+        message = "退出后将停止同步看剧进度到红果网页端，本地观看记录不受影响。",
+        confirmText = "退出",
+        destructive = true,
+        onConfirm = {
+            ia.hgWebAccount.logout()
+            confirmLogout = false
+            notify("已退出红果账号")
+        },
+    )
+}
+
+/** [Group] with the page gutter. */
+@Composable
+private fun GroupItem(title: String? = null, rows: @Composable ColumnScope.() -> Unit) =
+    Box(Modifier.padding(horizontal = 16.dp)) { Group(title, rows = rows) }
+
+/** iOS `hongguoAccountCard`: scan-to-login, or the signed-in account with 退出. */
+@Composable
+private fun AccountCard(profile: HongguoWebAccount.Profile?, syncNote: String?, onLogin: () -> Unit, onLogout: () -> Unit) {
+    val c = IdjThemeColors
+    Row(
+        Modifier.padding(horizontal = 16.dp).fillMaxWidth().dsCard(18.dp)
+            .then(if (profile == null) Modifier.rowClick(onClick = onLogin) else Modifier).padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (profile == null) IconWell(Icons.Outlined.QrCodeScanner, 44.dp)
+        else Box(Modifier.size(44.dp).clip(CircleShape).background(c.accentSoft), contentAlignment = Alignment.Center) {
+            if (profile.avatarUrl.isNotEmpty()) AsyncImage(profile.avatarUrl, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            else Text(profile.nickname.take(1), color = c.accent, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(profile?.nickname ?: "红果短剧扫码登录", color = c.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (profile == null) "扫码连接账号，同步短剧观看进度" else syncNote ?: "已连接红果短剧，观看进度自动同步",
+                color = c.secondary, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        if (profile == null) GlassButton("去扫码", size = ButtonSize.Small, onClick = onLogin)
+        else GlassButton("退出", tone = ButtonTone.Glass, size = ButtonSize.Small, onClick = onLogout)
+    }
+}
+
+/** iOS `ContinueRow`: 112×150 covers with the resume label and progress on the poster; long press deletes the record. */
+@Composable
+private fun ContinueShelf(list: List<WatchProgress>, onOpen: (String) -> Unit, onAll: () -> Unit, onRemove: (String) -> Unit) {
+    val c = IdjThemeColors
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("继续观看", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).semantics { heading() })
+            Text("全部", color = c.secondary, fontSize = 15.sp, modifier = Modifier.pressClick(onClick = onAll))
+        }
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(list, key = { it.seriesId }, contentType = { "watching" }) { p -> ContinueCover(p, onOpen, onRemove, Modifier.animateItem()) }
+        }
+    }
+}
+
+private val CoverScrim = Brush.verticalGradient(0.45f to Color.Transparent, 1f to Color.Black.copy(0.7f))
+
+@Composable
+private fun ContinueCover(p: WatchProgress, onOpen: (String) -> Unit, onRemove: (String) -> Unit, modifier: Modifier) {
+    val c = IdjThemeColors
+    var menu by remember { mutableStateOf(false) }
+    Box(modifier.width(112.dp)) {
+        Column(Modifier.pressLongClick(label = "${p.title}，${p.resumeLabel}", longLabel = "删除观看记录", onLongClick = { menu = true }) { onOpen(p.seriesId) },
+            verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(Modifier.size(112.dp, 150.dp).clip(PosterShape).background(c.glass)) {
+                AsyncImage(p.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                Box(Modifier.matchParentSize().background(CoverScrim))
+                Column(Modifier.align(Alignment.BottomCenter).padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(p.resumeLabel, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    GlassProgressBar({ p.fraction }, height = 3.dp, colors = IdjDarkColors)
+                }
+            }
+            Text(p.title, color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        GlassMenu(menu, { menu = false }) {
+            GlassMenuItem("删除观看记录", icon = Icons.Outlined.Delete, destructive = true) { menu = false; onRemove(p.seriesId) }
+        }
+    }
+}
+
+/** Plain library cell: 3:4 cover + one title line. */
+@Composable
+internal fun CoverCell(title: String, cover: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val c = IdjThemeColors
+    Column(modifier.pressClick(0.97f, label = title, onClick = onClick), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(0.75f).clip(PosterShape).background(c.glass)) {
+            AsyncImage(cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        }
+        Text(title, color = c.text, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** 玻璃质感 + 通透度; its own scope so dragging the slider recomposes only these rows. */
+@Composable
+private fun AppearanceRows() {
+    val c = IdjThemeColors
+    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("玻璃质感", color = c.text, fontSize = 16.sp)
+        SegmentedTabs(GlassStyle.entries, GlassStylePref.style, { it.label }, { GlassStylePref.update(it) })
+        if (GlassStylePref.style == GlassStyle.LIQUID) {
+            val strength = GlassStylePref.strength
+            Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("通透度", color = c.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                Text("${(strength * 100).roundToInt()}%", color = c.secondary, fontSize = 13.sp)
+            }
+            GlassSlider(strength, { GlassStylePref.updateStrength(it) }, Modifier.testTag("profile.glass.strength"),
+                label = "通透度", valueText = { "${(it * 100).roundToInt()}%" })
+        }
     }
 }
 

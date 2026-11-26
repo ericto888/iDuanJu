@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 struct NovelTextView: UIViewRepresentable {
     var text: NSAttributedString
 
+    final class Coordinator { var shown: NSAttributedString? }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeUIView(context: Context) -> UITextView {
         let v = UITextView()
         v.isEditable = false
@@ -19,7 +22,10 @@ struct NovelTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ v: UITextView, context: Context) {
-        if v.attributedText != text { v.attributedText = text }
+        // Identity first: comparing two whole chapters attribute by attribute on every scroll update is not free.
+        guard context.coordinator.shown !== text else { return }
+        context.coordinator.shown = text
+        v.attributedText = text
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -51,69 +57,39 @@ struct NovelHomeView: View {
     @State private var managing = false
     @State private var exploring = false
     @State private var importSheet = false
-    @State private var sourceImport = false
 
     @Environment(\.layoutMetrics) private var layout
     private var cols: [GridItem] { layout.posterGridItems(spacing: 12, alignment: .top) }
 
-    private var filteredShelf: [NovelBook] {
+    private func filtered(_ shelf: [NovelBook]) -> [NovelBook] {
         switch filter {
-        case .all: store.shelf
-        case .reading: store.shelf.filter { store.fraction($0) != nil }
-        case .local: store.shelf.filter { !$0.isWeb }
+        case .all: shelf
+        case .reading: shelf.filter { store.fraction($0) != nil }
+        case .local: shelf.filter { !$0.isWeb }
         }
     }
 
     var body: some View {
+        // Sorted once per render; the shelf used to be re-sorted by every sub-view that mentioned it.
+        let shelf = store.shelf, books = filtered(shelf)
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                if let b = store.shelf.first(where: { store.fraction($0) != nil }) ?? store.shelf.first {
-                    continueHero(b).padding(.top, 16).transition(.opacity)
+                if let b = shelf.first(where: { store.fraction($0) != nil }) ?? shelf.first {
+                    continueHero(b).padding(.top, 8).transition(.opacity)
                 }
-                quickStrip.padding(.top, store.books.isEmpty ? 16 : 16)
-                shelfHeader.padding(.top, 16)
-                if editingShelf && !filteredShelf.isEmpty {
-                    let allSelected = filteredShelf.allSatisfy { selectedBookIDs.contains($0.id) }
-                    HStack {
-                        Button(allSelected ? "取消全选" : "全选 (\(filteredShelf.count))") {
-                            selectedBookIDs = allSelected ? [] : Set(filteredShelf.map(\.id))
-                        }
-                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(STVTheme.accent)
-                        Spacer()
-                        Button(selectedBookIDs.isEmpty ? "点击书籍勾选" : "删除所选 (\(selectedBookIDs.count))") {
-                            confirmBatchDelete = true
-                        }
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(selectedBookIDs.isEmpty ? STVTheme.secondary : STVTheme.accentWarm)
-                        .disabled(selectedBookIDs.isEmpty)
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 9)
-                    .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(STVTheme.glassBorder) }
-                    .padding(.horizontal, 16).padding(.top, 10)
-                }
-                if store.books.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "books.vertical").font(.system(size: 30)).foregroundStyle(STVTheme.tertiary)
-                        Text("书架是空的").font(.system(size: 16, weight: .semibold)).foregroundStyle(STVTheme.text)
-                        Text("「导入」本地 TXT / EPUB，或导入「阅读」书源后「搜书」。")
-                            .font(.system(size: 13)).foregroundStyle(STVTheme.secondary).multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity).padding(.vertical, 44).padding(.horizontal, 24)
-                } else if filteredShelf.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "books.vertical").font(.system(size: 28)).foregroundStyle(STVTheme.tertiary)
-                        Text(filter == .local ? "暂无本地书籍" : "暂无阅读记录")
-                            .font(.system(size: 15, weight: .semibold)).foregroundStyle(STVTheme.text)
-                        Text(filter == .local ? "点击上方「导入」选择本地 TXT / EPUB 文件。" : "打开书架里的任意书籍开始阅读，进度会自动同步到这里。")
-                            .font(.system(size: 13)).foregroundStyle(STVTheme.secondary).multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity).padding(.vertical, 36).padding(.horizontal, 24)
+                quickStrip.padding(.top, 18)
+                shelfHeader.padding(.top, 18)
+                if shelf.isEmpty {
+                    DSEmptyState("书架是空的", systemImage: "books.vertical", message: "「导入」本地 TXT / EPUB，或导入「阅读」书源后「搜书」。", actionTitle: "导入") { importSheet = true }
+                } else if books.isEmpty {
+                    DSEmptyState(filter == .local ? "暂无本地书籍" : "暂无阅读记录", systemImage: "books.vertical",
+                                 message: filter == .local ? "点击上方「导入」选择本地 TXT / EPUB 文件。" : "打开书架里的任意书籍开始阅读，进度会自动同步到这里。")
                 } else {
-                    LazyVGrid(columns: cols, spacing: 16) {
-                        ForEach(filteredShelf) { b in
+                    LazyVGrid(columns: cols, spacing: 18) {
+                        ForEach(books) { b in
                             Button {
                                 if editingShelf {
+                                    DS.tick()
                                     if selectedBookIDs.contains(b.id) { selectedBookIDs.remove(b.id) } else { selectedBookIDs.insert(b.id) }
                                 } else if b.isWeb {
                                     detailBook = b
@@ -126,33 +102,36 @@ struct NovelHomeView: View {
                                 .accessibilityIdentifier("novel.book.\(b.title)")
                         }
                     }
-                    .padding(.horizontal, 16).padding(.top, 12)
+                    .padding(.horizontal, 16).padding(.top, 14)
                 }
             }
             .padding(.bottom, 108)
-            .animation(DS.panel, value: store.books.count)
-            .animation(DS.select, value: filter)
+            .compatScrollContent()
         }
         .scrollIndicators(.hidden)
+        .overlay(alignment: .bottom) { editBar(books) }
+        .homePageInset()
         .fileImporter(isPresented: $importing, allowedContentTypes: [.plainText, .text, .epub, .item], allowsMultipleSelection: true) { r in
             guard case .success(let urls) = r, !urls.isEmpty else { return }
             busy = true
             Task { errors = await store.importFiles(urls); busy = false }
         }
-        .alert("部分文件导入失败", isPresented: Binding(get: { !errors.isEmpty }, set: { if !$0 { errors = [] } })) {
-            Button("好") { errors = [] }
-        } message: { Text(errors.joined(separator: "\n")) }
-        .confirmationDialog("从书架删除「\(deleting?.title ?? "")」？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
-            Button("删除", role: .destructive) { if let b = deleting { store.remove(b) }; deleting = nil }
-        } message: { Text("会同时删除阅读进度和本机保存的文件。") }
-        .confirmationDialog("从书架删除所选的 \(selectedBookIDs.count) 本书？", isPresented: $confirmBatchDelete, titleVisibility: .visible) {
-            Button("删除", role: .destructive) {
-                let ids = selectedBookIDs
+        .dsDialog("部分文件导入失败", isPresented: Binding(get: { !errors.isEmpty }, set: { if !$0 { errors = [] } }), message: errors.joined(separator: "\n")) {
+            [.primary("好")]
+        }
+        .dsConfirm("从书架删除「\(deleting?.title ?? "")」？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                   message: "会同时删除阅读进度和本机保存的文件。", confirm: "删除") {
+            if let b = deleting { withAnimation(DS.panel) { store.remove(b) } }
+            deleting = nil
+        }
+        .dsConfirm("从书架删除所选的 \(selectedBookIDs.count) 本书？", isPresented: $confirmBatchDelete, message: "会同时删除阅读进度和本机保存的文件。", confirm: "删除") {
+            let ids = selectedBookIDs
+            withAnimation(DS.panel) {
                 for b in store.books where ids.contains(b.id) { store.remove(b) }
                 selectedBookIDs = []
                 editingShelf = false
             }
-        } message: { Text("会同时删除阅读进度和本机保存的文件。") }
+        }
         .fullScreenCover(item: $reading) { b in NovelReaderView(book: store.book(b.id) ?? b) }
         .fullScreenCover(item: $detailBook) { book in
             if let source = book.sourceURL, let url = book.bookURL {
@@ -182,6 +161,36 @@ struct NovelHomeView: View {
             }
             #endif
         }
+    }
+
+    /// Floating glass bar while managing the shelf (select all / delete).
+    @ViewBuilder private func editBar(_ books: [NovelBook]) -> some View {
+        ZStack {
+            if editingShelf && !books.isEmpty {
+                let allSelected = books.allSatisfy { selectedBookIDs.contains($0.id) }
+                HStack(spacing: 8) {
+                    Button { selectedBookIDs = allSelected ? [] : Set(books.map(\.id)) } label: {
+                        Text(allSelected ? "取消全选" : "全选 (\(books.count))").font(.system(size: 15, weight: .medium)).foregroundStyle(STVTheme.text)
+                            .frame(maxWidth: .infinity, minHeight: 46).contentShape(Capsule())
+                    }
+                    .buttonStyle(PressScale())
+                    Button { confirmBatchDelete = true } label: {
+                        Text(selectedBookIDs.isEmpty ? "点击书籍勾选" : "删除所选 (\(selectedBookIDs.count))").font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(selectedBookIDs.isEmpty ? STVTheme.tertiary : DSTone.danger)
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                            .background(Capsule().fill(selectedBookIDs.isEmpty ? Color.clear : DSTone.dangerSoft))
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(PressScale())
+                    .disabled(selectedBookIDs.isEmpty)
+                }
+                .padding(6)
+                .dsBar(30)
+                .padding(.horizontal, 20).padding(.bottom, 10)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(DS.panel, value: editingShelf)
     }
 
     private func continueHero(_ b: NovelBook) -> some View {
@@ -217,14 +226,7 @@ struct NovelHomeView: View {
                         .padding(.top, 3)
                 }
                 HStack(spacing: 8) {
-                    GeometryReader { g in
-                        Capsule().fill(Color.white.opacity(0.20))
-                            .overlay(alignment: .leading) {
-                                Capsule().fill(Color(red: 0.541, green: 0.706, blue: 1.0))
-                                    .frame(width: g.size.width * min(max(f ?? 0, 0), 1))
-                            }
-                    }
-                    .frame(height: 3)
+                    DSProgressBar(value: f ?? 0, track: .white.opacity(0.20), tint: Color(red: 0.541, green: 0.706, blue: 1.0))
                     Text(pct != nil && remaining > 0 ? "余 \(remaining) 章" : "共 \(b.chapters.count) 章")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.white.opacity(0.70))
@@ -242,56 +244,44 @@ struct NovelHomeView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 15)
         .background {
-            Color.clear.overlay {
-                ZStack {
-                    LinearGradient(colors: [colors.0, colors.1, Color(red: 0.07, green: 0.09, blue: 0.13)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    if b.hasCover, let img = UIImage(contentsOfFile: NovelStore.coverURL(b.id).path) {
-                        Image(uiImage: img).resizable().scaledToFill().blur(radius: 22, opaque: true).opacity(0.65)
-                    } else if let u = b.coverURL, let url = URL(string: u) {
-                        AsyncImage(url: url) { phase in
-                            if let img = phase.image { img.resizable().scaledToFill().blur(radius: 22, opaque: true).opacity(0.65) }
-                        }
-                    }
-                    LinearGradient(
-                        stops: [
-                            .init(color: Color(red: 0.067, green: 0.09, blue: 0.14).opacity(0.45), location: 0),
-                            .init(color: Color(red: 0.067, green: 0.09, blue: 0.14).opacity(0.74), location: 0.55),
-                            .init(color: Color(red: 0.055, green: 0.07, blue: 0.11).opacity(0.88), location: 1),
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                }
+            ZStack {
+                LinearGradient(colors: [colors.0, colors.1, Color(red: 0.07, green: 0.09, blue: 0.13)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                if let art = b.artURL { CoverBackdrop(url: art).opacity(0.65) }
+                LinearGradient(
+                    stops: [
+                        .init(color: Color(red: 0.067, green: 0.09, blue: 0.14).opacity(0.45), location: 0),
+                        .init(color: Color(red: 0.067, green: 0.09, blue: 0.14).opacity(0.74), location: 0.55),
+                        .init(color: Color(red: 0.055, green: 0.07, blue: 0.11).opacity(0.88), location: 1),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
             }
-            .clipped()
         }
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-        .shadow(color: STVTheme.barShadow, radius: 14, y: 10)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+        .background { RoundedRectangle(cornerRadius: 22, style: .continuous).fill(colors.1.shadow(.drop(color: STVTheme.barShadow, radius: 14, y: 10))).padding(1) }
         .padding(.horizontal, 16)
     }
 
     private var quickStrip: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 0) {
-                quickOpen("搜书", "magnifyingglass", id: "novel.search") { searching = true }
-                quickOpen("排行榜", "chart.bar.fill", id: "novel.rank") { exploring = true }
-                quickOpen("书源", "books.vertical", id: "novel.sources") { managing = true }
-                quickOpen("导入", "square.and.arrow.down", id: "novel.import") { importSheet = true }
-            }
-            Hairline()
+        HStack(spacing: 0) {
+            quickOpen("搜书", "magnifyingglass", id: "novel.search") { searching = true }
+            quickOpen("排行榜", "chart.bar.fill", id: "novel.rank") { exploring = true }
+            quickOpen("书源", "books.vertical", id: "novel.sources") { managing = true }
+            quickOpen("导入", "square.and.arrow.down", id: "novel.import") { importSheet = true }
         }
         .padding(.horizontal, 16)
     }
 
     private func quickOpen(_ title: String, _ icon: String, id: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 6) {
+            VStack(spacing: 7) {
                 Image(systemName: icon)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(STVTheme.text)
-                    .frame(width: 38, height: 38)
-                    .background(Circle().fill(STVTheme.glass))
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(STVTheme.accent)
+                    .frame(width: 52, height: 52)
+                    .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(STVTheme.accentSoft))
                 Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(STVTheme.secondary)
             }
             .frame(maxWidth: .infinity)
@@ -303,26 +293,28 @@ struct NovelHomeView: View {
 
     private var shelfHeader: some View {
         HStack(alignment: .center, spacing: 8) {
-            Text("我的书架").font(.system(size: 18, weight: .bold)).foregroundStyle(STVTheme.text)
+            Text("我的书架").dsFont(19, .bold, relativeTo: .title3).foregroundStyle(STVTheme.text)
             if !store.books.isEmpty {
                 Text("\(store.books.count) 本").font(.system(size: 13)).foregroundStyle(STVTheme.tertiary)
             }
             Spacer(minLength: 0)
             if busy {
-                ProgressView().controlSize(.small)
+                DSSpinner(size: 16)
             } else if !store.books.isEmpty {
                 HStack(spacing: 4) {
                     if !editingShelf {
                         ForEach(ShelfFilter.allCases, id: \.self) { f in
                             let on = f == filter
-                            Button { withAnimation(DS.select) { filter = f } } label: {
+                            Button { DS.tick(); withAnimation(DS.select) { filter = f } } label: {
                                 Text(f.rawValue)
                                     .font(.system(size: 12, weight: on ? .semibold : .regular))
                                     .foregroundStyle(on ? STVTheme.accent : STVTheme.secondary)
-                                    .padding(.horizontal, 9).frame(height: 24)
+                                    .padding(.horizontal, 9).frame(height: 26)
                                     .background(Capsule().fill(on ? STVTheme.accentSoft : .clear))
+                                    .contentShape(Capsule().inset(by: -8))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressScale())
+                            .accessibilityAddTraits(on ? .isSelected : [])
                         }
                     }
                     Button {
@@ -334,10 +326,11 @@ struct NovelHomeView: View {
                         Text(editingShelf ? "完成" : "管理")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(editingShelf ? STVTheme.accent : STVTheme.text)
-                            .padding(.horizontal, 10).frame(height: 24)
+                            .padding(.horizontal, 10).frame(height: 26)
                             .background(Capsule().fill(editingShelf ? STVTheme.accentSoft : STVTheme.glass))
+                            .contentShape(Capsule().inset(by: -8))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressScale())
                 }
             }
         }
@@ -365,11 +358,13 @@ struct NovelHomeView: View {
                         .foregroundStyle(checked ? STVTheme.accent : .white)
                         .background(Circle().fill(checked ? .white : Color.black.opacity(0.45)))
                         .padding(6)
+                        .transition(.scale.combined(with: .opacity))
                 }
             }
-            Text(b.title).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(STVTheme.text).lineLimit(1).padding(.top, 7)
+            Text(b.title).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(STVTheme.text).lineLimit(1).padding(.top, 8)
             Text(stat).font(.system(size: 11.5)).foregroundStyle(STVTheme.tertiary).lineLimit(1).padding(.top, 2)
         }
+        .contentShape(Rectangle())
     }
 
     /// UI tests: `STV_NOVEL_SEED=/abs/file.txt` imports that file once into an empty shelf;
@@ -438,6 +433,43 @@ struct BookSpineOverlay: View {
     }
 }
 
+extension NovelBook {
+    /// Cover address for the shared image pipeline (local file of an import, or the source's remote cover).
+    var artURL: String? {
+        if hasCover { return NovelStore.coverURL(id).absoluteString }
+        guard let u = coverURL, !u.isEmpty else { return nil }
+        return u
+    }
+}
+
+/// Book cover art: cached + downsampled like every other cover, over the generated cloth cover.
+struct BookArt: View {
+    let url: String?
+    let title: String
+    var author: String? = nil
+    var maxPixelSize = CoverPixels.poster
+    var body: some View {
+        if let url, !url.isEmpty {
+            CoverImage(url: url, maxPixelSize: maxPixelSize) { _ in GeneratedBookCover(title: title, author: author) }
+        } else {
+            GeneratedBookCover(title: title, author: author)
+        }
+    }
+}
+
+/// Cover shadow drawn by a plain shape: a `.shadow` on the composited cover (art + spine + badge) was an offscreen pass per
+/// cell per frame.
+struct BookShadow: ViewModifier {
+    let corner: CGFloat
+    func body(content: Content) -> some View {
+        content.background {
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .fill(Color.black.opacity(0.9).shadow(.drop(color: .black.opacity(0.22), radius: 7, y: 4)))
+                .padding(1)
+        }
+    }
+}
+
 struct NovelCover: View {
     let book: NovelBook
     var corner: CGFloat = 9
@@ -446,44 +478,28 @@ struct NovelCover: View {
 
     var body: some View {
         Color.clear
-            .overlay {
-                if book.hasCover, let img = UIImage(contentsOfFile: NovelStore.coverURL(book.id).path) {
-                    Image(uiImage: img).resizable().scaledToFill()
-                } else if let u = book.coverURL, let url = URL(string: u) {
-                    AsyncImage(url: url) { phase in
-                        if let img = phase.image { img.resizable().scaledToFill() }
-                        else { GeneratedBookCover(title: book.title, author: book.author) }
-                    }
-                } else {
-                    GeneratedBookCover(title: book.title, author: book.author)
-                }
-            }
+            .overlay { BookArt(url: book.artURL, title: book.title, author: book.author) }
             .overlay { BookSpineOverlay(corner: corner) }
-        .overlay(alignment: .topTrailing) {
-            if let badge, !badge.isEmpty {
-                Text(badge)
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .frame(height: 17)
-                    .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                    .padding(5)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if let progress {
-                GeometryReader { g in
-                    ZStack(alignment: .leading) {
-                        Color.black.opacity(0.36)
-                        Color(red: 0.541, green: 0.706, blue: 1.0)
-                            .frame(width: g.size.width * min(max(progress, 0.02), 1))
-                    }
+            .overlay(alignment: .topTrailing) {
+                if let badge, !badge.isEmpty {
+                    Text(badge)
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .frame(height: 17)
+                        .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .padding(5)
                 }
-                .frame(height: 3)
             }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-        .shadow(color: .black.opacity(0.24), radius: 7, y: 4)
+            .overlay(alignment: .bottom) {
+                if let progress {
+                    Color.black.opacity(0.36)
+                        .overlay { Color(red: 0.541, green: 0.706, blue: 1.0).scaleEffect(x: min(max(progress, 0.02), 1), y: 1, anchor: .leading) }
+                        .frame(height: 3)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+            .modifier(BookShadow(corner: corner))
     }
 }
 

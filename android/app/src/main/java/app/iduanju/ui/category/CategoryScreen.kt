@@ -21,29 +21,21 @@ import androidx.compose.ui.graphics.graphicsLayer
 import app.iduanju.core.hongguo.HGFilterOption
 import app.iduanju.core.hongguo.HGFilterRow
 import app.iduanju.ui.components.*
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -54,8 +46,12 @@ import app.iduanju.core.hongguo.HGRankGenre
 import app.iduanju.core.hongguo.HGRankSub
 import app.iduanju.core.hongguo.HGSeries
 import app.iduanju.ui.home.HomeFmt
+import app.iduanju.ui.home.rootBottomInset
 import app.iduanju.ui.theme.IdjThemeColors
 import coil.compose.AsyncImage
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -105,8 +101,8 @@ fun CategoryScreen(onOpenDetail: (String) -> Unit, onSearch: (() -> Unit)? = nul
                     else IdjApp.instance.hongguo.category(selectedIds, requestOffset, requestSession, seenIds)
                 }
                 if (myGen != gen) return@launch
-                val seen = items.map { it.seriesId }.toSet()
-                items.addAll(p.items.filter { it.seriesId !in seen })
+                val seen = items.mapTo(HashSet()) { it.seriesId }
+                items.addAll(p.items.filter { seen.add(it.seriesId) })
                 nextOffset = p.nextOffset ?: (nextOffset + p.items.size); session = p.sessionId; hasMore = p.hasMore && p.items.isNotEmpty()
             } catch (e: Exception) { if (myGen == gen) err = e.message ?: "加载失败" }
             if (myGen == gen) loading = false
@@ -153,71 +149,83 @@ fun CategoryScreen(onOpenDetail: (String) -> Unit, onSearch: (() -> Unit)? = nul
         }
     }
     fun resetAll() { selected.clear(); names.clear(); gen++; items.clear(); panel = null; scope.launch { loadPanel(); if (panel != null) load(true) } }
-    val picks = panel?.rows?.mapNotNull { r -> selected[r.type]?.takeIf { it.isNotEmpty() }?.let { id -> r.type to (r.items.firstOrNull { it.id == id }?.name ?: names[r.type] ?: "") } }?.filter { it.second.isNotEmpty() } ?: emptyList()
+    val picks by remember { derivedStateOf {
+        panel?.rows?.mapNotNull { r -> selected[r.type]?.takeIf { it.isNotEmpty() }?.let { id -> r.type to (r.items.firstOrNull { it.id == id }?.name ?: names[r.type] ?: "") } }?.filter { it.second.isNotEmpty() } ?: emptyList()
+    } }
+    val cols = LocalLayoutMetrics.current.posterCols
+    val full: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
+    // Sampled by the sticky strip only, so the grid is recorded just while that strip can appear.
+    val pageColor = c.bg
+    val gridBackdrop = rememberLayerBackdrop {
+        drawRect(pageColor)
+        drawContent()
+    }
 
     DSPage(glow = !scrolled) {
-        LazyVerticalGrid(GridCells.Fixed(app.iduanju.ui.components.LocalLayoutMetrics.current.posterCols), Modifier.fillMaxSize().statusBarsPadding(), state = grid,
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 110.dp),
+        LazyVerticalGrid(GridCells.Fixed(cols), Modifier.fillMaxSize().statusBarsPadding().then(if (filterMode) Modifier.layerBackdrop(gridBackdrop) else Modifier), state = grid,
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = rootBottomInset() + 12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-            item(span = { GridItemSpan(maxLineSpan) }, key = "tabs") {
+            item("tabs", full, "tabs") {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     UnderlineTabs(listOf(false, true), filterMode, { if (it) "筛选找片" else "榜单" }, onSelect = { if (it != filterMode) filterMode = it },
                         modifier = Modifier.padding(start = 4.dp).weight(1f))
-                    if (onSearch != null) {
-                        GlassIconButton(
-                            Icons.Rounded.Search,
-                            "搜索",
-                            size = 38.dp,
-                            iconSize = 19.dp,
-                            onClick = onSearch,
-                        )
-                    }
+                    if (onSearch != null) RoundIconButton(Icons.Rounded.Search, "搜索", size = 40.dp, onClick = onSearch)
                 }
             }
+            val count = items.size
             if (!filterMode) {
-                item(span = { GridItemSpan(maxLineSpan) }, key = "rankhead") {
+                item("rankhead", full, "rankhead") {
                     Column {
                         SegmentedTabs(HGRankGenre.entries, genre, { it.label }, { genre = it }, Modifier.padding(top = 22.dp))
                         ChipRow(genre.subs, sub, { it.label }, { sub = it }, start = 0.dp, modifier = Modifier.padding(top = 12.dp))
                         Spacer(Modifier.height(18.dp))
                     }
                 }
-                itemsIndexed(items.take(3), key = { _, s -> "top" + s.seriesId }) { i, s -> PosterCell(s, i + 1, onOpen = onOpenDetail) }
-                itemsIndexed(items.drop(3), key = { _, s -> s.seriesId }, span = { _, _ -> GridItemSpan(maxLineSpan) }) { i, s ->
+                items(minOf(count, 3), key = { "top" + items[it].seriesId }, contentType = { "poster" }) { i -> PosterCell(items[i], i + 1, onOpen = onOpenDetail) }
+                items((count - 3).coerceAtLeast(0), key = { items[it + 3].seriesId }, span = { full() }, contentType = { "rank" }) { i ->
                     Column(Modifier.padding(top = if (i == 0) 12.dp else 0.dp)) {
                         if (i > 0) Hairline()
-                        RankRow(s, i + 4, onOpenDetail)
+                        RankRow(items[i + 3], i + 4, onOpenDetail)
                     }
                 }
+                if (count == 0 && err == null && (loading || vm.loadedKey == null)) {
+                    items(cols, key = { "skeleton$it" }, contentType = { "skeleton" }) { PosterSkeleton(Modifier.padding(bottom = 12.dp)) }
+                    items(5, key = { "rowSkeleton$it" }, span = { full() }, contentType = { "rowSkeleton" }) { RowSkeleton(thumb = 62.dp) }
+                }
             } else {
-                item(span = { GridItemSpan(maxLineSpan) }, key = "panel") {
+                item("panel", full, "panel") {
                     Box(Modifier.padding(top = 22.dp, bottom = 16.dp)) {
                         val p = panel
                         when {
                             p != null -> FilterPanel(p, selected, picks, ::selectOption, onRemove = { t -> p.rows.firstOrNull { it.type == t }?.let { selectOption(it, "") } }, onReset = ::resetAll)
-                            panelErr != null -> Text("$panelErr · 点击重试", color = c.secondary, fontSize = 13.sp, modifier = Modifier.clickable { scope.launch { loadPanel(); if (panel != null) load(true) } })
-                            else -> Box(Modifier.fillMaxWidth().height(230.dp).dsCard(20.dp))
+                            panelErr != null -> ErrorState("加载失败", note = panelErr) { scope.launch { loadPanel(); if (panel != null) load(true) } }
+                            else -> SkeletonBlock(Modifier.fillMaxWidth().height(230.dp), 20.dp)
                         }
                     }
                 }
-                itemsIndexed(items, key = { _, s -> s.seriesId }) { _, s -> PosterCell(s, null, HomeFmt.meta(s), onOpenDetail, Modifier.padding(bottom = 16.dp)) }
+                items(count, key = { items[it].seriesId }, contentType = { "poster" }) { i ->
+                    val s = items[i]
+                    PosterCell(s, null, s.tags.take(2).joinToString(" · ").ifEmpty { null }, onOpenDetail, Modifier.padding(bottom = 16.dp))
+                }
+                if (count == 0 && loading) items(cols * 2, key = { "skeleton$it" }, contentType = { "skeleton" }) { PosterSkeleton(Modifier.padding(bottom = 16.dp)) }
             }
-            item(span = { GridItemSpan(maxLineSpan) }, key = "footer") {
-                Box(Modifier.fillMaxWidth().padding(vertical = 18.dp), contentAlignment = Alignment.Center) {
+            item("footer", full, "footer") {
+                Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
                     when {
-                        loading -> CircularProgressIndicator(color = c.secondary, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
-                        err != null -> Text("$err · 点击重试", color = c.secondary, fontSize = 13.sp, modifier = Modifier.clickable { load(items.isEmpty()) })
+                        err != null && items.isEmpty() -> ErrorState("加载失败", note = err) { load(true) }
+                        loading -> if (items.isNotEmpty()) GlassSpinner(size = 24.dp)
+                        err != null -> GlassTextButton("$err · 点击重试", color = c.secondary, fontSize = 13.sp) { load(false) }
                         !hasMore && items.isNotEmpty() -> Text("没有更多了", color = c.tertiary, fontSize = 12.sp)
                     }
                 }
             }
         }
         // `.topfade`
-        Box(Modifier.fillMaxWidth().height(if (collapsed) 70.dp else 24.dp).graphicsLayer { alpha = if (scrolled) 1f else 0f }
-            .background(Brush.verticalGradient(0f to c.bg, 0.42f to c.bg, 1f to c.bg.copy(alpha = 0f))).statusBarsPadding())
+        Box(Modifier.statusBarsPadding().fillMaxWidth().height(if (collapsed) 70.dp else 24.dp).graphicsLayer { alpha = if (scrolled) 1f else 0f }
+            .background(remember(c.bg) { Brush.verticalGradient(0f to c.bg, 0.42f to c.bg, 1f to c.bg.copy(alpha = 0f)) }))
         AnimatedVisibility(collapsed, Modifier.statusBarsPadding().padding(horizontal = 12.dp).padding(top = 2.dp),
-            enter = slideInVertically(DS.panel()) { -it } + fadeIn(), exit = slideOutVertically(DS.panel()) { -it } + fadeOut()) {
-            StickyStrip(picks.map { it.second }) { scope.launch { grid.animateScrollToItem(0) } }
+            enter = slideInVertically(DS.panel()) { -it } + fadeIn(Motion.fade()), exit = slideOutVertically(DS.panel()) { -it } + fadeOut(Motion.fade())) {
+            StickyStrip(picks.map { it.second }, gridBackdrop) { scope.launch { grid.animateScrollToItem(0) } }
         }
     }
 }
@@ -234,27 +242,27 @@ private fun FilterPanel(p: HGPanel, selected: Map<String, String>, picks: List<P
         }
         p.rows.filter { it.type != "genre" }.forEach { row ->
             val opts = listOf(HGFilterOption("", "全部")) + row.items
-            Row(Modifier.height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(row.name, color = c.tertiary, fontSize = 13.sp, maxLines = 1, modifier = Modifier.widthIn(min = 36.dp).padding(end = 6.dp))
                 ChipRow(opts, opts.firstOrNull { it.id == (selected[row.type] ?: "") } ?: opts[0], { it.name }, { onSelect(row, it.id) },
                     neutral = { it.id.isEmpty() }, start = 0.dp)
             }
         }
         Hairline(Modifier.padding(top = 6.dp))
-        Row(Modifier.height(48.dp).padding(end = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        Row(Modifier.heightIn(min = 48.dp).padding(end = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             Text("已选", color = c.tertiary, fontSize = 13.sp)
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 if (picks.isEmpty()) Text("全部剧集", color = c.tertiary, fontSize = 13.sp)
                 picks.forEach { (t, name) ->
-                    Row(Modifier.height(24.dp).clip(CircleShape).background(c.glass).pressClick(label = "filter.pick.$name") { onRemove(t) }
+                    Row(Modifier.heightIn(min = 28.dp).clip(CircleShape).background(c.glass).testTag("filter.pick.$name").pressClick(label = "移除 $name") { onRemove(t) }
                         .padding(start = 9.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text(name, color = c.text, fontSize = 12.sp)
                         Icon(Icons.Rounded.Close, null, Modifier.size(10.dp), tint = c.tertiary)
                     }
                 }
             }
-            Row(Modifier.graphicsLayer { alpha = if (picks.isEmpty()) 0.4f else 1f }.pressClick(enabled = picks.isNotEmpty(), label = "filter.reset", onClick = onReset)
-                .height(44.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.graphicsLayer { alpha = if (picks.isEmpty()) 0.4f else 1f }.testTag("filter.reset").pressClick(enabled = picks.isNotEmpty(), label = "重置", onClick = onReset)
+                .heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Icon(Icons.Rounded.Refresh, null, Modifier.size(14.dp), tint = c.accent)
                 Text("重置", color = c.accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
@@ -263,9 +271,9 @@ private fun FilterPanel(p: HGPanel, selected: Map<String, String>, picks: List<P
 }
 
 @Composable
-private fun StickyStrip(names: List<String>, onExpand: () -> Unit) {
+private fun StickyStrip(names: List<String>, backdrop: Backdrop, onExpand: () -> Unit) {
     val c = IdjThemeColors
-    Row(Modifier.fillMaxWidth().height(46.dp).dsBar(23.dp).padding(start = 14.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically,
+    Row(Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(23.dp), backdrop = backdrop, shadowRadius = 15.dp).pointerInput(Unit) {}.heightIn(min = 46.dp).padding(start = 14.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Icon(Icons.Rounded.FilterList, null, Modifier.size(17.dp), tint = c.accent)
         Text(if (names.isEmpty()) "全部剧集" else names.joinToString(" · "), Modifier.weight(1f, fill = false), color = c.text, fontSize = 15.sp,
@@ -274,7 +282,7 @@ private fun StickyStrip(names: List<String>, onExpand: () -> Unit) {
             Text("${names.size}", color = c.onAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.weight(1f))
-        Row(Modifier.height(30.dp).clip(CircleShape).background(c.glass).pressClick(label = "filter.expand", onClick = onExpand).padding(start = 12.dp, end = 8.dp),
+        Row(Modifier.heightIn(min = 32.dp).clip(CircleShape).background(c.glass).testTag("filter.expand").pressClick(label = "展开筛选", onClick = onExpand).padding(start = 12.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Text("展开", color = c.secondary, fontSize = 13.sp)
             Icon(Icons.Rounded.KeyboardArrowDown, null, Modifier.size(16.dp), tint = c.secondary)
@@ -301,7 +309,10 @@ internal fun PosterCell(s: HGSeries, rank: Int?, subtitle: String? = null, onOpe
 @Composable
 internal fun RankRow(s: HGSeries, rank: Int, onOpen: (String) -> Unit) {
     val c = IdjThemeColors
-    Row(Modifier.fillMaxWidth().pressClick(0.98f, label = s.title) { onOpen(s.seriesId) }.padding(vertical = 10.dp),
+    Row(Modifier.fillMaxWidth().pressClick(0.98f, label = s.title) {
+        app.iduanju.data.Catalog.rememberPreview(s.seriesId, s.title, s.cover)
+        onOpen(s.seriesId)
+    }.padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Box(Modifier.width(26.dp), contentAlignment = Alignment.Center) { RankNumeral(rank) }
         Box(Modifier.size(62.dp, 84.dp).clip(RoundedCornerShape(9.dp)).background(c.glass)) {

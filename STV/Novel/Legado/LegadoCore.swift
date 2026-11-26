@@ -199,6 +199,11 @@ enum LegadoHTTP {
         }
         var req = req0
         if req.value(forHTTPHeaderField: "User-Agent") == nil { req.setValue(userAgent, forHTTPHeaderField: "User-Agent") }
+        if req.value(forHTTPHeaderField: "Cookie") == nil,
+           let u = req.url,
+           let cookie = LegadoCookies.cookieHeader(for: u) {
+            req.setValue(cookie, forHTTPHeaderField: "Cookie")
+        }
         if req.timeoutInterval > 20 || req.timeoutInterval <= 0 { req.timeoutInterval = 15 }
         let data: Data, resp: HTTPURLResponse
         if let t = transport {

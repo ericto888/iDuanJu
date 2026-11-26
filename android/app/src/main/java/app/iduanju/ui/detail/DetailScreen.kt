@@ -11,8 +11,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
@@ -22,6 +20,7 @@ import androidx.compose.ui.platform.LocalDensity
 import app.iduanju.ui.components.*
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -38,6 +37,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,7 +47,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -60,6 +59,7 @@ import app.iduanju.ui.home.HomeFmt
 import app.iduanju.ui.theme.IdjThemeColors
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /** Same as iOS/spec: groups of 30 (≤300), 50 (≤600), 60; tablet portrait uses 50 per tab so 10-col grids fill naturally. */
@@ -104,7 +104,7 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
                     relatedSeries=(1..3).map { HGSeries(seriesId=if(it==1)seriesId else "sample-$it",title="本地系列样例 $it",episodeCount=48) },
                     cast=(1..5).map { app.iduanju.core.hongguo.HGCelebrity(id="sample-$it",name="样例演员 $it",role="饰 样例") })
             } else {
-                val base = withContext(Dispatchers.IO) { app.iduanju.data.Catalog.detail(seriesId, web = false) }
+                val base = app.iduanju.data.Catalog.load(seriesId)
                 d = base
                 if (app.iduanju.data.Catalog.isHongguo(seriesId) && base.cast.isEmpty() && base.tags.isEmpty()) {
                     val enriched = withContext(Dispatchers.IO) { app.iduanju.data.Catalog.enrich(seriesId, base) }
@@ -114,6 +114,7 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
             err = e.message ?: "加载失败"
         }
     }
@@ -124,8 +125,23 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
     val epGroupSize = if (isTabletPortrait) 50 else 30
 
     val resume = lib.progress(seriesId)
-    var group by remember(d, epGroupSize) {
-        mutableIntStateOf(d?.let { dd -> EpisodeGroups.ranges(dd.episodes.size, epGroupSize).indexOfFirst { resume != null && resume.episodeIndex in it }.coerceAtLeast(0) } ?: 0)
+    // 线路: the one chosen by hand for this title, else the default.
+    var lineIndex by remember(seriesId) { mutableIntStateOf(0) }
+    LaunchedEffect(d) { d?.lines?.let { ls -> lineIndex = lib.preferredLine(seriesId)?.let { id -> ls.indexOfFirst { it.id == id && it.episodes.isNotEmpty() } }?.takeIf { it >= 0 } ?: 0 } }
+    val eps = remember(d, lineIndex) { d?.let { dd -> dd.lines.getOrNull(lineIndex)?.episodes?.takeIf { it.isNotEmpty() } ?: dd.episodes }.orEmpty() }
+    val picker = remember(seriesId) { EpisodePickerState() }
+    LaunchedEffect(eps, epGroupSize) { picker.group = EpisodeGroups.ranges(eps.size, epGroupSize).indexOfFirst { resume != null && resume.episodeIndex in it }.coerceAtLeast(0) }
+    val selectLine: (Int) -> Unit = { i ->
+        lineIndex = i
+        d?.lines?.getOrNull(i)?.let { lib.setPreferredLine(seriesId, it.id) }
+    }
+    // The episode 播放 will open is resolved while the page is read, so playback starts without a round trip. Only the
+    // catalogue source: TVBox resolving may run scripts or a hidden page.
+    LaunchedEffect(eps, resume?.episodeNumber) {
+        if (eps.isEmpty() || !seriesId.all { it.isDigit() } || !IdjApp.instance.settings.prefetchEnabled) return@LaunchedEffect
+        kotlinx.coroutines.delay(1_200)
+        val ep = eps.firstOrNull { it.ep == resume?.episodeNumber } ?: eps.first()
+        app.iduanju.ui.player.EpisodeCache.warm(ep, lib.preferredQuality(seriesId))
     }
     val scroll = rememberScrollState()
     LaunchedEffect(d) { if(d!=null && app.iduanju.BuildConfig.DEBUG && app.iduanju.ui.UiEvidence.scroll) { kotlinx.coroutines.delay(1200); scroll.scrollTo((scroll.maxValue*0.75).toInt()) } }
@@ -135,8 +151,19 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
     var actionsBottom by remember { mutableFloatStateOf(Float.MAX_VALUE) }
     val actionsThresholdPx = with(density) { 100.dp.toPx() }
     val actionsOut by remember(actionsThresholdPx) { derivedStateOf { actionsBottom < actionsThresholdPx } }
-    val startEp = resume?.episodeNumber ?: d?.episodes?.firstOrNull()?.ep ?: 1
-    val playTitle = if (resume != null) "继续第 ${resume.episodeNumber} 集" else "开始播放"
+    val live = d?.isLive == true
+    val startEp = (if (live && resume != null) eps.getOrNull(app.iduanju.core.tvbox.LiveKey(resume.episodeNumber, resume.episodeGroup, resume.episodeTitle).find(eps))?.ep else resume?.episodeNumber) ?: eps.firstOrNull()?.ep ?: 1
+    // The player loads the list again: a channel goes there by name.
+    val play: (String, Int) -> Unit = { s, ep ->
+        if (live) eps.firstOrNull { it.ep == ep }?.let { app.iduanju.data.Catalog.rememberChannel(s, app.iduanju.core.tvbox.LiveKey(ep, it.page.orEmpty(), it.title)) }
+        onPlay(s, ep)
+    }
+    val playTitle = when {
+        live -> "观看直播"
+        resume == null -> "开始播放"
+        eps.size <= 1 -> "继续播放 " + clockText(resume.seconds)
+        else -> "继续第 ${resume.episodeNumber} 集"
+    }
 
     val useTwoPane = isTabletLandscape && d != null
     val usePortraitEditorial = !useTwoPane && isTabletPortrait && d != null
@@ -169,7 +196,7 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
                             .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        val eps = "全 ${maxOf(dd.totalEps, dd.episodes.size)} 集"
+                        val total = episodeCountText(dd)
                         Box(
                             Modifier
                                 .fillMaxWidth()
@@ -181,11 +208,11 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
                         }
                         DSStatus(dd.source.ifEmpty { "红果短剧" }, StatusTone.Accent)
                         Text(dd.title, color = c.text, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, lineHeight = 30.sp)
-                        val meta = listOfNotNull(if (dd.episodeLabel.isEmpty()) eps else DS.spaced(dd.episodeLabel), dd.author.ifEmpty { null }).joinToString(" · ")
+                        val meta = listOfNotNull(if (dd.episodeLabel.isEmpty()) total else DS.spaced(dd.episodeLabel), dd.author.ifEmpty { null }).joinToString(" · ")
                         if (meta.isNotEmpty()) Text(meta, color = c.secondary, fontSize = 13.sp)
                         // Single primary Play + Favorite CTA for tablet landscape (not duplicated in right column).
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            PillButton(playTitle, Modifier.weight(1f), icon = Icons.Filled.PlayArrow, tone = PillTone.Play, enabled = dd.episodes.isNotEmpty()) { onPlay(seriesId, startEp) }
+                            PillButton(playTitle, Modifier.weight(1f), icon = Icons.Filled.PlayArrow, tone = PillTone.Play, enabled = eps.isNotEmpty()) { play(seriesId, startEp) }
                             Heart(seriesId, dd, 48.dp)
                         }
                     }
@@ -200,9 +227,11 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
                             d = dd,
                             sid = seriesId,
                             resume = resume,
-                            group = group,
-                            setGroup = { group = it },
-                            onPlay = onPlay,
+                            eps = eps,
+                            lineIndex = lineIndex,
+                            onLine = selectLine,
+                            picker = picker,
+                            onPlay = play,
                             onOpenSeries = onOpenSeries,
                             playTitle = playTitle,
                             startEp = startEp,
@@ -227,7 +256,7 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
                         sid = seriesId,
                         playTitle = playTitle,
                         startEp = startEp,
-                        onPlay = onPlay,
+                        onPlay = play,
                     )
                     if (dd.desc.isNotEmpty()) {
                         Intro(dd.desc, horizontalPadding = 24.dp, topPadding = 22.dp, collapsedLines = 4)
@@ -236,9 +265,11 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
                         d = dd,
                         sid = seriesId,
                         resume = resume,
-                        group = group,
-                        setGroup = { group = it },
-                        onPlay = onPlay,
+                        eps = eps,
+                        lineIndex = lineIndex,
+                        onLine = selectLine,
+                        picker = picker,
+                        onPlay = play,
                         inset = 24.dp,
                         epCols = 10,
                         groupSize = epGroupSize,
@@ -268,15 +299,11 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
                     )
                     val dd = d
                     when {
-                        dd != null -> DetailBody(dd, seriesId, resume, group, { group = it }, onPlay, onOpenSeries, playTitle, startEp) { actionsBottom = it }
-                        err != null -> Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(err!!, color = c.secondary, fontSize = 14.sp, textAlign = TextAlign.Center)
-                            Spacer(Modifier.height(12.dp))
-                            MiniButton("重试") { reload++ }
-                        }
+                        dd != null -> DetailBody(dd, seriesId, resume, eps, lineIndex, selectLine, picker, play, onOpenSeries, playTitle, startEp) { actionsBottom = it }
+                        err != null -> ErrorState(err!!, Modifier.padding(top = 12.dp)) { reload++ }
                         else -> Column(Modifier.padding(horizontal = 20.dp).padding(top = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Box(Modifier.fillMaxWidth().height(66.dp).clip(RoundedCornerShape(16.dp)).background(c.glass))
-                            repeat(3) { Box(Modifier.fillMaxWidth().height(16.dp).clip(RoundedCornerShape(4.dp)).background(c.glass)) }
+                            SkeletonBlock(Modifier.fillMaxWidth().height(66.dp), 16.dp)
+                            repeat(3) { i -> SkeletonBlock(Modifier.fillMaxWidth(if (i == 2) 0.6f else 1f).height(16.dp), 4.dp) }
                         }
                     }
                 }
@@ -298,10 +325,10 @@ fun DetailScreen(seriesId: String, onBack: () -> Unit, onPlay: (String, Int) -> 
                 })
         }
         // floating play bar (`.playbar`) — phone layout only; tablets keep a single primary Play + Favorite CTA
-        AnimatedVisibility(!isTabletLayout && d?.episodes?.isNotEmpty() == true && actionsOut, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 16.dp).padding(bottom = 4.dp),
+        AnimatedVisibility(!isTabletLayout && eps.isNotEmpty() && actionsOut, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 16.dp).padding(bottom = 4.dp),
             enter = slideInVertically(DS.panel()) { it } + fadeIn(), exit = slideOutVertically(DS.panel()) { it } + fadeOut()) {
             Row(Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(32.dp), backdrop = pageBackdrop, shadowRadius = 20.dp).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                PillButton(playTitle, Modifier.weight(1f), icon = Icons.Filled.PlayArrow, tone = PillTone.Play) { onPlay(seriesId, startEp) }
+                PillButton(playTitle, Modifier.weight(1f), icon = Icons.Filled.PlayArrow, tone = PillTone.Play) { play(seriesId, startEp) }
                 d?.let { Heart(seriesId, it, 48.dp) }
             }
         }
@@ -314,33 +341,13 @@ private fun DetailHero(d: HGSeriesDetail?, sid: String, coverHint: String = "", 
     val coverUrl = d?.cover?.takeIf { it.isNotEmpty() } ?: coverHint
     val displayTitle = d?.title?.takeIf { it.isNotEmpty() } ?: titleHint
     Box(Modifier.fillMaxWidth().height(300.dp)) {
-        // `.bd`: the poster itself blurred past the edges. Use the raw cover URL on API 31+ so it hits
-        // Coil's exact memory-cache entry from the card the user just tapped on frame 0 (no blank/white flash).
+        // `.bd`: the poster itself, blurred once at decode; the card's cached cover stands in on frame 0.
         if (coverUrl.isNotEmpty()) {
-            Box(Modifier.fillMaxSize().clipToBounds()) {
-                if (android.os.Build.VERSION.SDK_INT >= 31) {
-                    AsyncImage(
-                        coverUrl,
-                        null,
-                        Modifier.fillMaxSize().scale(1.30f).blur(24.dp),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    val ctx = androidx.compose.ui.platform.LocalContext.current
-                    val req = remember(coverUrl) {
-                        coil.request.ImageRequest.Builder(ctx)
-                            .data(coverUrl)
-                            .size(48, 64)
-                            .memoryCacheKey("detail-blur:$coverUrl")
-                            .build()
-                    }
-                    AsyncImage(req, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                }
-            }
+            Box(Modifier.fillMaxSize().clipToBounds()) { BlurredCover(coverUrl, Modifier.fillMaxSize().scale(1.12f)) }
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Black.copy(0.30f), 0.34f to Color.Black.copy(0.08f), 0.76f to c.bg.copy(0.74f), 1f to c.bg)))
         }
         Row(Modifier.align(Alignment.BottomStart).padding(horizontal = 20.dp).padding(bottom = 2.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            val eps = d?.let { "全 ${maxOf(it.totalEps, it.episodes.size)} 集" }
+            val eps = d?.let(::episodeCountText)
             Box(Modifier.size(116.dp, 155.dp).shadow(15.dp, RoundedCornerShape(12.dp), ambientColor = Color.Black.copy(0.4f), spotColor = Color.Black.copy(0.4f))) {
                 PosterArt(coverUrl, Modifier.fillMaxSize(), corner = 12.dp)
                 if (eps != null) Text(eps, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp), color = Color.White.copy(0.8f), fontSize = 10.sp)
@@ -348,7 +355,7 @@ private fun DetailHero(d: HGSeriesDetail?, sid: String, coverHint: String = "", 
             Column(Modifier.weight(1f).padding(bottom = 2.dp)) {
                 DSStatus(d?.source ?: "红果短剧", StatusTone.Accent)
                 Text(displayTitle, color = c.text, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    lineHeight = 29.sp, modifier = Modifier.padding(top = 8.dp))
+                    lineHeight = 29.sp, modifier = Modifier.padding(top = 8.dp).copyOnLongPress(displayTitle))
                 val meta = listOfNotNull(d?.let { if (it.episodeLabel.isEmpty()) eps else DS.spaced(it.episodeLabel) }, d?.author?.ifEmpty { null }).joinToString(" · ")
                 Text(meta, color = c.secondary, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 6.dp))
             }
@@ -379,8 +386,7 @@ private fun TabletPortraitHero(
 ) {
     val c = IdjThemeColors
     val go = app.iduanju.ui.LocalNavigate.current
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    val epsLabel = "全 ${maxOf(d.totalEps, d.episodes.size)} 集"
+    val epsLabel = episodeCountText(d)
     val cardShape = RoundedCornerShape(24.dp)
 
     Box(
@@ -393,35 +399,7 @@ private fun TabletPortraitHero(
     ) {
         // Subtle blurred poster backdrop with directional scrim so text & CTA remain crisp.
         Box(Modifier.matchParentSize().clipToBounds()) {
-            if (android.os.Build.VERSION.SDK_INT >= 31) {
-                AsyncImage(
-                    d.cover,
-                    null,
-                    Modifier
-                        .fillMaxSize()
-                        .scale(1.25f)
-                        .blur(22.dp)
-                        .alpha(if (c.dark) 0.36f else 0.16f),
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
-                val blurReq = remember(d.cover) {
-                    coil.request.ImageRequest.Builder(ctx)
-                        .data(d.cover)
-                        .size(48, 64)
-                        .memoryCacheKey("detail-blur:${d.cover}")
-                        .build()
-                }
-                AsyncImage(
-                    blurReq,
-                    null,
-                    Modifier
-                        .fillMaxSize()
-                        .scale(1.25f)
-                        .alpha(if (c.dark) 0.36f else 0.16f),
-                    contentScale = ContentScale.Crop,
-                )
-            }
+            BlurredCover(d.cover, Modifier.fillMaxSize().scale(1.12f), alpha = if (c.dark) 0.36f else 0.16f)
             Box(
                 Modifier
                     .fillMaxSize()
@@ -609,7 +587,7 @@ private fun HeroStatChip(text: String) {
 
 @Composable
 private fun DetailBody(
-    d: HGSeriesDetail, sid: String, resume: app.iduanju.data.WatchProgress?, group: Int, setGroup: (Int) -> Unit,
+    d: HGSeriesDetail, sid: String, resume: app.iduanju.data.WatchProgress?, eps: List<HGEpisode>, lineIndex: Int, onLine: (Int) -> Unit, picker: EpisodePickerState,
     onPlay: (String, Int) -> Unit, onOpenSeries: (String) -> Unit, playTitle: String, startEp: Int,
     showActions: Boolean = true,
     onActions: (Float) -> Unit,
@@ -620,13 +598,13 @@ private fun DetailBody(
     if (showActions) {
         Row(Modifier.padding(horizontal = 20.dp).padding(top = 16.dp).onGloballyPositioned { onActions(it.boundsInRoot().bottom) },
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            PillButton(playTitle, Modifier.weight(1f), icon = Icons.Filled.PlayArrow, tone = PillTone.Play, height = 50.dp, enabled = d.episodes.isNotEmpty()) { onPlay(sid, startEp) }
+            PillButton(playTitle, Modifier.weight(1f), icon = Icons.Filled.PlayArrow, tone = PillTone.Play, height = 50.dp, enabled = eps.isNotEmpty()) { onPlay(sid, startEp) }
             Heart(sid, d, 50.dp)
         }
     }
     if (d.tags.isNotEmpty()) {
         LazyRow(Modifier.padding(top = 16.dp), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(d.tags) { t ->
+            items(d.tags.distinct(), key = { it }) { t ->
                 Box(Modifier.height(26.dp).clip(CircleShape).background(c.glass).padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
                     Text(t, color = c.secondary, fontSize = 12.sp)
                 }
@@ -643,7 +621,7 @@ private fun DetailBody(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 item { Text("主演", color = c.secondary, fontSize = 12.sp) }
-                items(actors) { actorName ->
+                items(actors.distinct(), key = { it }) { actorName ->
                     Box(
                         Modifier
                             .height(26.dp)
@@ -664,60 +642,104 @@ private fun DetailBody(
 
     // 6 per row on phones, 8 on medium, 10 in the tablet-landscape two-pane body.
     val epCols = when (LocalLayoutMetrics.current.tier) { SizeTier.Compact -> 6; SizeTier.Medium -> 8; SizeTier.Expanded -> 10 }
-    EpisodeSection(d, sid, resume, group, setGroup, onPlay, inset = 20.dp, epCols = epCols, groupSize = 30)
+    EpisodeSection(d, sid, resume, eps, lineIndex, onLine, picker, onPlay, inset = 20.dp, epCols = epCols, groupSize = 30)
     if (d.relatedSeries.size > 1) RelatedShelf(d.relatedSeries, d.seriesId, onOpenSeries)
     if (d.cast.isNotEmpty()) CastShelf(d.cast, inset = 20.dp)
 }
 
+/** Episode group and order of the page, kept while the line or the window changes. */
+@Stable
+private class EpisodePickerState {
+    var group by mutableIntStateOf(0)
+    var reversed by mutableStateOf(false)
+    /** Live lists: the selected channel group. */
+    var channelGroup by mutableStateOf<String?>(null)
+}
+
+/** 线路 chips (multi-line titles) → 选集 header with 正序 / 倒序 → 30-episode groups → grid. */
 @Composable
 private fun EpisodeSection(
     d: HGSeriesDetail,
     sid: String,
     resume: app.iduanju.data.WatchProgress?,
-    group: Int,
-    setGroup: (Int) -> Unit,
+    eps: List<HGEpisode>,
+    lineIndex: Int,
+    onLine: (Int) -> Unit,
+    picker: EpisodePickerState,
     onPlay: (String, Int) -> Unit,
     inset: Dp = 20.dp,
     epCols: Int = 6,
     groupSize: Int = 30,
 ) {
-    val c = IdjThemeColors
-    val ranges = EpisodeGroups.ranges(d.episodes.size, groupSize)
-    val g = if (group in ranges.indices) group else 0
-    SectionHeader2("选集", "共 ${maxOf(d.totalEps, d.episodes.size)} 集", inset = inset, modifier = Modifier.padding(top = 22.dp))
-    if (ranges.size > 1) {
+    if (d.isLive) { ChannelSection(eps, sid, resume, picker, onPlay, inset, epCols); return }
+    if (d.lines.size > 1) {
+        SectionHeader2("线路", "共 ${d.lines.size} 条", inset = inset, modifier = Modifier.padding(top = 22.dp))
         LazyRow(Modifier.padding(top = 12.dp), contentPadding = PaddingValues(horizontal = inset), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            itemsIndexed(ranges) { i, r -> ToneChip(EpisodeGroups.label(r, d.episodes), i == g, neutral = true, small = true) { setGroup(i) } }
-        }
-    }
-    ranges.getOrNull(g)?.let { r ->
-        androidx.compose.animation.AnimatedContent(r, label = "eps", transitionSpec = { fadeIn() togetherWith fadeOut() }) { rr ->
-            Column(Modifier.padding(horizontal = inset).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                rr.chunked(epCols).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        row.forEach { i ->
-                            val ep = d.episodes[i]
-                            val cur = resume?.episodeIndex == i
-                            Box(
-                                Modifier
-                                    .weight(1f)
-                                    .height(44.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(if (cur) c.accentSoft else c.glass)
-                                    .then(if (cur) Modifier.border(1.dp, c.accentLine, RoundedCornerShape(12.dp)) else Modifier)
-                                    .pressClick(0.94f, label = "第${ep.ep}集") { onPlay(sid, ep.ep) },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text("${ep.ep}", color = if (cur) c.accent else c.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                                if (cur) Box(Modifier.align(Alignment.TopEnd).padding(6.dp).size(5.dp).clip(CircleShape).background(c.accent))
-                            }
-                        }
-                        repeat(epCols - row.size) { Spacer(Modifier.weight(1f)) }
-                    }
-                }
+            itemsIndexed(d.lines, key = { i, l -> "$i:${l.id}" }) { i, l ->
+                ToneChip(l.name.ifBlank { "线路 ${i + 1}" }, i == lineIndex, count = l.episodes.size, enabled = l.episodes.isNotEmpty()) { onLine(i) }
             }
         }
     }
+    if (eps.isEmpty()) { EmptyState("暂无剧集", note = if (d.lines.size > 1) "可以换一条线路试试" else null); return }
+    val textual = remember(eps) { !sid.all { it.isDigit() } && EpisodeNames.textual(eps) }
+    val ranges = remember(eps.size, groupSize) { EpisodeGroups.ranges(eps.size, groupSize) }
+    val g = picker.group.coerceIn(0, (ranges.size - 1).coerceAtLeast(0))
+    SectionHeader2("选集", if (textual) "共 ${eps.size} 集" else "共 ${maxOf(if (d.lines.size > 1) 0 else d.totalEps, eps.size)} 集", inset = inset, modifier = Modifier.padding(top = 22.dp)) {
+        if (eps.size > 1) MoreLink(if (picker.reversed) "倒序" else "正序", Icons.Rounded.SwapVert) { picker.reversed = !picker.reversed }
+    }
+    if (ranges.size > 1) {
+        LazyRow(Modifier.padding(top = 12.dp), contentPadding = PaddingValues(horizontal = inset), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(ranges.size, key = { it }) { k ->
+                val i = if (picker.reversed) ranges.size - 1 - k else k
+                ToneChip(EpisodeGroups.label(ranges[i], eps), i == g, neutral = true, small = true) { picker.group = i }
+            }
+        }
+    }
+    val cells = remember(ranges, g, picker.reversed) { ranges.getOrNull(g)?.toList().orEmpty().let { if (picker.reversed) it.reversed() else it } }
+    androidx.compose.animation.AnimatedContent(cells, label = "eps", transitionSpec = { fadeIn(DS.select()) togetherWith fadeOut(DS.select()) }) { list ->
+        // The grid of the previous line may animate out with indices the new line does not have.
+        EpisodeRows(eps, list.filter { it in eps.indices }, if (textual) textColumns(epCols) else epCols, resume?.episodeIndex, textual,
+            Modifier.padding(horizontal = inset).padding(top = 12.dp)) { i -> onPlay(sid, eps[i].ep) }
+    }
+}
+
+/** Live lists opened from 收藏 / 历史: groups and channels, straight into the player. */
+@Composable
+private fun ChannelSection(channels: List<HGEpisode>, sid: String, resume: app.iduanju.data.WatchProgress?, picker: EpisodePickerState, onPlay: (String, Int) -> Unit, inset: Dp, epCols: Int) {
+    val groups = remember(channels) { channels.mapNotNull { it.page?.takeIf { p -> p.isNotBlank() } }.distinct() }
+    val group = picker.channelGroup?.takeIf { it in groups } ?: resume?.let { channels.getOrNull(it.episodeIndex)?.page } ?: groups.firstOrNull()
+    SectionHeader2("频道", "共 ${channels.size} 个", inset = inset, modifier = Modifier.padding(top = 22.dp))
+    if (groups.size > 1) LazyRow(Modifier.padding(top = 12.dp), contentPadding = PaddingValues(horizontal = inset), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(groups, key = { it }) { name -> ToneChip(name, name == group, neutral = true, small = true) { picker.channelGroup = name } }
+    }
+    // A group can hold hundreds of channels; the player has the full, searchable list.
+    val shown = remember(channels, group) { channels.indices.filter { group == null || channels[it].page == group }.take(90) }
+    EpisodeRows(channels, shown, textColumns(epCols), resume?.episodeIndex, textual = true, modifier = Modifier.padding(horizontal = inset).padding(top = 12.dp)) { i -> onPlay(sid, channels[i].ep) }
+}
+
+private fun episodeCountText(d: HGSeriesDetail): String = when {
+    d.isLive -> "${d.episodes.size} 个频道"
+    d.lines.size > 1 && d.episodes.size <= 1 -> "${d.lines.size} 条线路"
+    else -> "全 ${maxOf(if (d.lines.size > 1) 0 else d.totalEps, d.episodes.size)} 集"
+}
+
+private fun clockText(seconds: Double): String {
+    val s = seconds.toInt()
+    return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) else "%d:%02d".format(s / 60, s % 60)
+}
+
+/** 复制剧名 (iOS context menu). */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun Modifier.copyOnLongPress(text: String): Modifier {
+    if (text.isEmpty()) return this
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val haptics = rememberHaptics()
+    return combinedClickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, null, onLongClickLabel = "复制剧名", onLongClick = {
+        ctx.getSystemService(android.content.ClipboardManager::class.java)?.setPrimaryClip(android.content.ClipData.newPlainText("title", text))
+        haptics.longPress()
+        GlassToast.show("已复制剧名")
+    }, onClick = {})
 }
 
 @Composable
@@ -726,7 +748,7 @@ private fun CastShelf(cast: List<app.iduanju.core.hongguo.HGCelebrity>, inset: D
     val go = app.iduanju.ui.LocalNavigate.current
     SectionHeader2("演员", inset = inset, modifier = Modifier.padding(top = 24.dp))
     LazyRow(Modifier.padding(top = 12.dp), contentPadding = PaddingValues(horizontal = inset), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        items(cast) { p ->
+        itemsIndexed(cast, key = { i, p -> "$i:${p.id}" }) { _, p ->
             Column(
                 Modifier
                     .width(64.dp)
@@ -829,7 +851,7 @@ private fun RelatedShelf(
         MoreLink("搜全系列", Icons.Filled.Search) { go("actorSearch/" + android.net.Uri.encode(items.firstOrNull { it.seriesId == currentId }?.title ?: "")) }
     }
     LazyRow(Modifier.padding(top = 12.dp), contentPadding = PaddingValues(start = inset, end = inset, top = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(items) { s ->
+        items(items.distinctBy { it.seriesId }, key = { it.seriesId }) { s ->
             val on = s.seriesId == currentId
             Column(Modifier.width(cardWidth).pressClick(0.97f, enabled = !on, label = s.title) { onOpen(s.seriesId) }) {
                 Box(Modifier.size(cardWidth, cardHeight).then(if (on) Modifier.border(2.dp, c.accent, RoundedCornerShape(16.dp)).padding(4.dp) else Modifier)) {

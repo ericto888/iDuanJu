@@ -185,7 +185,13 @@ enum PluginOut {
         let u = s(v, max: 2000)
         return u.hasPrefix("https://") || u.hasPrefix("http://") ? u : ""
     }
-    static func strings(_ v: Any?, max: Int = 30) -> [String] { ((v as? [Any]) ?? []).prefix(max).map { s($0, max: 60) }.filter { !$0.isEmpty } }
+    static func unique<T, K: Hashable>(_ list: [T], _ key: (T) -> K) -> [T] {
+        var seen = Set<K>()
+        return list.filter { seen.insert(key($0)).inserted }
+    }
+    static func strings(_ v: Any?, max: Int = 30) -> [String] {
+        unique(((v as? [Any]) ?? []).prefix(max).map { s($0, max: 60) }.filter { !$0.isEmpty }) { $0 }
+    }
     static func headers(_ v: Any?) -> [String: String] {
         var out: [String: String] = [:]
         for (k, val) in (v as? [String: Any]) ?? [:] where PluginMedia.allowedHeaders.contains(k.lowercased()) {
@@ -195,11 +201,12 @@ enum PluginOut {
         return out
     }
     static func categories(_ v: Any?) -> [PluginCategory] {
-        ((v as? [[String: Any]]) ?? []).prefix(60).compactMap { c in
+        let all = ((v as? [[String: Any]]) ?? []).prefix(60).compactMap { c -> PluginCategory? in
             let id = s(c["id"]), name = s(c["name"], max: 40)
             guard !id.isEmpty, !name.isEmpty, !ContentFilter.isBlocked([name, id]) else { return nil }
             return PluginCategory(id: id, name: name, isRank: c["isRank"] as? Bool ?? false)
         }
+        return unique(all) { $0.id }
     }
 }
 
@@ -228,8 +235,8 @@ struct JSComicProvider: MangaProvider {
 
     private func page(_ v: Any) -> MangaPage {
         let o = v as? [String: Any] ?? [:]
-        let items = ((o["items"] as? [[String: Any]]) ?? []).prefix(500).compactMap(item)
-        return MangaPage(items: Array(items), hasMore: (o["hasMore"] as? Bool ?? false) && !items.isEmpty)
+        let items = PluginOut.unique(((o["items"] as? [[String: Any]]) ?? []).prefix(500).compactMap(item)) { $0.id }
+        return MangaPage(items: items, hasMore: (o["hasMore"] as? Bool ?? false) && !items.isEmpty)
     }
 
     func list(_ c: MangaCategory, page p: Int) async throws -> MangaPage {
@@ -323,8 +330,8 @@ struct JSVideoProvider: SiteProvider {
 
     private func page(_ v: Any, _ p: Int) -> HGPage {
         let o = v as? [String: Any] ?? [:]
-        let items = ((o["items"] as? [[String: Any]]) ?? []).prefix(500).compactMap(series)
-        return HGPage(items: Array(items), hasMore: (o["hasMore"] as? Bool ?? false) && !items.isEmpty, nextOffset: p + 1)
+        let items = PluginOut.unique(((o["items"] as? [[String: Any]]) ?? []).prefix(500).compactMap(series)) { $0.id }
+        return HGPage(items: items, hasMore: (o["hasMore"] as? Bool ?? false) && !items.isEmpty, nextOffset: p + 1)
     }
 
     /// Converts the plugin's explicit home() items into the shared featured carousel.

@@ -16,12 +16,16 @@ struct RootTabView: View {
             let metrics = LayoutMetrics(width: geo.size.width, height: geo.size.height)
             let showNav = paths[tab].isEmpty
             HStack(spacing: 0) {
-                if showNav && metrics.useRail && !(tab == 0 && homeChromeHidden) {
-                    GlassNavigationRail(selection: $tab, items: Self.items) { i in
-                        if i == tab { paths[i] = NavigationPath() }
+                Group {
+                    if showNav && metrics.useRail && !(tab == 0 && homeChromeHidden) {
+                        GlassNavigationRail(selection: $tab, items: Self.items) { i in
+                            if i == tab { paths[i] = NavigationPath() }
+                        }
+                        .transition(.move(edge: .leading).combined(with: .opacity))
                     }
-                    .transition(.move(edge: .leading).combined(with: .opacity))
                 }
+                // Keep rail animation local; never animate the player/navigation stack layout.
+                .animation(.spring(response: 0.32, dampingFraction: 0.86), value: showNav && metrics.useRail && !(tab == 0 && homeChromeHidden))
                 TabView(selection: $tab) {
                     Stack(path: $paths[0]) { HomeView() }.tag(0)
                     Stack(path: $paths[1]) { TVBoxHubView() }.tag(1)
@@ -30,25 +34,27 @@ struct RootTabView: View {
                 }
                 .tint(STVTheme.accent)
                 .overlay(alignment: .bottom) {
-                    if showNav && !metrics.useRail {
-                        let hideActiveBar = (tab == 0 && homeBottomBarHidden)
-                            || (tab == 2 && categoryBottomBarHidden)
-                            || (tab == 3 && profileBottomBarHidden)
-                        if !hideActiveBar {
+                    let hideActiveBar = (tab == 0 && homeBottomBarHidden)
+                        || (tab == 2 && categoryBottomBarHidden)
+                        || (tab == 3 && profileBottomBarHidden)
+                    Group {
+                        if showNav && !metrics.useRail && !hideActiveBar {
                             GlassTabBar(selection: $tab, items: Self.items) { i in
                                 if i == tab { paths[i] = NavigationPath() }
                             }
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .bottom).combined(with: .opacity),
+                                removal: .move(edge: .bottom).combined(with: .opacity)
+                            ))
                         }
                     }
+                    // Scope the spring to the bar only. Root-level implicit animation
+                    // also animates NavigationStack pushes and the PiP render host.
+                    .animation(.spring(response: 0.32, dampingFraction: 0.86), value: showNav && !metrics.useRail && !hideActiveBar)
                 }
             }
             .background(STVTheme.bg.ignoresSafeArea())
             .environment(\.layoutMetrics, metrics)
-            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: homeBottomBarHidden)
-            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: categoryBottomBarHidden)
-            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: profileBottomBarHidden)
-            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: paths[tab].isEmpty)
-            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: metrics.useRail)
         }
         .onAppear {
             Router.handler = { r in paths[tab].append(r) }
@@ -58,19 +64,19 @@ struct RootTabView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .homeChromeVisibilityChanged)) { note in
             guard tab == 0, let hidden = note.object as? Bool else { return }
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { homeChromeHidden = hidden }
+            homeChromeHidden = hidden
         }
         .onReceive(NotificationCenter.default.publisher(for: .homeBottomBarVisibilityChanged)) { note in
             guard tab == 0, let hidden = note.object as? Bool else { return }
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { homeBottomBarHidden = hidden }
+            homeBottomBarHidden = hidden
         }
         .onReceive(NotificationCenter.default.publisher(for: .categoryBottomBarVisibilityChanged)) { note in
             guard tab == 2, let hidden = note.object as? Bool else { return }
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { categoryBottomBarHidden = hidden }
+            categoryBottomBarHidden = hidden
         }
         .onReceive(NotificationCenter.default.publisher(for: .profileBottomBarVisibilityChanged)) { note in
             guard tab == 3, let hidden = note.object as? Bool else { return }
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { profileBottomBarHidden = hidden }
+            profileBottomBarHidden = hidden
         }
         .compatOnChange(of: tab) { selected in
             if selected != 0 {

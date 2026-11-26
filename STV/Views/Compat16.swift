@@ -92,7 +92,22 @@ extension View {
                 $0.contentOffset.y + $0.contentInsets.top > threshold
             } action: { _, v in action(v) }
         } else {
+            self.modifier(CompatScrolled(threshold: threshold, action: action))
+        }
+    }
+
+    /// Put on the content inside a ScrollView that uses compatOnScrolled (iOS 16–17 fallback).
+    @ViewBuilder
+    func compatScrollContent() -> some View {
+        if #available(iOS 18.0, *) {
             self
+        } else {
+            self.background(alignment: .top) {
+                GeometryReader { geo in
+                    Color.clear.preference(key: CompatScrollKey.self, value: geo.frame(in: .named(CompatScrolled.space)).minY)
+                }
+                .frame(height: 0)
+            }
         }
     }
 
@@ -291,5 +306,30 @@ struct CompatEmptyStateView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 32)
         }
+    }
+}
+
+private struct CompatScrollKey: PreferenceKey {
+    static var defaultValue: CGFloat? { nil }
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = value ?? nextValue() }
+}
+
+/// iOS 16–17 scroll threshold probe. The first content position is treated as rest so safe-area insets do not count as scrolling.
+private struct CompatScrolled: ViewModifier {
+    static let space = "compat.scroll"
+    let threshold: CGFloat
+    let action: (Bool) -> Void
+    @State private var rest: CGFloat?
+    @State private var last = false
+
+    func body(content: Content) -> some View {
+        content
+            .coordinateSpace(name: Self.space)
+            .onPreferenceChange(CompatScrollKey.self) { y in
+                guard let y else { return }
+                guard let rest else { self.rest = y; return }
+                let value = rest - y > threshold
+                if value != last { last = value; action(value) }
+            }
     }
 }

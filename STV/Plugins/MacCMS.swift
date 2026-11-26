@@ -203,11 +203,12 @@ struct MacCMSProvider: SiteProvider {
     }
 
     static func parseCategories(_ o: [String: Any]) -> [PluginCategory] {
-        ((o["class"] as? [[String: Any]]) ?? []).compactMap { c in
+        let all = ((o["class"] as? [[String: Any]]) ?? []).compactMap { c -> PluginCategory? in
             let id = PluginOut.s(c["type_id"]), name = PluginOut.s(c["type_name"], max: 30)
             guard !id.isEmpty, !name.isEmpty, !ContentFilter.isBlocked([name]) else { return nil }
             return PluginCategory(id: id, name: name)
         }
+        return PluginOut.unique(all) { $0.id }
     }
 
     static func fetchCategories(api: String, siteKey: String? = nil) async throws -> [PluginCategory] {
@@ -217,7 +218,7 @@ struct MacCMSProvider: SiteProvider {
     }
 
     static func parseItems(_ o: [String: Any], source: DramaSource) -> [HGSeries] {
-        ((o["list"] as? [[String: Any]]) ?? []).compactMap { v in
+        let all = ((o["list"] as? [[String: Any]]) ?? []).compactMap { v -> HGSeries? in
             let id = PluginOut.s(v["vod_id"]), title = PluginOut.s(v["vod_name"], max: 200)
             guard !id.isEmpty, !title.isEmpty else { return nil }
             let tags = [PluginOut.s(v["type_name"], max: 30), PluginOut.s(v["vod_class"], max: 60)].filter { !$0.isEmpty }
@@ -228,8 +229,9 @@ struct MacCMSProvider: SiteProvider {
             return HGSeries(source: source, seriesId: id, title: title, cover: cover, subtitle: PluginOut.s(v["vod_remarks"], max: 40).nilIfEmpty,
                             author: PluginOut.s(v["vod_director"], max: 60).nilIfEmpty,
                             actors: PluginOut.s(v["vod_actor"], max: 200).split(whereSeparator: { ",，/ ".contains($0) }).prefix(6).map(String.init),
-                            orientation: "portrait", tags: tags)
+                            orientation: "portrait", tags: PluginOut.unique(tags) { $0 })
         }
+        return PluginOut.unique(all) { $0.id }
     }
 
     static func page(_ o: [String: Any], source: DramaSource, page p: Int) -> HGPage {
@@ -264,6 +266,7 @@ struct MacCMSProvider: SiteProvider {
         guard let v = (o["list"] as? [[String: Any]])?.first else { throw ProviderError.upstream("采集站没有返回详情") }
         let title = PluginOut.s(v["vod_name"], max: 200).nonEmptyOr(s.title)
         let tags = [PluginOut.s(v["type_name"], max: 30)] + PluginOut.s(v["vod_class"], max: 80).split(separator: ",").map(String.init)
+        let actors = PluginOut.unique(PluginOut.s(v["vod_actor"], max: 300).split(whereSeparator: { ",，/".contains($0) }).prefix(12).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }) { $0 }
         guard !ContentFilter.isBlocked([title] + tags) else { throw ProviderError.unsupported("该内容已被过滤") }
         let all = lines(from: PluginOut.s(v["vod_play_from"], max: 2000), urls: (v["vod_play_url"] as? String) ?? "")
         // Prefer lines with an explicit m3u8/mp4 suffix. Extensionless HTTP(S) endpoints are
@@ -284,8 +287,8 @@ struct MacCMSProvider: SiteProvider {
         return HGSeriesDetail(source: source, seriesId: s.seriesId, title: title, cover: cover.isEmpty ? s.cover : cover,
                               desc: [meta, desc].filter { !$0.isEmpty }.joined(separator: "\n"),
                               author: PluginOut.s(v["vod_director"], max: 60).nilIfEmpty,
-                              actors: PluginOut.s(v["vod_actor"], max: 300).split(whereSeparator: { ",，/".contains($0) }).prefix(12).map { $0.trimmingCharacters(in: .whitespaces) },
-                              onlineTime: 0, totalEps: eps.count, episodes: eps, tags: tags.filter { !$0.isEmpty },
+                              actors: actors,
+                              onlineTime: 0, totalEps: eps.count, episodes: eps, tags: PluginOut.unique(tags.filter { !$0.isEmpty }) { $0 },
                               episodeLabel: eps.count > 1 ? "共\(eps.count)集" : "长视频")
     }
 
@@ -346,7 +349,7 @@ struct MacCMSProvider: SiteProvider {
 }
 
 /// MacCMS RSS uses one <dd flag="…"> per playback line and carries pagination on <list>.
-private final class CMSXML: NSObject, XMLParserDelegate {
+final class CMSXML: NSObject, XMLParserDelegate {
     var output: [String: Any] = [:]
     var videos: [[String: String]] = [], categories: [[String: String]] = []
     var video: [String: String]?, flags: [String] = [], urls: [String] = []

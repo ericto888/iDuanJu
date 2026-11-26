@@ -4,16 +4,25 @@ import android.app.Activity
 import android.content.ContextWrapper
 import android.speech.tts.TextToSpeech
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
-import androidx.compose.material3.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.*
 import androidx.compose.ui.graphics.Color
@@ -22,20 +31,28 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.doOnLayout
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import app.iduanju.core.novel.NovelChapter
-import coil.compose.AsyncImage
+import app.iduanju.ui.components.*
+import app.iduanju.ui.theme.IdjColors
+import app.iduanju.ui.theme.LocalIdjColors
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.distinctUntilChanged
-import org.json.JSONObject
 import java.util.Locale
 import kotlin.math.roundToInt
 
 private val ReaderAccent=Color(0xFF309714)
+private val ListenInk=Color(0xB8333333)
+private val themeNames=listOf("白色","米黄","护眼绿","夜间")
 private val turns=listOf("curl" to "仿真","slide" to "滑动","cover" to "覆盖","none" to "无动画","scroll" to "上下滚动")
 private val fontNames=listOf("system" to "系统字体","songti" to "宋体","kaiti" to "楷体","yuanti" to "圆体","wenkai" to "霞鹜文楷","sourceserif" to "思源宋体","sourcesans" to "思源黑体")
 
@@ -78,7 +95,9 @@ internal fun NovelReaderScreen(
     val readStart=remember(bookKey){android.os.SystemClock.elapsedRealtime()}
     val elapsedBefore=remember(bookKey){prefs.getLong("reader.time.$bookKey",0)}
     fun change(s:ReaderSettings){settings=s;prefs.edit().putString("reader.settings",s.json()).apply()}
-    fun closeMenu(){menu=false;tab=""}
+    // [tab] survives closing so the panel fades out with its content; opening always starts from the bare toolbar.
+    fun closeMenu(){menu=false}
+    fun toggleMenu(){if(menu)closeMenu() else {tab="";menu=true}}
     fun jump(index:Int,offset:Int=0){
         if(index !in chapters.indices)return
         autoTurn=false
@@ -116,19 +135,26 @@ internal fun NovelReaderScreen(
     } else {
         Modifier.fillMaxSize()
     }
+    val colors=readerColors(settings.theme)
+    val backdrop=rememberLayerBackdrop{drawRect(bg);drawContent()}
+    val canGlass=android.os.Build.VERSION.SDK_INT>=31
+    val menuState=remember(bookKey){MutableTransitionState(false)}
+    menuState.targetState=menu
     Box(Modifier.fillMaxSize().background(bg).testTag("novel.reader"), contentAlignment = Alignment.TopCenter) {
         // Capture safe geometry once. System-bar visibility must not reflow or translate text.
         val contentPadding=with(density){PaddingValues(top=stableTop.toDp(),bottom=stableBottom.toDp())}
+        // The page is recorded for the glass bars only while they are on screen, so page turns never pay for it.
+        Box(Modifier.fillMaxSize().then(if(canGlass&&(menu||menuState.currentState))Modifier.layerBackdrop(backdrop) else Modifier),contentAlignment=Alignment.TopCenter){
         if(settings.turn!="scroll")AndroidView(factory={NovelPageView(it).also{v->pageView=v}},modifier=readerModifier.padding(contentPadding).testTag("novel.page").semantics{contentDescription=chapters.getOrNull(chapterIndex)?.title.orEmpty()+"\n"+body},update={v->
-            v.onMenu={menu=!menu;if(!menu)tab=""};v.enabledTurns=!busy
+            v.onMenu={toggleMenu()};v.enabledTurns=!busy
             v.onEdge={d->val next=chapterIndex+d;if(next in chapters.indices){endChapter=if(d<0)next else -1;onChapter(next)}}
             v.onPosition={offset,p,n->lastChapter=chapterIndex.coerceAtLeast(0);lastOffset=offset;page=p;pages=n;onPosition(chapterIndex.coerceAtLeast(0),offset)}
             v.update(bookKey+"|"+chapterIndex+"|"+fontRevision,body,chapters.getOrNull(chapterIndex)?.title.orEmpty(),settings,if(jumpTarget?.first==chapterIndex)jumpTarget!!.second else if(endChapter==chapterIndex)Int.MAX_VALUE else if(lastChapter==chapterIndex)lastOffset else initialOffset)
             if(jumpTarget?.first==chapterIndex)jumpTarget=null
         }) else {
             Box(readerModifier.padding(contentPadding)) {
-                LazyColumn(state=scrollState,modifier=Modifier.fillMaxSize().testTag("novel.scroll").pointerInput(menu){detectTapGestures{p->if(p.x<size.width/3f)scope.launch{scrollState.animateScrollBy(-size.height*.85f)} else if(p.x>size.width*2/3f)scope.launch{scrollState.animateScrollBy(size.height*.85f)} else if(menu)closeMenu() else menu=true}},contentPadding=PaddingValues(start=(12+28*settings.margin).dp,end=(12+28*settings.margin).dp,top=32.dp,bottom=30.dp)) {
-                    items(maxOf(1,chapters.size),key={chapters.getOrNull(it)?.url?:"local"}){i->
+                LazyColumn(state=scrollState,modifier=Modifier.fillMaxSize().testTag("novel.scroll").pointerInput(menu){detectTapGestures{p->if(p.x<size.width/3f)scope.launch{scrollState.animateScrollBy(-size.height*.85f)} else if(p.x>size.width*2/3f)scope.launch{scrollState.animateScrollBy(size.height*.85f)} else toggleMenu()}},contentPadding=PaddingValues(start=(12+28*settings.margin).dp,end=(12+28*settings.margin).dp,top=32.dp,bottom=30.dp)) {
+                    items(maxOf(1,chapters.size),key={"$it|"+(chapters.getOrNull(it)?.url?:"local")},contentType={"chapter"}){i->
                         LaunchedEffect(bookKey,i){if(i !in texts)try{texts[i]=onLoadChapter(i)}catch(e:CancellationException){throw e}catch(e:Exception){textErrors[i]=e.message?:"章节读取失败"}}
                         AndroidView(factory={android.widget.TextView(it)},modifier=Modifier.fillMaxWidth().padding(bottom=24.dp),update={t->
                             scrollViews[i]=t
@@ -152,22 +178,35 @@ internal fun NovelReaderScreen(
                 Text("${current+1}/${chapters.size}",color=secondary,fontSize=12.sp,modifier=Modifier.align(Alignment.BottomEnd).padding(horizontal=20.dp,vertical=8.dp))
             }
         }
-        if(busy)CircularProgressIndicator(Modifier.align(Alignment.Center).size(24.dp),color=ReaderAccent,strokeWidth=2.dp)
-        if(error!=null)Text(error,color=Color(0xFFB34747),fontSize=13.sp,modifier=Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top=56.dp).padding(horizontal=20.dp).background(panel,RoundedCornerShape(10.dp)).padding(12.dp))
-        if(menu){
-            Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().background(bg.copy(alpha=.98f)).statusBarsPadding().height(44.dp).padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically){
-                IconButton(onClick=onBack,modifier=Modifier.testTag("novel.reader.back")){Icon(Icons.Outlined.ChevronLeft,"返回",tint=ink,modifier=Modifier.size(30.dp))};Spacer(Modifier.weight(1f))
-                if(chapters.isNotEmpty()){TextButton(onClick={onSwitch(current)}){Text("换源",color=ink,fontSize=15.sp)};IconButton(onClick={onDownload(current)}){Icon(Icons.Outlined.DownloadForOffline,"下载",tint=ink)}}
+        }
+        CompositionLocalProvider(LocalIdjColors provides colors) {
+        if(busy)GlassSpinner(Modifier.align(Alignment.Center),size=24.dp,color=ReaderAccent,stroke=2.dp)
+        if(error!=null)Text(error,color=colors.danger,fontSize=13.sp,lineHeight=19.sp,modifier=Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top=56.dp).padding(horizontal=20.dp).widthIn(max=560.dp).clip(RoundedCornerShape(14.dp)).background(panel).padding(horizontal=14.dp,vertical=12.dp))
+        AnimatedVisibility(menuState,Modifier.fillMaxSize(),enter=fadeIn(Motion.fade()),exit=fadeOut(Motion.fade())){Box(Modifier.fillMaxSize()){
+            val glass=if(canGlass)backdrop else null
+            Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(contentPadding.calculateTopPadding().let{PaddingValues(start=16.dp,end=16.dp,top=it+4.dp)}),verticalAlignment=Alignment.CenterVertically){
+                val back=remember{MutableInteractionSource()}
+                Box(Modifier.size(44.dp).pressScale(back,.92f).paperGlass(CircleShape,glass,colors).clickable(back,null,role=Role.Button,onClick=onBack).testTag("novel.reader.back"),contentAlignment=Alignment.Center){Icon(Icons.Outlined.ChevronLeft,"返回",tint=ink,modifier=Modifier.size(28.dp))}
+                Spacer(Modifier.weight(1f))
+                if(chapters.isNotEmpty())Row(Modifier.paperGlass(RoundedCornerShape(50),glass,colors).padding(horizontal=4.dp),verticalAlignment=Alignment.CenterVertically){
+                    GlassTextButton("换源",color=ink){onSwitch(current)}
+                    PlainIconButton(Icons.Outlined.DownloadForOffline,"下载",tint=ink){onDownload(current)}
+                }
             }
-            Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
-                Box(Modifier.fillMaxWidth().padding(end=16.dp,bottom=12.dp),contentAlignment=Alignment.CenterEnd){Text("听",fontSize=20.sp,color=Color.White,modifier=Modifier.size(48.dp).background(Color(0xE0333333),CircleShape).clickable{selectPanel("listen")}.wrapContentSize().testTag("novel.listen"))}
-                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart=16.dp,topEnd=16.dp)).background(panel).navigationBarsPadding()){
-                    if(tab.isNotEmpty())Column(Modifier.fillMaxWidth().padding(start=18.dp,end=18.dp,top=18.dp,bottom=6.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-                        @Composable fun header(t:String){Row(verticalAlignment=Alignment.CenterVertically){IconButton(onClick={tab="font"},modifier=Modifier.size(32.dp).testTag("novel.panel.back")){Icon(Icons.Outlined.ChevronLeft,"返回设置",tint=ink,modifier=Modifier.size(20.dp))};Text(t,fontSize=15.sp,fontWeight=FontWeight.SemiBold,color=ink,modifier=Modifier.weight(1f))}}
-                        @Composable fun pill(t:String,tag:String="",fill:Boolean=false,onClick:()->Unit){Box(Modifier.then(if(fill)Modifier.fillMaxWidth() else Modifier).clip(CircleShape).background(Color(pal.track).copy(alpha=.75f)).clickable(onClick=onClick).padding(horizontal=16.dp,vertical=11.dp).testTag(tag),contentAlignment=Alignment.Center){Text(t,color=ink,fontSize=14.sp,lineHeight=18.sp,fontWeight=FontWeight.Medium)}}
+            Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime)).padding(top=contentPadding.calculateTopPadding()+56.dp,start=12.dp,end=12.dp,bottom=8.dp),horizontalAlignment=Alignment.CenterHorizontally) {
+                if(tab!="listen")Box(Modifier.fillMaxWidth().padding(end=4.dp,bottom=12.dp),contentAlignment=Alignment.CenterEnd){
+                    val listen=remember{MutableInteractionSource()}
+                    Box(Modifier.size(48.dp).pressScale(listen,.94f).glassSurface(CircleShape,backdrop=glass,dark=true,shadowRadius=10.dp,activeOverlay=ListenInk).clickable(listen,null,role=Role.Button){selectPanel("listen")}.testTag("novel.listen"),contentAlignment=Alignment.Center){Text("听",fontSize=20.sp,fontWeight=FontWeight.Medium,color=Color.White)}
+                }
+                Column(Modifier.weight(1f,fill=false).widthIn(max=640.dp).fillMaxWidth().paperGlass(RoundedCornerShape(28.dp),glass,colors,18.dp)){
+                    Box(Modifier.weight(1f,fill=false).fillMaxWidth().animateContentSize(DS.panel())){
+                    val panelScroll=remember(tab){ScrollState(0)}
+                    if(tab.isNotEmpty())Column(Modifier.fillMaxWidth().then(if(tab=="toc"||tab=="fonts")Modifier else Modifier.verticalScroll(panelScroll)).padding(start=18.dp,end=18.dp,top=18.dp,bottom=6.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+                        @Composable fun header(t:String){Row(verticalAlignment=Alignment.CenterVertically){PlainIconButton(Icons.Outlined.ChevronLeft,"返回设置",Modifier.testTag("novel.panel.back"),tint=ink,iconSize=20.dp){tab="font"};Text(t,fontSize=15.sp,fontWeight=FontWeight.SemiBold,color=ink,modifier=Modifier.weight(1f))}}
+                        @Composable fun pill(t:String,tag:String="",fill:Boolean=false,onClick:()->Unit){Box(Modifier.then(if(fill)Modifier.fillMaxWidth() else Modifier).clip(CircleShape).background(colors.glass).pressClick(.97f,onClick=onClick).heightIn(min=44.dp).padding(horizontal=14.dp,vertical=8.dp).testTag(tag),contentAlignment=Alignment.Center){Text(t,color=ink,fontSize=14.sp,lineHeight=18.sp,fontWeight=FontWeight.Medium,maxLines=2,overflow=TextOverflow.Ellipsis,textAlign=TextAlign.Center)}}
                         when(tab){
                             "font"->{
-                                ReaderPillSlider((settings.font-12)/18,{change(settings.copy(font=(12+it*18).roundToInt().toFloat()))},settings,"${settings.font.toInt()}","A","A",Modifier.testTag("novel.font.size"))
+                                ReaderPillSlider((settings.font-12)/18,{change(settings.copy(font=(12+it*18).roundToInt().toFloat()))},settings,"${settings.font.toInt()}","A","A",Modifier.testTag("novel.font.size"),name="字号")
                                 Row(horizontalArrangement=Arrangement.spacedBy(14.dp)){ReaderPillSlider(settings.margin,{change(settings.copy(margin=it))},settings,"边距","","大",Modifier.weight(1f).testTag("novel.margin"));ReaderPillSlider(settings.spacing,{change(settings.copy(spacing=it))},settings,"行距","紧","松",Modifier.weight(1f).testTag("novel.spacing"))}
                                 Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                                     Box(Modifier.weight(1f)){pill((fontNames.firstOrNull{it.first==settings.fontID}?.second?:"字体样式")+" ›","novel.fonts",true){tab="fonts"}}
@@ -178,18 +217,21 @@ internal fun NovelReaderScreen(
                             "turn"->{
                                 header("翻页方式")
                                 turns.chunked(3).forEach{row->Row(horizontalArrangement=Arrangement.spacedBy(10.dp)){
-                                    row.forEach{(id,name)->Box(Modifier.weight(1f).height(32.dp).clip(CircleShape).background(if(settings.turn==id)ReaderAccent.copy(alpha=.12f) else Color(pal.track).copy(alpha=.6f)).border(if(settings.turn==id)1.dp else 0.dp,if(settings.turn==id)ReaderAccent else Color.Transparent,CircleShape).clickable{autoTurn=false;change(settings.copy(turn=id))}.padding(horizontal=12.dp).testTag("novel.turn.$id"),contentAlignment=Alignment.Center){Text(name,color=if(settings.turn==id)ReaderAccent else ink,fontSize=13.sp,lineHeight=16.sp,fontWeight=if(settings.turn==id)FontWeight.SemiBold else FontWeight.Normal)}}
+                                    row.forEach{(id,name)->val on=settings.turn==id;val src=remember(id){MutableInteractionSource()};Box(Modifier.weight(1f).pressScale(src).clip(CircleShape).background(if(on)colors.accentSoft else colors.glass).then(if(on)Modifier.border(1.dp,ReaderAccent,CircleShape) else Modifier).selectable(on,src,null,true,Role.RadioButton){autoTurn=false;change(settings.copy(turn=id))}.heightIn(min=40.dp).padding(horizontal=12.dp,vertical=6.dp).testTag("novel.turn.$id"),contentAlignment=Alignment.Center){Text(name,color=if(on)ReaderAccent else ink,fontSize=13.sp,lineHeight=16.sp,fontWeight=if(on)FontWeight.SemiBold else FontWeight.Normal)}}
                                     repeat(3-row.size){Spacer(Modifier.weight(1f))}
                                 }}
                                 Text("仿真：像纸书一样卷页；滑动：两页并排滑过；覆盖：当前页盖在下一页上被拖走；上下滚动：整本书连续滚动。左右轻点也能翻页。",color=secondary,fontSize=11.sp,lineHeight=14.sp)
                             }
-                            "light"->{ReaderPillSlider(brightness,{brightness=it;activity?.window?.let{w->w.attributes=w.attributes.apply{screenBrightness=brightness.coerceAtLeast(.01f)}}},settings,"","☀","",Modifier.testTag("novel.brightness"));Text("颜色",fontSize=12.sp,color=secondary);Row(horizontalArrangement=Arrangement.spacedBy(12.dp)){(0..3).forEach{i->Box(Modifier.weight(1f).height(40.dp).clip(RoundedCornerShape(10.dp)).background(Color(ReaderPalette.of(i).bg)).border(if(i==settings.theme)1.5.dp else .5.dp,if(i==settings.theme)ReaderAccent else Color.Gray.copy(alpha=.2f),RoundedCornerShape(10.dp)).clickable{change(settings.copy(theme=i))}.testTag("novel.theme.$i"),contentAlignment=Alignment.Center){if(i==3)Icon(Icons.Outlined.NightsStay,null,tint=Color(0xFF4D7CFE))}}}}
+                            "light"->{ReaderPillSlider(brightness,{brightness=it;activity?.window?.let{w->w.attributes=w.attributes.apply{screenBrightness=brightness.coerceAtLeast(.01f)}}},settings,"","☀","",Modifier.testTag("novel.brightness"),name="亮度");Text("颜色",fontSize=12.sp,color=secondary);Row(horizontalArrangement=Arrangement.spacedBy(12.dp)){(0..3).forEach{i->Box(Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(12.dp)).background(Color(ReaderPalette.of(i).bg)).border(if(i==settings.theme)1.5.dp else .5.dp,if(i==settings.theme)ReaderAccent else Color.Gray.copy(alpha=.2f),RoundedCornerShape(12.dp)).selectable(i==settings.theme,role=Role.RadioButton){change(settings.copy(theme=i))}.semantics{contentDescription=themeNames[i]}.testTag("novel.theme.$i"),contentAlignment=Alignment.Center){if(i==3)Icon(Icons.Outlined.NightsStay,null,tint=Color(0xFF4D7CFE))}}}}
                             "toc"->ReaderTocPanel(chapters,current,lastOffset,(texts[current]?:body).length,pages,settings,::jump,onSearch)
                             "info"->ReaderInfoPanel(bookTitle,author,cover,chapters.size,sourceName,addedAt,elapsedBefore+android.os.SystemClock.elapsedRealtime()-readStart,settings)
                             "progress"->{
                                 val fraction=if(chapters.isEmpty())0f else ((current*1000+lastOffset).toFloat()/(chapters.size*1000)).coerceIn(0f,1f)
-                                ReaderProgressStats(fraction,current,chapters.size,elapsedBefore+android.os.SystemClock.elapsedRealtime()-readStart,settings)
-                                Row(Modifier.fillMaxWidth().clip(CircleShape).background(Color(pal.track)),verticalAlignment=Alignment.CenterVertically){IconButton(onClick={jump(current-1)},enabled=current>0){Icon(Icons.Outlined.ChevronLeft,"上一章",tint=if(current>0)ink else secondary.copy(alpha=.4f))};ReaderPillSlider(fraction,{jump((it*chapters.size).toInt().coerceAtMost(chapters.lastIndex))},settings,"","","",Modifier.weight(1f).testTag("novel.progress.slider"),transparent=true);IconButton(onClick={jump(current+1)},enabled=current<chapters.lastIndex){Icon(Icons.Outlined.ChevronRight,"下一章",tint=ink)}}
+                                // A drag only previews; the chapter is loaded once, when the finger lifts.
+                                var scrub by remember{mutableStateOf<Float?>(null)}
+                                val target=scrub?.let{(it*chapters.size).toInt().coerceAtMost(chapters.lastIndex)}
+                                ReaderProgressStats(scrub?:fraction,target?:current,chapters.size,elapsedBefore+android.os.SystemClock.elapsedRealtime()-readStart,settings)
+                                Row(Modifier.fillMaxWidth().clip(CircleShape).background(Color(pal.track)),verticalAlignment=Alignment.CenterVertically){PlainIconButton(Icons.Outlined.ChevronLeft,"上一章",tint=ink,enabled=current>0){jump(current-1)};ReaderPillSlider(scrub?:fraction,{scrub=it},settings,"","","",Modifier.weight(1f).testTag("novel.progress.slider"),transparent=true,name="阅读进度",onDone={scrub?.let{v->jump((v*chapters.size).toInt().coerceAtMost(chapters.lastIndex))};scrub=null});PlainIconButton(Icons.Outlined.ChevronRight,"下一章",tint=ink,enabled=current<chapters.lastIndex){jump(current+1)}}
                                 Row(horizontalArrangement=Arrangement.spacedBy(14.dp)){
                                     Box(Modifier.weight(1f)){pill("回到本章开头",fill=true){jump(current)}}
                                     if(settings.turn!="scroll")Box(Modifier.weight(1f)){pill(if(autoTurn)"关闭自动翻页" else "开启自动翻页",fill=true){autoTurn=!autoTurn;if(autoTurn)closeMenu()}}
@@ -197,10 +239,11 @@ internal fun NovelReaderScreen(
                             }
                             "fonts" -> {
                                 header("字体样式")
-                                fontError?.let{Text(it,color=Color.Red,fontSize=12.sp)}
-                                Column(Modifier.heightIn(max=330.dp).verticalScroll(rememberScrollState())) {
+                                fontError?.let{Text(it,color=colors.danger,fontSize=12.sp)}
+                                val installed=remember(fontRevision,fontBusy){fontNames.map{it.first}.filterTo(HashSet()){java.io.File(context.filesDir,"novel-fonts/$it.font").isFile}}
+                                Column(Modifier.weight(1f,fill=false).heightIn(max=330.dp).verticalScroll(panelScroll)) {
                                     fontNames.forEach { (id,name) ->
-                                        Row(Modifier.fillMaxWidth().clickable(enabled=fontBusy==null) {
+                                        Row(Modifier.fillMaxWidth().pressClick(.985f,enabled=fontBusy==null) {
                                             if(id in listOf("system","songti","kaiti","yuanti") || java.io.File(context.filesDir,"novel-fonts/$id.font").isFile) {
                                                 change(settings.copy(fontID=id));fontRevision++
                                             } else {
@@ -212,39 +255,60 @@ internal fun NovelReaderScreen(
                                                     finally {fontBusy=null}
                                                 }
                                             }
-                                        }.padding(vertical=10.dp).testTag("novel.font.$id"),verticalAlignment=Alignment.CenterVertically) {
+                                        }.heightIn(min=48.dp).padding(vertical=10.dp).testTag("novel.font.$id"),verticalAlignment=Alignment.CenterVertically) {
                                             Column(Modifier.weight(1f)) {
                                                 Text(name,color=ink,fontSize=17.sp)
                                                 Text(if(id in listOf("system","songti","kaiti","yuanti"))"系统字型 · 平台原生字体" else "SIL OFL 1.1 · 首次使用下载",fontSize=11.sp,color=secondary)
                                             }
-                                            if(fontBusy==id)CircularProgressIndicator(Modifier.size(18.dp),color=ReaderAccent,strokeWidth=2.dp)
+                                            if(fontBusy==id)GlassSpinner(size=18.dp,color=ReaderAccent,stroke=2.dp)
                                             else if(settings.fontID==id)Icon(Icons.Outlined.Check,null,tint=ReaderAccent)
-                                            else if(id in listOf("wenkai","sourceserif","sourcesans") && !java.io.File(context.filesDir,"novel-fonts/$id.font").isFile)Text("下载",color=ReaderAccent,fontSize=12.sp)
+                                            else if(id in listOf("wenkai","sourceserif","sourcesans") && id !in installed)Text("下载",color=ReaderAccent,fontSize=12.sp,fontWeight=FontWeight.Medium)
                                         }
                                     }
                                 }
                             }
-                            "listen"->{header("听书");listenError?.let{Text(it,color=Color.Red,fontSize=12.sp)};ReaderPillSlider((rate-.5f)/1.5f,{rate=.5f+it*1.5f;speech?.setSpeechRate(rate)},settings,"语速","慢","快");Row(horizontalArrangement=Arrangement.spacedBy(12.dp)){pill(if(speaking)"暂停朗读" else "开始朗读"){val t=speech;if(speaking){t?.stop();speaking=false}else if(t!=null){val result=t.setLanguage(Locale.SIMPLIFIED_CHINESE);if(result<0)listenError="当前设备未安装中文语音，可在系统文字转语音设置中安装" else{t.setSpeechRate(rate);val value=texts[current]?:body;val chunks=value.chunked(TextToSpeech.getMaxSpeechInputLength());chunks.forEachIndexed{i,part->t.speak(part,if(i==0)TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,null,"$bookKey:$current:$i")};speaking=true}}};pill("停止"){speech?.stop();speaking=false}}}
+                            "listen"->{header("听书");listenError?.let{Text(it,color=colors.danger,fontSize=12.sp)};ReaderPillSlider((rate-.5f)/1.5f,{rate=.5f+it*1.5f;speech?.setSpeechRate(rate)},settings,"语速","慢","快");Row(horizontalArrangement=Arrangement.spacedBy(12.dp)){pill(if(speaking)"暂停朗读" else "开始朗读"){val t=speech;if(speaking){t?.stop();speaking=false}else if(t!=null){val result=t.setLanguage(Locale.SIMPLIFIED_CHINESE);if(result<0)listenError="当前设备未安装中文语音，可在系统文字转语音设置中安装" else{t.setSpeechRate(rate);val value=texts[current]?:body;val chunks=value.chunked(TextToSpeech.getMaxSpeechInputLength());chunks.forEachIndexed{i,part->t.speak(part,if(i==0)TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,null,"$bookKey:$current:$i")};speaking=true}}};pill("停止"){speech?.stop();speaking=false}}}
                         }
                     }
-                    Row(Modifier.fillMaxWidth().height(56.dp),horizontalArrangement=Arrangement.SpaceAround,verticalAlignment=Alignment.CenterVertically){
-                        listOf("toc" to Icons.Outlined.FormatListBulleted,"info" to Icons.Outlined.Explore,"progress" to Icons.Outlined.RadioButtonUnchecked,"light" to Icons.Outlined.WbSunny,"font" to Icons.Outlined.TextFields).forEach{(id,icon)->IconButton(onClick={selectPanel(id)},modifier=Modifier.testTag("novel.menu.$id")){if(id=="font")Text("A",fontSize=23.sp,fontWeight=FontWeight.Light,color=if(tab==id||tab in listOf("fonts","turn"))ReaderAccent else ink) else if(id=="progress")Canvas(Modifier.size(26.dp)){val color=if(tab==id)ReaderAccent else ink;drawCircle(color,size.minDimension*.32f,style=androidx.compose.ui.graphics.drawscope.Stroke(width=1.2.dp.toPx()));drawLine(color,androidx.compose.ui.geometry.Offset(0f,size.height/2),androidx.compose.ui.geometry.Offset(size.width,size.height/2),strokeWidth=1.2.dp.toPx())} else Icon(icon,when(id){"toc"->"目录";"info"->"书籍";"progress"->"进度";else->"亮度"},tint=if(tab==id)ReaderAccent else ink,modifier=Modifier.size(25.dp))}}
+                    }
+                    Row(Modifier.fillMaxWidth().padding(horizontal=6.dp).heightIn(min=56.dp),verticalAlignment=Alignment.CenterVertically){
+                        listOf("toc" to Icons.Outlined.FormatListBulleted,"info" to Icons.Outlined.Explore,"progress" to null,"light" to Icons.Outlined.WbSunny,"font" to null).forEach{(id,icon)->
+                            val on=tab==id||(id=="font"&&tab in listOf("fonts","turn"));val color=if(on)ReaderAccent else ink;val src=remember(id){MutableInteractionSource()}
+                            Box(Modifier.weight(1f).heightIn(min=48.dp).pressScale(src,.92f).selectable(on,src,null,true,Role.Tab){selectPanel(id)}.semantics{contentDescription=when(id){"toc"->"目录";"info"->"书籍";"progress"->"进度";"light"->"亮度";else->"字体"}}.testTag("novel.menu.$id"),contentAlignment=Alignment.Center){
+                                if(id=="font")Text("A",fontSize=23.sp,fontWeight=FontWeight.Light,color=color)
+                                else if(icon==null)Canvas(Modifier.size(26.dp)){drawCircle(color,size.minDimension*.32f,style=androidx.compose.ui.graphics.drawscope.Stroke(width=1.2.dp.toPx()));drawLine(color,androidx.compose.ui.geometry.Offset(0f,size.height/2),androidx.compose.ui.geometry.Offset(size.width,size.height/2),strokeWidth=1.2.dp.toPx())}
+                                else Icon(icon,null,tint=color,modifier=Modifier.size(25.dp))
+                            }
+                        }
                     }
                 }
             }
+        }}
         }
     }
 }
 
-/** Pill track/label thumb matching existing iOS PillSlider, with accessible adjustable semantics. */
+/** The reader's floating surface: the shared glass, washed with the paper's panel colour so text on it stays readable. */
 @Composable
-private fun ReaderPillSlider(value:Float,onValue:(Float)->Unit,s:ReaderSettings,label:String="",leading:String="",trailing:String="",modifier:Modifier=Modifier,transparent:Boolean=false){
+private fun Modifier.paperGlass(shape:CornerBasedShape,backdrop:Backdrop?,colors:IdjColors,shadow:Dp=10.dp)=glassSurface(shape,backdrop=backdrop,dark=colors.dark,base=colors.surface,shadowRadius=shadow,activeOverlay=colors.surface.copy(alpha=.84f),fallbackAlpha=2f)
+
+/** Pill track/label thumb matching existing iOS PillSlider, with accessible adjustable semantics. [onDone] runs when a drag or tap ends. */
+@Composable
+private fun ReaderPillSlider(value:Float,onValue:(Float)->Unit,s:ReaderSettings,label:String="",leading:String="",trailing:String="",modifier:Modifier=Modifier,transparent:Boolean=false,name:String=label,onDone:()->Unit={}){
     val p=ReaderPalette.of(s.theme)
-    val handle by rememberUpdatedState(onValue)
-    BoxWithConstraints(modifier.fillMaxWidth().height(44.dp).clip(CircleShape).background(if(transparent)Color.Transparent else Color(p.track)).semantics{progressBarRangeInfo=ProgressBarRangeInfo(value,0f..1f);setProgress{onValue(it.coerceIn(0f,1f));true}}.pointerInput(Unit){
-        detectDragGestures(onDragStart={handle((it.x/size.width).coerceIn(0f,1f))}){change,_->change.consume();handle((change.position.x/size.width).coerceIn(0f,1f))}
-    }.pointerInput(Unit){detectTapGestures{handle((it.x/size.width).coerceIn(0f,1f))}}){
+    val handle by rememberUpdatedState(onValue);val done by rememberUpdatedState(onDone)
+    // The label sits inside a fixed 40 dp thumb, so it does not follow the font scale.
+    val thumbText=with(LocalDensity.current){13.dp.toSp()}
+    Box(modifier.fillMaxWidth().height(44.dp).clip(CircleShape).background(if(transparent)Color.Transparent else Color(p.track)).semantics{if(name.isNotEmpty())contentDescription=name;progressBarRangeInfo=ProgressBarRangeInfo(value.coerceIn(0f,1f),0f..1f);setProgress{onValue(it.coerceIn(0f,1f));onDone();true}}.pointerInput(Unit){
+        fun at(x:Float)=((x-22.dp.toPx())/(size.width-44.dp.toPx()).coerceAtLeast(1f)).coerceIn(0f,1f)
+        awaitEachGesture{
+            val down=awaitFirstDown()
+            val drag=awaitHorizontalTouchSlopOrCancellation(down.id){c,_->c.consume()}
+            if(drag!=null){handle(at(drag.position.x));horizontalDrag(drag.id){c->c.consume();handle(at(c.position.x))};done()}
+            else if(currentEvent.changes.all{!it.pressed&&!it.isConsumed}){handle(at(down.position.x));done()}
+        }
+    }){
         Row(Modifier.fillMaxSize().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically){Text(leading,color=Color(p.ink),fontSize=13.sp);Text(trailing,color=Color(p.ink),fontSize=15.sp)}
-        Box(Modifier.offset(x=((maxWidth-44.dp)*value.coerceIn(0f,1f))).padding(2.dp).size(40.dp).shadow(3.dp,CircleShape).background(Color(p.thumb),CircleShape),contentAlignment=Alignment.Center){if(label.isNotEmpty())Text(label,color=Color(p.ink),fontSize=13.sp)}
+        Box(Modifier.align(BiasAlignment(value.coerceIn(0f,1f)*2f-1f,0f)).padding(3.dp).size(38.dp).shadow(3.dp,CircleShape).background(Color(p.thumb),CircleShape),contentAlignment=Alignment.Center){if(label.isNotEmpty())Text(label,color=Color(p.ink),fontSize=thumbText,fontWeight=FontWeight.Medium,maxLines=1,softWrap=false)}
     }
 }

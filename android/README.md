@@ -25,6 +25,9 @@ cd android
 ```
 APK：`app/build/outputs/apk/{debug,release}/`
 
+TVBox 的 Python 站点需要内嵌解释器（Chaquopy，构建时联网取 wheel，构建机要有 Python 3.11）：加 `-Pidj.python=true`，默认只打 ARM，
+模拟器用 `-Pidj.abis=arm64-v8a,armeabi-v7a,x86_64`。不加该参数时 Python 站点显示「此版本未包含 Python 运行时」，其余功能相同。
+
 GitHub Actions 使用固定分发签名；本地默认仍用调试签名。分发构建需要设置 `ANDROID_KEYSTORE_PATH` 与 `ANDROID_KEYSTORE_PASSWORD`，别名为 `iduanju`。不要提交私钥。
 从旧调试签名包升级可能需要卸载重装，卸载会清除数据；先保存书源和插件配置。
 

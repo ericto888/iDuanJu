@@ -68,7 +68,7 @@ class E2EReceiver : BroadcastReceiver() {
                 val r = app.hongguo.resolveFresh(ep.vid)
                 log("resolve vid=${ep.vid} streams=${r.streams.size} err=${r.err} (${System.currentTimeMillis() - t1}ms) first=${r.streams.firstOrNull()?.let { "${it.quality} ${it.codec} enc=${it.key.isNotEmpty()}" }}")
                 if (r.streams.isEmpty()) { log("RESULT FAIL resolve"); return@Thread }
-                val p = runBlocking { EpisodeCache.get(ep.vid).await() }
+                val p = runBlocking { EpisodeCache.get(ep).await() }
                 val f = File(p.uri)
                 val head = if (f.exists()) f.inputStream().use { s -> ByteArray(12).also { s.read(it) } } else ByteArray(0)
                 val box = if (head.size >= 8) String(head, 4, 4) else "?"

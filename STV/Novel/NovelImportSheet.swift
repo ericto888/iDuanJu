@@ -7,71 +7,55 @@ struct NovelImportSheet: View {
     var onLocalFiles: () -> Void = {}
     /// 书源 page opens the sheet without the 书籍 group.
     var showBooks = true
-    @Environment(\.dismiss) private var dismiss
     @ObservedObject private var store = LegadoSourceStore.shared
     @State private var url = ""
     @State private var busy = false
     @State private var fileImport = false
     @State private var result: Result?
-    @FocusState private var focused: Bool
 
     struct Result: Equatable { var ok: Bool; var title: String; var detail: String? }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                Capsule().fill(STVTheme.glassBorder).frame(width: 36, height: 5).frame(maxWidth: .infinity).padding(.bottom, 10)
-                HStack {
-                    Text("导入").font(.system(size: 20, weight: .bold)).foregroundStyle(STVTheme.text)
-                    Spacer()
-                    RoundIconButton(systemName: "xmark") { dismiss() }.accessibilityIdentifier("import.close")
-                }
-                .frame(height: 36)
-                if showBooks {
-                    label("书籍")
+        DSSheet("导入", closeID: "import.close") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if showBooks {
+                        label("书籍")
+                        group {
+                            row("doc.text", "本地 TXT / EPUB", "可多选，自动识别编码和章节", id: "import.local", action: onLocalFiles)
+                        }
+                    }
+                    label("书源（阅读 / Legado 格式）")
+                    HStack(spacing: 10) {
+                        DSTextField("https://example.invalid/src.json", text: $url, icon: "link", id: "import.url")
+                            .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .submitLabel(.go).onSubmit(importURL)
+                        Button { url = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" } label: { MiniButtonLabel(title: "粘贴") }
+                            .buttonStyle(PressScale())
+                    }
+                    Button(action: importURL) {
+                        ZStack {
+                            PillButtonLabel(title: busy ? "" : "导入书源", tone: .accent, expand: true)
+                            if busy { DSSpinner(size: 18, tint: STVTheme.onAccent) }
+                        }
+                    }
+                    .buttonStyle(PressScale(scale: 0.98)).disabled(busy).padding(.top, 10).accessibilityIdentifier("import.submit")
                     group {
-                        row("doc.text", "本地 TXT / EPUB", "可多选，自动识别编码和章节", id: "import.local", action: onLocalFiles)
+                        row("doc.on.clipboard", "从剪贴板导入", "支持书源 JSON 或书源链接", id: "import.clipboard", action: importClipboard)
+                        Hairline()
+                        row("folder", "从文件导入", "选择 .json 书源文件", id: "import.file") { fileImport = true }
                     }
+                    .padding(.top, 10)
+                    if let result { banner(result).padding(.top, 12).transition(.move(edge: .bottom).combined(with: .opacity)) }
+                    Text("App 不内置任何书源，导入的书源只保存在本机。")
+                        .font(.system(size: 12)).foregroundStyle(STVTheme.tertiary).lineSpacing(6).padding(.horizontal, 4).padding(.top, 12)
                 }
-                label("书源（阅读 / Legado 格式）")
-                HStack(spacing: 10) {
-                    Image(systemName: "link").font(.system(size: 16, weight: .medium)).foregroundStyle(STVTheme.tertiary)
-                    TextField("https://example.invalid/src.json", text: $url)
-                        .focused($focused).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .font(.system(size: 15)).foregroundStyle(STVTheme.text)
-                        .submitLabel(.go).onSubmit(importURL)
-                        .accessibilityIdentifier("import.url")
-                    Button { url = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" } label: { MiniButtonLabel(title: "粘贴") }
-                        .buttonStyle(PressScale())
-                }
-                .padding(.leading, 14).padding(.trailing, 9).frame(height: 48)
-                .background(STVTheme.glass, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(STVTheme.glassBorder, lineWidth: 1))
-                Button(action: importURL) {
-                    ZStack {
-                        PillButtonLabel(title: busy ? "" : "导入书源", tone: .accent, expand: true)
-                        if busy { ProgressView().tint(STVTheme.onAccent) }
-                    }
-                }
-                .buttonStyle(PressScale(scale: 0.98)).disabled(busy).padding(.top, 10).accessibilityIdentifier("import.submit")
-                group {
-                    row("doc.on.clipboard", "从剪贴板导入", "支持书源 JSON 或书源链接", id: "import.clipboard", action: importClipboard)
-                    Hairline()
-                    row("folder", "从文件导入", "选择 .json 书源文件", id: "import.file") { fileImport = true }
-                }
-                .padding(.top, 10)
-                if let result { banner(result).padding(.top, 12).transition(.move(edge: .bottom).combined(with: .opacity)) }
-                Text("App 不内置任何书源，导入的书源只保存在本机。")
-                    .font(.system(size: 12)).foregroundStyle(STVTheme.tertiary).lineSpacing(6).padding(.horizontal, 4).padding(.top, 12)
+                .padding(.horizontal, 20).padding(.bottom, 34)
+                .animation(DS.panel, value: result)
             }
-            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 34)
-            .animation(DS.panel, value: result)
+            .compatScrollBounceBasedOnSize()
         }
-        .compatScrollBounceBasedOnSize()
-        .presentationDetents(showBooks ? [.height(640), .large] : [.height(520), .large])
-        .presentationDragIndicator(.hidden)
-        .compatPresentationCornerRadius(28)
-        .compatPresentationBackground(STVTheme.sheet)
+        .dsSheetChrome(showBooks ? [.height(650), .large] : [.height(540), .large])
         .fileImporter(isPresented: $fileImport, allowedContentTypes: [.json, .plainText, .text]) { r in
             guard case .success(let u) = r else { return }
             let scoped = u.startAccessingSecurityScopedResource()
@@ -81,7 +65,7 @@ struct NovelImportSheet: View {
     }
 
     private func label(_ t: String) -> some View {
-        Text(t).font(.system(size: 13)).foregroundStyle(STVTheme.secondary).padding(.horizontal, 4).padding(.top, 16).padding(.bottom, 8)
+        Text(t).dsFont(13, .semibold, relativeTo: .footnote).foregroundStyle(STVTheme.secondary).padding(.horizontal, 4).padding(.top, 12).padding(.bottom, 8)
     }
 
     private func group<C: View>(@ViewBuilder _ c: () -> C) -> some View {
@@ -139,12 +123,12 @@ struct NovelImportSheet: View {
     private func importURL() {
         let text=url.trimmingCharacters(in:.whitespacesAndNewlines)
         if text.hasPrefix("{") || text.hasPrefix("[") {
-            focused=false;report {try store.importText(text)};return
+            DS.endEditing();report {try store.importText(text)};return
         }
         guard let u = URL(string: text), u.scheme?.hasPrefix("http") == true else {
             result = Result(ok: false, title: "网址无效", detail: "请输入 http(s) 开头的书源地址"); return
         }
-        focused = false; busy = true
+        DS.endEditing(); busy = true
         Task {
             do { let r = try await store.importURL(u); report { r } }
             catch { result = Result(ok: false, title: "导入失败", detail: error.localizedDescription) }

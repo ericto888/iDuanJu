@@ -1,0 +1,48 @@
+name: Bug 反馈
+description: 反馈软件缺陷。必须填写系统版本、软件版本和 Bug 描述，缺项不予受理，将直接关闭。
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交 Bug 必须说明 **系统版本**、**软件版本** 和 **Bug 描述**。
+        缺项不予受理，将直接关闭。
+  - type: input
+    id: os-version
+    attributes:
+      label: 系统版本
+      description: 例如 Android 14、iOS 17.5。
+      placeholder: Android 14
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: 软件版本
+      description: 例如 1.6b36，可在应用关于页面查看。
+      placeholder: 1.6b36
+    validations:
+      required: true
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: Bug 描述
+      description: 请说明遇到的问题。
+      placeholder: 打开某部剧后无法播放……
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 选填。请尽量说明如何复现该问题。
+    validations:
+      required: false
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图或录屏
+      description: 选填。可直接拖拽图片或粘贴链接。
+    validations:
+      required: false

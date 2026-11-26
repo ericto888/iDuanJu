@@ -54,7 +54,31 @@ final class NovelPaginator {
         guard s != style else { return false }
         style = s
         cache = [:]
+        generation += 1
         return true
+    }
+
+    private var generation = 0
+    private var warming: Set<Int> = []
+
+    /// Lays a neighbouring chapter out in the background. Paginating a whole chapter on the main thread was the hitch at every
+    /// chapter boundary.
+    func warm(_ i: Int) {
+        guard let s = style, book.chapters.indices.contains(i), cache[i] == nil, !warming.contains(i) else { return }
+        let title = book.chapters[i].title, raw = store.chapterText(book, i)
+        guard !raw.isEmpty else { return }   // 书源 chapter still to be fetched: the loader announces it
+        let font = NovelFonts.font(s.fontID, size: s.fontSize), bold = NovelFonts.font(s.fontID, size: s.fontSize * 1.3, bold: true)
+        let token = generation
+        warming.insert(i)
+        Task { [weak self] in
+            let out = await Task.detached(priority: .userInitiated) { () -> (NSAttributedString, [NSRange]) in
+                let a = NovelLayout.attributed(raw, title: title, size: s.fontSize, lineSpacing: s.lineSpacing, indent: s.indent, font: font, bold: bold, color: s.text)
+                return (a, NovelLayout.paginate(a, size: s.size))
+            }.value
+            guard let self else { return }
+            self.warming.remove(i)
+            if token == self.generation, self.cache[i] == nil { self.cache[i] = out }
+        }
     }
 
     func chapter(_ i: Int) -> (text: NSAttributedString, pages: [NSRange]) {
@@ -77,7 +101,7 @@ final class NovelPaginator {
     }
 
     /// Drops cached layouts (a 书源 chapter arrived).
-    func invalidate() { cache = [:] }
+    func invalidate() { cache = [:]; generation += 1 }
 
     func pageCount(_ chapter: Int) -> Int { self.chapter(chapter).pages.count }
 
@@ -176,9 +200,10 @@ final class NovelPageView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let w = bounds.width - insets.left - insets.right
+        let w = max(1, bounds.width - insets.left - insets.right)
+        let h = max(1, bounds.height - insets.top - insets.bottom - 62)
         header.frame = CGRect(x: insets.left, y: insets.top, width: w, height: 22)
-        textView.frame = CGRect(x: insets.left, y: insets.top + 32, width: w, height: bounds.height - insets.top - insets.bottom - 62)
+        textView.frame = CGRect(x: insets.left, y: insets.top + 32, width: w, height: h)
         footer.frame = CGRect(x: insets.left, y: bounds.height - insets.bottom - 30, width: w, height: 30)
     }
 }
@@ -233,6 +258,29 @@ final class NovelPagerController: UIViewController, UIPageViewControllerDataSour
         pan.delegate = self
         view.addGestureRecognizer(pan)
         build()
+        warmNeighbours()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard view.bounds.width > 20, view.bounds.height > 80, let s = paginator.style else { return }
+        // Keep pagination locked to the exact textView frame size so safe-area or container differences can never clip bottom lines.
+        let actualW = max(1, view.bounds.width - insets.left - insets.right)
+        let actualH = max(1, view.bounds.height - insets.top - insets.bottom - 62)
+        if abs(actualW - s.size.width) > 1 || abs(actualH - s.size.height) > 1 {
+            let off = paginator.range(current).location
+            let updated = NovelPageStyle(size: CGSize(width: actualW, height: actualH),
+                fontSize: s.fontSize, lineSpacing: s.lineSpacing, indent: s.indent, fontID: s.fontID,
+                text: s.text, secondary: s.secondary, background: s.background, highlight: s.highlight)
+            if paginator.configure(updated) {
+                current = paginator.ref(chapter: current.chapter, offset: off)
+                build()
+                let settled = current
+                DispatchQueue.main.async { [weak self] in self?.onPageChange?(settled) }
+            }
+        } else if dragging == nil, let t = top, t.frame != view.bounds {
+            t.frame = view.bounds
+        }
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
@@ -311,12 +359,19 @@ final class NovelPagerController: UIViewController, UIPageViewControllerDataSour
         case .none, .scroll:
             show(target)
             onPageChange?(target)
+            warmNeighbours()
         }
     }
 
     private func settle(_ r: NovelPageRef) {
         current = r
         onPageChange?(r)
+        warmNeighbours()
+    }
+
+    private func warmNeighbours() {
+        paginator.warm(current.chapter + 1)
+        paginator.warm(current.chapter - 1)
     }
 
     // MARK: Taps

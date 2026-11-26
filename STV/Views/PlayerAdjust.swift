@@ -96,7 +96,7 @@ struct PlayerAdjustHUD: View {
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(.black.opacity(0.62), in: Capsule())
+        .liquidGlassCapsule(tone: .clear, onMedia: true)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(side == .brightness ? "亮度 \(Int(value * 100))%" : "音量 \(Int(value * 100))%")
     }

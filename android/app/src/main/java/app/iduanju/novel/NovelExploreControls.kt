@@ -1,17 +1,30 @@
 package app.iduanju.novel
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 import app.iduanju.core.novel.NovelCategory
+import app.iduanju.ui.components.*
+import app.iduanju.ui.theme.IdjThemeColors
 import kotlinx.coroutines.delay
 
 /** Source-defined controls are not URL categories. Flex width/wrap is honored outside the narrow rail. */
@@ -19,7 +32,7 @@ import kotlinx.coroutines.delay
 @Composable
 internal fun NovelExploreControls(controls:List<NovelCategory>,enabled:Boolean,onAction:(NovelCategory,String?)->Unit) {
     if(controls.isEmpty())return
-    Box(Modifier.fillMaxWidth().heightIn(max=240.dp).verticalScroll(rememberScrollState()).padding(horizontal=12.dp)) {
+    Box(Modifier.fillMaxWidth().heightIn(max=240.dp).verticalScroll(rememberScrollState()).padding(horizontal=16.dp,vertical=4.dp)) {
         SourceControlFlex(controls) {
             controls.forEach { c ->
                 Box(Modifier.testTag("novel.filter."+c.title)) {
@@ -28,19 +41,36 @@ internal fun NovelExploreControls(controls:List<NovelCategory>,enabled:Boolean,o
                             var text by remember(c.selectionKey,c.value){mutableStateOf(c.value)}
                             val action by rememberUpdatedState(onAction)
                             LaunchedEffect(text,enabled){if(enabled&&text!=c.value){delay(450);action(c,text)}}
-                            OutlinedTextField(value=text,onValueChange={text=it},label={Text(c.displayTitle)},singleLine=true,enabled=enabled,modifier=Modifier.widthIn(min=140.dp))
+                            GlassTextField(text,{text=it},Modifier.widthIn(min=140.dp),label=c.displayTitle,enabled=enabled)
                         }
                         "select" -> {
                             var open by remember{mutableStateOf(false)}
-                            TextButton(enabled=enabled,onClick={open=true}){Text(c.displayTitle+"："+c.value+" ▾")}
-                            DropdownMenu(expanded=open,onDismissRequest={open=false}){c.chars.forEach { value -> DropdownMenuItem(text={Text(value)},onClick={open=false;onAction(c,value)}) }}
+                            ControlPill(c.displayTitle+"："+c.value+" ▾",false,enabled){open=true}
+                            GlassMenu(expanded=open,onDismissRequest={open=false}){c.chars.forEach { value -> GlassMenuItem(value,selected=value==c.value){open=false;onAction(c,value)} }}
                         }
-                        "toggle" -> FilterChip(selected=c.chars.indexOf(c.value)>0,enabled=enabled,onClick={onAction(c,null)},label={Text(c.value+c.displayTitle)})
-                        else -> TextButton(enabled=enabled,onClick={onAction(c,null)}){Text(c.displayTitle)}
+                        "toggle" -> ControlPill(c.value+c.displayTitle,c.chars.indexOf(c.value)>0,enabled,toggle=true){onAction(c,null)}
+                        else -> ControlPill(c.displayTitle,false,enabled){onAction(c,null)}
                     }
                 }
             }
         }
+    }
+}
+
+/** [OptionChip] with a centred label: the source's flex layout stretches these cells across the row. */
+@Composable
+private fun ControlPill(text:String,selected:Boolean,enabled:Boolean,toggle:Boolean=false,onClick:()->Unit) {
+    val c=IdjThemeColors
+    val haptics=rememberHaptics()
+    val src=remember{MutableInteractionSource()}
+    Box(
+        Modifier.fillMaxWidth().pressScale(src).graphicsLayer{alpha=if(enabled)1f else 0.4f}
+            .glassPill(CircleShape,selected=selected)
+            .then(if(toggle)Modifier.toggleable(selected,src,null,enabled,Role.Checkbox){haptics.toggle(it);onClick()} else Modifier.clickable(src,null,enabled=enabled,role=Role.Button,onClick=onClick))
+            .heightIn(min=40.dp).padding(horizontal=13.dp,vertical=6.dp),
+        contentAlignment=Alignment.Center,
+    ) {
+        Text(text,color=if(selected)c.accent else c.text,fontSize=13.sp,fontWeight=if(selected)FontWeight.SemiBold else FontWeight.Normal,maxLines=1,overflow=TextOverflow.Ellipsis,textAlign=TextAlign.Center)
     }
 }
 

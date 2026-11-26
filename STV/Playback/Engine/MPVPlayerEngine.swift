@@ -79,6 +79,7 @@ final class MPVMetalView: UIView {
     var onEnded: (() -> Void)?
     var onPlaybackRequested: ((Bool) -> Void)?
 
+    /// Opening budget. The coordinator shortens it when there is somewhere else to go (another line or quality).
     static var loadTimeout: TimeInterval = 25
 
     private let hostView = MPVMetalView()
@@ -98,13 +99,28 @@ final class MPVMetalView: UIView {
     private var savedVidForBackground = "auto"
     private var resumeAfterBackground = false
 
-    // Cached playback state updated from libmpv property observations / queries.
-    private var cachedTime: Double = 0
-    private var cachedDuration: Double = 0
-    private var cachedBuffered: Double = 0
-    private var cachedSize: CGSize = .zero
-    private var cachedWaiting: Bool = false
-    private var cachedPaused: Bool = true
+    /// Playback state written straight from the mpv event thread. `time-pos` and `demuxer-cache-time` change on every
+    /// frame; hopping each change onto the main actor flooded the main queue while playing.
+    private final class State: @unchecked Sendable {
+        struct Values {
+            var time = 0.0, duration = 0.0, buffered = 0.0
+            var size = CGSize.zero
+            var waiting = false, paused = true
+            /// Bumped by `load`: late events of the previous file must not overwrite the new file's state.
+            var accepting = true
+        }
+        private let lock = NSLock()
+        private var v = Values()
+        func read<T>(_ f: (Values) -> T) -> T { lock.lock(); defer { lock.unlock() }; return f(v) }
+        func write(_ f: (inout Values) -> Void) { lock.lock(); f(&v); lock.unlock() }
+    }
+    private let state = State()
+    private var cachedTime: Double { get { state.read { $0.time } } set { state.write { $0.time = newValue } } }
+    private var cachedDuration: Double { get { state.read { $0.duration } } set { state.write { $0.duration = newValue } } }
+    private var cachedBuffered: Double { get { state.read { $0.buffered } } set { state.write { $0.buffered = newValue } } }
+    private var cachedSize: CGSize { get { state.read { $0.size } } set { state.write { $0.size = newValue } } }
+    private var cachedWaiting: Bool { get { state.read { $0.waiting } } set { state.write { $0.waiting = newValue } } }
+    private var cachedPaused: Bool { get { state.read { $0.paused } } set { state.write { $0.paused = newValue } } }
     private var cachedAudioTracks: [MediaTrack] = []
     private var cachedSubtitleTracks: [MediaTrack] = []
     private var cachedAudioID: Int?
@@ -274,7 +290,13 @@ final class MPVMetalView: UIView {
         setOpt("sub-auto", "fuzzy")
         setOpt("demuxer-max-bytes", "64MiB")
         setOpt("demuxer-max-back-bytes", "16MiB")
-        setOpt("network-timeout", "20")
+        // Start as soon as there is something to show: short probe, no initial cache pause, small refill after a stall.
+        setOpt("demuxer-lavf-analyzeduration", "2")
+        setOpt("cache-pause-initial", "no")
+        setOpt("cache-pause-wait", "1.5")
+        setOpt("demuxer-readahead-secs", "30")
+        setOpt("hls-bitrate", "max")
+        setOpt("network-timeout", "10")
         setOpt("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=3")
         #if DEBUG
         setOpt("terminal", "no")
@@ -296,6 +318,7 @@ final class MPVMetalView: UIView {
 
     private func startEventLoop() {
         guard let handle = mpv else { return }
+        let state = self.state
         eventQueue.async { [weak self] in
             while let self, !self.shuttingDown {
                 guard let eventPtr = mpv_wait_event(handle, 0.5) else { continue }
@@ -317,14 +340,17 @@ final class MPVMetalView: UIView {
                     let prop = event.data.assumingMemoryBound(to: mpv_event_property.self).pointee
                     let name = String(cString: prop.name)
                     if prop.format == MPV_FORMAT_DOUBLE, let p = prop.data {
-                        let val = p.assumingMemoryBound(to: Double.self).pointee
-                        Task { @MainActor [weak self] in self?.handleDoubleProp(name, val) }
+                        Self.store(name, p.assumingMemoryBound(to: Double.self).pointee, in: state)
                     } else if prop.format == MPV_FORMAT_FLAG, let p = prop.data {
                         let val = p.assumingMemoryBound(to: Int32.self).pointee != 0
-                        Task { @MainActor [weak self] in self?.handleFlagProp(name, val) }
+                        if Self.store(name, val, in: state) {
+                            Task { @MainActor [weak self] in self?.handleEOF() }
+                        }
                     } else if prop.format == MPV_FORMAT_INT64, let p = prop.data {
                         let val = p.assumingMemoryBound(to: Int64.self).pointee
-                        Task { @MainActor [weak self] in self?.handleIntProp(name, val) }
+                        if !Self.store(name, val, in: state) {
+                            Task { @MainActor [weak self] in self?.handleTrackProp(name, val) }
+                        }
                     }
 
                 default:
@@ -335,7 +361,7 @@ final class MPVMetalView: UIView {
     }
 
     private func handleFileLoaded() {
-        cachedWaiting = false
+        state.write { $0.waiting = false; $0.accepting = true }
         refreshTrackLists()
         if let cont = loadContinuation {
             loadContinuation = nil
@@ -358,28 +384,43 @@ final class MPVMetalView: UIView {
         }
     }
 
-    private func handleDoubleProp(_ name: String, _ val: Double) {
-        switch name {
-        case "time-pos": cachedTime = max(0, val)
-        case "duration": cachedDuration = max(0, val)
-        case "demuxer-cache-time": cachedBuffered = max(0, val)
-        default: break
+    nonisolated private static func store(_ name: String, _ val: Double, in state: State) {
+        state.write { v in
+            switch name {
+            case "time-pos": if v.accepting { v.time = max(0, val) }
+            case "duration": v.duration = max(0, val)
+            case "demuxer-cache-time": v.buffered = max(0, val)
+            default: break
+            }
         }
     }
 
-    private func handleFlagProp(_ name: String, _ val: Bool) {
-        switch name {
-        case "paused-for-cache": cachedWaiting = val
-        case "pause": cachedPaused = val
-        case "eof-reached": if val && mounted { onEnded?() }
-        default: break
+    /// True when the file reached its end (the only flag the main actor has to act on).
+    nonisolated private static func store(_ name: String, _ val: Bool, in state: State) -> Bool {
+        if name == "eof-reached" { return val }
+        state.write { v in
+            switch name {
+            case "paused-for-cache": v.waiting = val
+            case "pause": v.paused = val
+            default: break
+            }
         }
+        return false
     }
 
-    private func handleIntProp(_ name: String, _ val: Int64) {
+    /// False for properties the main actor owns (track selection).
+    nonisolated private static func store(_ name: String, _ val: Int64, in state: State) -> Bool {
+        guard name == "dwidth" || name == "dheight" else { return false }
+        state.write { v in
+            if name == "dwidth" { v.size.width = CGFloat(max(0, val)) } else { v.size.height = CGFloat(max(0, val)) }
+        }
+        return true
+    }
+
+    private func handleEOF() { if mounted { onEnded?() } }
+
+    private func handleTrackProp(_ name: String, _ val: Int64) {
         switch name {
-        case "dwidth": cachedSize.width = CGFloat(max(0, val))
-        case "dheight": cachedSize.height = CGFloat(max(0, val))
         case "aid": cachedAudioID = val > 0 ? Int(val) : nil
         case "sid": cachedSubtitleID = val > 0 ? Int(val) : nil
         default: break
@@ -396,6 +437,7 @@ final class MPVMetalView: UIView {
         case .remote(let u, let h): return .url(u, headers: h, hls: isPlaylist(u))
         case .direct(let u): return .url(u, headers: [:], hls: isPlaylist(u))
         case .stream(let loader, let s):
+            // A playlist behind the resource loader (out-of-band key / headers on every request) stays on AVPlayer.
             guard let u = URL(string: s), !isPlaylist(u), loader.keyHex.isEmpty else { return nil }
             return .url(u, headers: loader.headers, hls: false)
         }
@@ -420,6 +462,12 @@ final class MPVMetalView: UIView {
         return out
     }
 
+    /// `http-header-fields` is a comma-separated list: commas inside a value are escaped.
+    nonisolated static func headerFields(_ h: [String: String]) -> String {
+        h.filter { $0.key != "User-Agent" && $0.key != "Referer" }.sorted { $0.key < $1.key }
+            .map { "\($0.key): \($0.value)".replacingOccurrences(of: ",", with: "\\,") }.joined(separator: ",")
+    }
+
     func load(_ src: PlaybackCoordinator.Source, stream: HGStream?, start: Double?, title: String) async throws {
         guard let handle = mpv else { throw Failure.initFailed }
         guard case .url(let u, let rawHeaders, _) = Self.input(for: src) else { throw Failure.unsupported }
@@ -432,11 +480,14 @@ final class MPVMetalView: UIView {
         generation += 1
         let gen = generation
         mounted = false
-        cachedWaiting = true
-        cachedTime = start ?? 0
-        cachedDuration = 0
-        cachedBuffered = 0
-        cachedSize = .zero
+        state.write { v in
+            v.waiting = true
+            v.time = start ?? 0
+            v.duration = 0
+            v.buffered = 0
+            v.size = .zero
+            v.accepting = false
+        }
         cachedAudioTracks = []
         cachedSubtitleTracks = []
         lastURL = u
@@ -446,10 +497,7 @@ final class MPVMetalView: UIView {
             _ = mpv_set_property_string(handle, "user-agent", ua)
         }
         _ = mpv_set_property_string(handle, "referrer", merged["Referer"] ?? "")
-        let extra = merged.filter { $0.key != "User-Agent" && $0.key != "Referer" }
-            .map { "\($0.key): \($0.value)" }
-            .joined(separator: ",")
-        _ = mpv_set_property_string(handle, "http-header-fields", extra)
+        _ = mpv_set_property_string(handle, "http-header-fields", Self.headerFields(merged))
         _ = mpv_set_property_string(handle, "start", (start ?? 0) > 0 ? String(format: "%.3f", start ?? 0) : "none")
         _ = mpv_set_property_string(handle, "pause", "yes")
         if suspendedForBackground {

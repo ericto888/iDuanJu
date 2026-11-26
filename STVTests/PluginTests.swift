@@ -334,11 +334,14 @@ final class PluginTests: XCTestCase {
 
     func testBundledPluginsValidate() throws {
         let b = PluginInstaller.bundled()
-        XCTAssertEqual(Set(b.map(\.manifest.id)), ["com.idj.bundled.manga18fx", "com.idj.bundled.komikindo", "com.idj.bundled.jm18comic"])
+        let comics: Set = ["com.idj.bundled.manga18fx", "com.idj.bundled.komikindo", "com.idj.bundled.jm18comic"]
+        XCTAssertTrue(Set(b.map(\.manifest.id)).isSuperset(of: comics))
         for x in b {
             XCTAssertTrue(x.manifest.adult, "\(x.name) must sit behind the adult switch")
             let p = try PluginInstaller.prepare(bundle: x.data, origin: "test")
-            XCTAssertTrue(Set(p.exported).isSuperset(of: ["home", "category", "search", "detail", "pages"]), "\(x.name): \(p.exported)")
+            // Comics export pages; video plugins export play.
+            let last = comics.contains(x.manifest.id) ? "pages" : "play"
+            XCTAssertTrue(Set(p.exported).isSuperset(of: ["home", "category", "search", "detail", last]), "\(x.name): \(p.exported)")
         }
     }
 
@@ -585,13 +588,19 @@ final class PluginTests: XCTestCase {
 
     // MARK: 苹果 CMS
 
-    func testTVBoxImportDeduplicatesCMSAndSkipsSpiders() throws {
-        let data = Data(#"{"name":"demo","sites":[{"name":"CMS","type":1,"api":"http://cms.example/api.php/provide/vod/"},{"name":"jar","type":3,"api":"csp_demo"},{"name":"dup","type":1,"api":"https://cms.example/api.php/provide/vod/"}],"spider":"https://example.org/a.jar"}"#.utf8)
-        let config = try TVBoxImport.parse(data)
+    private func tvboxConfig(_ text: String) throws -> TVBoxConfig {
+        guard case .config(let c) = try TVBoxConfig.parse(text, "") else { throw TVBoxError("not a config") }
+        return c
+    }
+
+    /// Every site of a pasted TVBox config is kept for the TVBox page: nothing is dropped or sent to 采集站 any more.
+    func testTVBoxConfigKeepsEverySiteKind() throws {
+        let config = try tvboxConfig(#"{"name":"demo","sites":[{"name":"CMS","type":1,"api":"http://cms.example/api.php/provide/vod/"},{"name":"jar","type":3,"api":"csp_demo"},{"name":"dup","type":1,"api":"https://cms.example/api.php/provide/vod/"}],"spider":"https://example.org/a.jar"}"#)
         XCTAssertEqual(config.name, "demo")
-        XCTAssertEqual(config.sites.count, 1)
-        XCTAssertEqual(config.sites.first?.api, "https://cms.example/api.php/provide/vod/")
-        XCTAssertEqual(config.skipped, 2)
+        XCTAssertEqual(config.sites.map(\.name), ["CMS", "jar", "dup"])
+        XCTAssertEqual(config.sites.map(\.kind), [.cmsJson, .jar, .cmsJson])
+        XCTAssertEqual(config.sites[0].api, "http://cms.example/api.php/provide/vod/")
+        XCTAssertTrue(config.hasCode)
     }
 
     func testTVBoxLargeCatalogAndStandaloneLiveLists() throws {
@@ -599,16 +608,21 @@ final class PluginTests: XCTestCase {
         let xml = ["type": 0, "api": "https://cms.example/vod/xml"] as [String: Any]
         let live = ["name": "直播", "url": "https://cms.example/channels.m3u"]
         let bytes = try JSONSerialization.data(withJSONObject: ["sites": scripts + [xml], "lives": [live, live]])
-        let catalog = try TVBoxImport.parse(bytes)
-        XCTAssertEqual(catalog.sites.map(\.api), ["https://cms.example/vod/xml"])
+        let catalog = try tvboxConfig(String(decoding: bytes, as: UTF8.self))
+        XCTAssertEqual(catalog.sites.count, 601)
+        XCTAssertEqual(catalog.sites.filter { $0.kind == .cmsXml }.map(\.api), ["https://cms.example/vod/xml"])
         XCTAssertEqual(catalog.lives.map(\.url), ["https://cms.example/channels.m3u"])
-        XCTAssertEqual(catalog.skipped, 600)
     }
 
-    func testTVBoxImportRejectsExecutableOnlyConfig() {
-        XCTAssertThrowsError(try TVBoxImport.parse(Data(#"{"sites":[{"name":"jar","type":3,"api":"csp_demo"}],"spider":"x.jar"}"#.utf8))) { error in
-            XCTAssertTrue(error.localizedDescription.contains("type=1"))
-        }
+    /// Code-only configs import too, but ask for trust before anything runs.
+    func testPastedTVBoxConfigsAreRecognised() async throws {
+        let text = #"{"sites":[{"name":"jar","type":3,"api":"csp_demo"}],"spider":"x.jar"}"#
+        XCTAssertTrue(try tvboxConfig(text).hasCode)
+        guard case .tvbox(let pasted) = try await PluginInstaller.interpret("  " + text + "\n") else { return XCTFail("not recognised") }
+        XCTAssertEqual(pasted, text)
+        let repo = TVBoxRepo(RepoRecord(id: "r", name: "n", url: ""), try tvboxConfig(text))
+        XCTAssertTrue(repo.needsTrust)
+        XCTAssertFalse(repo.trusted)
     }
 
     @MainActor func testCMSCategoryRequestsKeepFullCategoryList() async throws {

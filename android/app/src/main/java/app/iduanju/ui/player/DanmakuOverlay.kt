@@ -288,16 +288,20 @@ fun DanmakuOverlay(
     laneTop: Dp,
     bottomLimit: Dp,
     previewActive: Boolean = false,
+    /** Comments address delivered by the stream itself (TVBox); wins over the official 红果 comments. */
+    externalUrl: String? = null,
+    externalLan: Boolean = true,
+    playing: Boolean = true,
     onStatus: (String) -> Unit,
 ) {
     var raw by remember(vid) { mutableStateOf<List<HGDanmaku>>(emptyList()) }
-    LaunchedEffect(seriesId, vid) {
-        if (vid.isEmpty() || !seriesId.all { it.isDigit() }) {
+    LaunchedEffect(seriesId, vid, externalUrl) {
+        if (vid.isEmpty() || (externalUrl == null && !seriesId.all { it.isDigit() })) {
             raw = emptyList()
             return@LaunchedEffect
         }
         onStatus("弹幕加载中…")
-        val r = withContext(Dispatchers.IO) { DanmakuPrefs.client.fetch(seriesId, vid) }
+        val r = withContext(Dispatchers.IO) { if (externalUrl != null) ExternalDanmaku.fetch(externalUrl, externalLan) else DanmakuPrefs.client.fetch(seriesId, vid) }
         raw = r.items
         onStatus(if (r.items.isEmpty()) r.notice else r.notice.ifEmpty { "本集 ${r.items.size} 条" })
     }
@@ -329,9 +333,11 @@ fun DanmakuOverlay(
     }
 
     var t by remember(player) { mutableDoubleStateOf(player.currentPosition / 1000.0) }
-    LaunchedEffect(player) {
+    // Frame-clocked only while comments really move; a paused video just follows seeks.
+    val moving = playing && raw.isNotEmpty()
+    LaunchedEffect(player, moving) {
         while (isActive) {
-            withFrameNanos { }
+            if (moving) withFrameNanos { } else kotlinx.coroutines.delay(200)
             t = player.currentPosition / 1000.0
         }
     }

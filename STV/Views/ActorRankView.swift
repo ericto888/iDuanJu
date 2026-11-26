@@ -48,6 +48,8 @@ final class ActorRankStore: ObservableObject {
 
 /// Embeddable list (Home tab) — no own ScrollView.
 struct ActorRankList: View {
+    /// The pushed page already carries the title in its bar.
+    var showsTitle = true
     @State private var gender: HGRankedActor.Gender = .all
     @ObservedObject private var store = ActorRankStore.shared
 
@@ -61,14 +63,17 @@ struct ActorRankList: View {
                 VStack(spacing: 12) { ForEach(0..<6, id: \.self) { _ in ShimmerBlock().frame(height: 64) } }.padding(.horizontal, 16)
             } else {
                 if list.count >= 3 { podium(Array(list.prefix(3))).padding(.horizontal, 16) }
-                LazyVStack(spacing: 10) {
+                LazyVStack(spacing: 0) {
                     ForEach(Array(list.dropFirst(list.count >= 3 ? 3 : 0).enumerated()), id: \.element.id) { i, a in
-                        NavigationLink(value: Route.actor(a.celebrity)) { ActorRankRow(actor: a, shownRank: gender == .all ? a.rank : i + 4) }
-                            .buttonStyle(.plain)
-                            .onAppear { if a.id == list.last?.id { Task { await store.loadMore() } } }
+                        NavigationLink(value: Route.actor(a.celebrity)) {
+                            ActorRankRow(actor: a, shownRank: gender == .all ? a.rank : i + 4)
+                                .overlay(alignment: .top) { if i > 0 { Hairline().padding(.leading, 42) } }
+                        }
+                        .buttonStyle(PressScale(scale: 0.985))
+                        .onAppear { if a.id == list.last?.id { Task { await store.loadMore() } } }
                     }
-                    if store.loading { ProgressView().padding() }
-                    else if !store.hasMore { Text("已经到底了").font(.caption).foregroundStyle(STVTheme.secondary).padding() }
+                    if store.loading { DSLoading() }
+                    else if !store.hasMore { Text("已经到底了").font(.caption).foregroundStyle(STVTheme.tertiary).padding() }
                 }.padding(.horizontal, 16)
             }
         }
@@ -81,20 +86,18 @@ struct ActorRankList: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Label("剧星榜", systemImage: "star.circle.fill").font(.title3.weight(.bold)).foregroundStyle(STVTheme.text)
+                if showsTitle { Text("剧星榜").dsFont(19, .bold, relativeTo: .title3).foregroundStyle(STVTheme.text) }
                 Spacer()
-                if !store.rankDate.isEmpty { Text("统计截至 \(store.rankDate)").font(.caption).foregroundStyle(STVTheme.secondary) }
+                if !store.rankDate.isEmpty { Text("统计截至 \(store.rankDate)").dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary) }
             }
-            Picker("性别", selection: $gender) {
-                ForEach(HGRankedActor.Gender.allCases) { Text($0.label).tag($0) }
-            }.pickerStyle(.segmented)
+            SegmentedTabs(items: Array(HGRankedActor.Gender.allCases), selection: $gender, label: \.label, idPrefix: "actor.gender")
         }.padding(.horizontal, 16)
     }
 
     private func podium(_ top: [HGRankedActor]) -> some View {
         HStack(alignment: .bottom, spacing: 10) {
             ForEach([1, 0, 2], id: \.self) { i in
-                NavigationLink(value: Route.actor(top[i].celebrity)) { PodiumCell(actor: top[i], place: i + 1) }.buttonStyle(.plain)
+                NavigationLink(value: Route.actor(top[i].celebrity)) { PodiumCell(actor: top[i], place: i + 1) }.buttonStyle(PressScale(scale: 0.97))
             }
         }
     }
@@ -102,10 +105,8 @@ struct ActorRankList: View {
 
 struct ActorRankView: View {
     var body: some View {
-        ScrollView { ActorRankList().padding(.vertical, 8) }
-            .background(STVTheme.bg.ignoresSafeArea())
-            .navigationTitle("剧星榜")
-            .navigationBarTitleDisplayMode(.inline)
+        ScrollView { ActorRankList(showsTitle: false).padding(.vertical, 8) }
+            .dsNavigation("剧星榜")
             .refreshable { await ActorRankStore.shared.reload() }
     }
 }
@@ -114,7 +115,7 @@ private struct PodiumCell: View {
     let actor: HGRankedActor
     let place: Int
     private var tint: Color {
-        switch place { case 1: Color(red: 1, green: 0.78, blue: 0.25); case 2: Color(red: 0.78, green: 0.82, blue: 0.9); default: Color(red: 0.86, green: 0.55, blue: 0.32) }
+        STVTheme.rankColor(place)
     }
     var body: some View {
         VStack(spacing: 6) {
@@ -135,8 +136,9 @@ private struct PodiumCell: View {
         .padding(.top, place == 1 ? 0 : 18)
         .background(
             LinearGradient(colors: [tint.opacity(0.22), STVTheme.glass], startPoint: .top, endPoint: .bottom),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(tint.opacity(0.35)) }
+            in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(tint.opacity(0.28)) }
+        .contentShape(RoundedRectangle(cornerRadius: 20))
     }
 }
 
@@ -180,12 +182,9 @@ struct ActorRankRow: View {
                 }
             }
             Spacer(minLength: 4)
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(actor.score).font(.subheadline.weight(.bold).monospacedDigit()).foregroundStyle(STVTheme.accentWarm)
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(STVTheme.secondary)
-            }
+            Text(actor.score).font(.subheadline.weight(.bold).monospacedDigit()).foregroundStyle(STVTheme.accentWarm)
         }
-        .padding(10)
-        .background(STVTheme.glass, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
     }
 }

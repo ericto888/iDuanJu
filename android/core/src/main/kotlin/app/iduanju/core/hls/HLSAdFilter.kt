@@ -42,7 +42,7 @@ object HLSAdFilter {
                 up.startsWith("#EXT-X-ENDLIST") -> { trailer.add(line); continue }
                 up.startsWith("#EXTINF") -> {
                     started = true; cur.extinf = line
-                    cur.duration = line.drop(8).split(",").firstOrNull()?.trim()?.toDoubleOrNull() ?: 0.0
+                    cur.duration = line.drop(8).split(",").firstOrNull()?.trim()?.toDoubleOrNull()?.takeIf { it in 0.0..86_400.0 } ?: 0.0
                     continue
                 }
             }

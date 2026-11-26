@@ -1,5 +1,7 @@
 package app.iduanju.tvbox
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -8,849 +10,465 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.StarBorder
-import androidx.compose.material3.*
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarBorder
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import app.iduanju.IdjApp
-import app.iduanju.core.cms.MacCMS
-import app.iduanju.core.hongguo.HGSeries
+import app.iduanju.core.tvbox.LiveGroup
+import app.iduanju.core.tvbox.LiveKey
+import app.iduanju.core.tvbox.SiteKind
+import app.iduanju.core.tvbox.TVBoxEngine
+import app.iduanju.core.tvbox.TVBoxId
+import app.iduanju.core.tvbox.TVBoxSite
+import app.iduanju.core.tvbox.Trust
+import app.iduanju.core.tvbox.VodItem
+import app.iduanju.data.Catalog
+import app.iduanju.ui.components.CapsuleButton
+import app.iduanju.ui.components.ChipRow
+import app.iduanju.ui.components.DSPage
+import app.iduanju.ui.components.DSProgressBar
+import app.iduanju.ui.components.DSStatus
+import app.iduanju.ui.components.IconWell
+import app.iduanju.ui.components.LocalLayoutMetrics
+import app.iduanju.ui.components.MiniButton
+import app.iduanju.ui.components.MoreLink
+import app.iduanju.ui.components.PillButton
+import app.iduanju.ui.components.PosterArt
+import app.iduanju.ui.components.RoundIconButton
+import app.iduanju.ui.components.SectionHeader2
+import app.iduanju.ui.components.SegmentedTabs
+import app.iduanju.ui.components.StatusTone
+import app.iduanju.ui.components.ToneChip
+import app.iduanju.ui.components.dsCard
+import app.iduanju.ui.components.pressClick
 import app.iduanju.ui.theme.IdjThemeColors
 import coil.compose.AsyncImage
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import coil.request.ImageRequest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
-/**
- * 02 · TVBox 点播展示页 + 03 · TVBox 直播展示页
- * 位于独立「TVBox」底部 Tab，不污染首页短剧频道。
- */
-@OptIn(ExperimentalMaterial3Api::class)
+private val DockSpace = 112.dp
+
+/** TVBox tab: 点播 / 直播, the current site or live source, search, categories and posters. Playback always goes through the shared detail page and player. */
 @Composable
-fun TVBoxHubScreen(
-    onOpenConfig: () -> Unit,
-    onOpenVodPlayer: (siteKey: String, seriesId: String, title: String, cover: String, startEp: Int) -> Unit,
-    onOpenLivePlayer: (repoId: String, liveId: String, channelIndex: Int) -> Unit,
-) {
-    val c = IdjThemeColors
+fun TVBoxHubScreen(onOpenConfig: () -> Unit, onOpenDetail: (sid: String) -> Unit, onPlay: (sid: String, index: Int) -> Unit) {
     val store = IdjApp.instance.tvbox
-    val adultUnlocked = IdjApp.instance.cms.adultUnlocked
-    val activeRepo = store.activeRepo
+    val model = viewModel<TVBoxHubModel>()
+    val adult = IdjApp.instance.cms.adultUnlocked
+    val repo = store.activeRepo
+    // before any pane is created for this state of the config
+    remember(repo?.id, repo?.record?.updatedAt, repo?.record?.trust) { model.sync(repo); true }
+    val sites = remember(repo, adult) { repo?.let { store.visibleSites(it, adult) }.orEmpty() }
+    val lives = remember(repo) { repo?.let { store.visibleLives(it) }.orEmpty() }
+    val site = sites.firstOrNull { it.uid == store.state.lastSite[repo?.id] } ?: sites.firstOrNull { !it.site.kind.isCode || repo?.trusted == true } ?: sites.firstOrNull()
+    val live = lives.firstOrNull { it.uid == store.state.lastLive[repo?.id] } ?: lives.firstOrNull()
+    LaunchedEffect(repo?.id, sites.isEmpty(), lives.isEmpty()) { if (sites.isEmpty() && lives.isNotEmpty()) model.mode = 1 else if (lives.isEmpty() && sites.isNotEmpty()) model.mode = 0 }
+    var picker by remember { mutableStateOf(false) }
+    var asking by remember(repo?.id) { mutableStateOf(false) }
 
-    var mode by remember { mutableIntStateOf(0) } // 0 = 点播, 1 = 直播
-    var selectedSiteKey by remember { mutableStateOf<String?>(null) }
-    var selectedLiveId by remember { mutableStateOf<String?>(null) }
-    var showPickerSheet by remember { mutableStateOf(false) }
-
-    val sites = remember(activeRepo, adultUnlocked) {
-        activeRepo?.sites?.filter { it.enabled && (!it.adult || adultUnlocked) }.orEmpty()
-    }
-    val lives = remember(activeRepo) {
-        activeRepo?.lives?.filter { it.enabled }.orEmpty()
-    }
-
-    val currentSite = sites.firstOrNull { it.key == selectedSiteKey } ?: sites.firstOrNull()
-    val currentLive = lives.firstOrNull { it.id == selectedLiveId } ?: lives.firstOrNull()
-
-    LaunchedEffect(activeRepo?.id, sites.size, lives.size) {
-        if (currentSite == null && lives.isNotEmpty()) mode = 1
-    }
-
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(c.bg)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        (if (mode == 0) c.accent else c.accentWarm).copy(alpha = 0.11f),
-                        Color.Transparent,
-                    ),
-                    endY = 500f,
-                ),
-            ),
-    ) {
+    DSPage(cool = model.mode == 1) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            // 顶部：点播 / 直播 分段 + 右侧站点/直播源切换胶囊 + 配置齿轮
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                HubSegmentTab("点播", selected = mode == 0) { mode = 0 }
-                Spacer(Modifier.width(18.dp))
-                HubSegmentTab("直播", selected = mode == 1) { mode = 1 }
-                Spacer(Modifier.weight(1f))
-
-                val pillLabel = if (mode == 0) currentSite?.name ?: "选择站点" else currentLive?.name ?: "选择直播源"
-                val dotColor = if (mode == 0) Color(0xFF5FD08A) else Color(0xFFFF6B6B)
-                if (activeRepo != null) {
-                    Row(
-                        Modifier
-                            .height(32.dp)
-                            .widthIn(max = 156.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(c.text.copy(0.07f))
-                            .border(0.7.dp, c.text.copy(0.11f), RoundedCornerShape(16.dp))
-                            .clickable { showPickerSheet = true }
-                            .padding(horizontal = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Box(Modifier.size(7.dp).clip(CircleShape).background(dotColor))
-                        Text(pillLabel, color = c.text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                        Icon(Icons.Filled.KeyboardArrowDown, null, tint = c.secondary, modifier = Modifier.size(15.dp))
-                    }
-                    Spacer(Modifier.width(8.dp))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SegmentedTabs(listOf(0, 1), model.mode, { if (it == 0) "点播" else "直播" }, { model.mode = it }, Modifier.width(140.dp))
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                    val label = if (model.mode == 0) site?.site?.name else live?.live?.name
+                    if (label != null) CapsuleButton(label, trailing = Icons.Rounded.KeyboardArrowDown) { picker = true }
                 }
-                Box(
-                    Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .background(c.text.copy(0.07f))
-                        .border(0.7.dp, c.text.copy(0.11f), CircleShape)
-                        .clickable(onClick = onOpenConfig),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Filled.Settings, null, tint = c.text, modifier = Modifier.size(16.dp))
-                }
+                RoundIconButton(Icons.Rounded.Settings, "TVBox 配置", onClick = onOpenConfig)
             }
-
-            if (activeRepo == null) {
-                EmptyTVBoxState(onOpenConfig)
-            } else if (mode == 0) {
-                if (currentSite == null) {
-                    EmptySectionState("当前配置仓没有可用的点播站点", "去配置片源", onOpenConfig)
-                } else {
-                    TVBoxVodCatalogPane(
-                        repoId = activeRepo.id,
-                        site = currentSite,
-                        allSites = sites,
-                        onOpenVod = onOpenVodPlayer,
-                    )
-                }
-            } else {
-                if (currentLive == null) {
-                    EmptySectionState("当前配置仓没有可用的直播列表", "去配置直播源", onOpenConfig)
-                } else {
-                    TVBoxLiveCatalogPane(
-                        repoId = activeRepo.id,
-                        live = currentLive,
-                        onOpenLivePlayer = { idx -> onOpenLivePlayer(activeRepo.id, currentLive.id, idx) },
-                    )
-                }
-            }
-        }
-    }
-
-    if (showPickerSheet && activeRepo != null) {
-        ModalBottomSheet(
-            onDismissRequest = { showPickerSheet = false },
-            containerColor = c.surface,
-        ) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp)) {
-                Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (mode == 0) "切换点播站点 · ${activeRepo.name}" else "切换直播源 · ${activeRepo.name}",
-                        color = c.text,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        "切换配置仓",
-                        color = c.accent,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clickable {
-                            showPickerSheet = false
-                            onOpenConfig()
-                        },
-                    )
-                }
-                if (mode == 0) {
-                    sites.forEach { s ->
-                        val on = s.key == currentSite?.key
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (on) c.accent.copy(0.14f) else Color.Transparent)
-                                .clickable {
-                                    selectedSiteKey = s.key
-                                    showPickerSheet = false
-                                }
-                                .padding(horizontal = 12.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(Modifier.size(7.dp).clip(CircleShape).background(if (on) c.accent else Color(0xFF5FD08A)))
-                            Spacer(Modifier.width(10.dp))
-                            Text(s.name, color = if (on) c.accent else c.text, fontSize = 15.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Medium, modifier = Modifier.weight(1f))
-                            Text("${s.categories.size} 分类", color = c.secondary, fontSize = 12.sp)
-                        }
-                    }
-                } else {
-                    lives.forEach { l ->
-                        val on = l.id == currentLive?.id
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (on) c.accent.copy(0.14f) else Color.Transparent)
-                                .clickable {
-                                    selectedLiveId = l.id
-                                    showPickerSheet = false
-                                }
-                                .padding(horizontal = 12.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(Modifier.size(7.dp).clip(CircleShape).background(if (on) c.accent else Color(0xFFFF6B6B)))
-                            Spacer(Modifier.width(10.dp))
-                            Text(l.name, color = if (on) c.accent else c.text, fontSize = 15.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Medium, modifier = Modifier.weight(1f))
-                            if (l.channels.isNotEmpty()) Text("${l.channels.size} 频道", color = c.secondary, fontSize = 12.sp)
-                        }
+            when {
+                !store.loaded -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { TvSpinner(26) }
+                repo == null -> TvEmpty("还没有 TVBox 配置", "支持 CMS、T4、JS、Python、JAR 站点和 M3U / TXT 直播，也支持多仓与加密配置。", "添加配置", onAction = onOpenConfig)
+                else -> {
+                    if (repo.needsTrust) TrustBanner(repo) { asking = true }
+                    if (repo.error != null) TvEmpty("配置无法读取", repo.error, "去配置管理", onAction = onOpenConfig)
+                    else if (model.mode == 0) {
+                        if (site == null) TvEmpty("没有可用的点播站点", "可以在配置里启用站点，或换一个配置。", "去配置管理", onAction = onOpenConfig)
+                        else VodSection(model, repo, site, sites, onOpenDetail, onPlay, onTrust = { asking = true })
+                    } else {
+                        if (live == null) TvEmpty("没有直播源", "当前配置没有启用的直播列表。", "去配置管理", onAction = onOpenConfig)
+                        else key(live.uid) { LiveSection(model.live(live.uid), live, onPlay) }
                     }
                 }
             }
         }
     }
+
+    if (picker && repo != null) {
+        if (model.mode == 0) SitePicker(repo, sites, site?.uid, onDismiss = { picker = false }, onConfig = { picker = false; onOpenConfig() }) { picker = false; store.setLastSite(repo.id, it); model.search.clear() }
+        else LivePicker(repo, lives, live?.uid, onDismiss = { picker = false }) { picker = false; store.setLastLive(repo.id, it) }
+    }
+    if (asking && repo != null) TrustDialog(repo, { ok -> asking = false; store.setTrust(repo.id, if (ok) Trust.Trusted else Trust.Denied) }, { asking = false; store.setTrust(repo.id, Trust.Denied) })
+    model.message?.let { m -> TvDialog("提示", "知道了", { model.message = null }, { model.message = null }, dismiss = null) { TvText(m) } }
 }
 
 @Composable
-private fun HubSegmentTab(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun TrustBanner(repo: TVBoxRepo, onAsk: () -> Unit) {
     val c = IdjThemeColors
-    Column(
-        Modifier.clickable(onClick = onClick),
-        horizontalAlignment = Alignment.Start,
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clip(RoundedCornerShape(16.dp)).background(c.warmSoft).clickable(onClick = onAsk).padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(
-            label,
-            color = if (selected) c.text else c.secondary,
-            fontSize = if (selected) 21.sp else 18.sp,
-            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
-        )
-        Spacer(Modifier.height(4.dp))
-        Box(
-            Modifier
-                .width(22.dp)
-                .height(3.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(if (selected) c.accent else Color.Transparent),
-        )
+        Icon(Icons.Rounded.Shield, null, Modifier.size(18.dp), tint = c.accentWarm)
+        Text("「${repo.name}」含 JAR / JS / Python 站点，信任后才会运行", color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        MiniButton("查看", onAsk)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------- vod
+
+@Composable
+private fun VodSection(model: TVBoxHubModel, repo: TVBoxRepo, site: TVBoxSiteRef, sites: List<TVBoxSiteRef>, onOpenDetail: (String) -> Unit, onPlay: (String, Int) -> Unit, onTrust: () -> Unit) {
+    val focus = LocalFocusManager.current
+    val search = model.search
+    val pane = model.site(site.uid)
+    val searchable = remember(sites, repo.trusted) { sites.filter { it.site.searchable && it.site.kind != SiteKind.Unsupported && (!it.site.kind.isCode || repo.trusted) } }
+    val blocked = site.site.kind.isCode && !repo.trusted
+    LaunchedEffect(pane, blocked) { if (!blocked) pane.ensure() }
+    val submit = { focus.clearFocus(); search.submit(site.uid, searchable) }
+    BackHandler(search.active) { search.clear() }
+    BackHandler(!search.active && pane.folders.isNotEmpty()) { pane.folders.removeAt(pane.folders.lastIndex) }
+
+    Column(Modifier.fillMaxSize()) {
+        TvSearchField(
+            search.query, { search.query = it; if (it.isEmpty() && search.active) search.clear() }, if (search.all) "搜索全部 ${searchable.size} 个站点" else "搜索 ${site.site.name}",
+            Modifier.padding(horizontal = 16.dp, vertical = 4.dp), onSearch = submit,
+        ) {
+            Row(Modifier.padding(end = 2.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                ToneChip("当前站", !search.all, small = true) { if (search.all) { search.all = false; if (search.active) submit() } }
+                ToneChip("全部站", search.all, small = true) { if (!search.all) { search.all = true; if (search.query.isNotBlank()) submit() } }
+            }
+        }
+        val open: (VodItem) -> Unit = { item ->
+            when {
+                item.action.isNotEmpty() -> model.action(item)
+                item.folder -> { search.clear(); pane.folders.add(item) }
+                else -> { Catalog.rememberPreview(item.sid, item.title, item.cover); onOpenDetail(item.sid) }
+            }
+        }
+        when {
+            search.active -> SearchResults(search, site, open)
+            blocked -> TvEmpty("${site.site.kind.badge} 站点尚未启用", "这个站点的代码需要你先信任「${repo.name}」才会运行。", "信任配置", onAction = onTrust)
+            pane.folders.isNotEmpty() -> FolderList(pane, open)
+            else -> SiteContent(model, pane, site, open, onPlay)
+        }
     }
 }
 
 @Composable
-private fun TVBoxVodCatalogPane(
-    repoId: String,
-    site: TVBoxRepoSite,
-    allSites: List<TVBoxRepoSite>,
-    onOpenVod: (siteKey: String, seriesId: String, title: String, cover: String, startEp: Int) -> Unit,
-) {
-    val c = IdjThemeColors
-    val store = IdjApp.instance.tvbox
-    val scope = rememberCoroutineScope()
-
-    var query by remember { mutableStateOf("") }
-    var submittedQuery by remember { mutableStateOf("") }
-    var searchAllSites by remember { mutableStateOf(false) }
-
-    val cats = remember(site.key, site.categories) {
-        listOf("" to "最新") + site.categories.map { it.id to it.name }
-    }
-    var selCat by remember(site.key) { mutableIntStateOf(0) }
-    val items = remember(site.key, selCat, submittedQuery, searchAllSites) { mutableStateListOf<Pair<TVBoxRepoSite, HGSeries>>() }
-    var page by remember(site.key, selCat, submittedQuery, searchAllSites) { mutableIntStateOf(1) }
-    var hasMore by remember(site.key, selCat, submittedQuery, searchAllSites) { mutableStateOf(true) }
-    var loading by remember(site.key, selCat, submittedQuery, searchAllSites) { mutableStateOf(false) }
-    var error by remember(site.key, selCat, submittedQuery, searchAllSites) { mutableStateOf<String?>(null) }
-    val gridState = rememberLazyGridState()
-
-    suspend fun loadMore() {
-        if (loading || !hasMore) return
-        loading = true
-        try {
-            if (submittedQuery.isNotBlank() && searchAllSites) {
-                val results = withContext(Dispatchers.IO) {
-                    coroutineScope {
-                        allSites.take(10).map { s ->
-                            async {
-                                runCatching { MacCMS.search(s.toCMSSite(), submittedQuery, 1).items.map { s to it } }.getOrDefault(emptyList())
-                            }
-                        }.awaitAll().flatten()
-                    }
-                }
-                items.clear()
-                items.addAll(results)
-                hasMore = false
-                error = null
-            } else if (submittedQuery.isNotBlank()) {
-                val p = withContext(Dispatchers.IO) { MacCMS.search(site.toCMSSite(), submittedQuery, page) }
-                val seen = items.map { it.second.seriesId }.toHashSet()
-                items.addAll(p.items.filter { seen.add(it.seriesId) }.map { site to it })
-                hasMore = p.hasMore
-                page += 1
-                error = null
-            } else {
-                val catId = cats.getOrNull(selCat)?.first.orEmpty()
-                val p = withContext(Dispatchers.IO) {
-                    val o = MacCMS.fetch(site.api, buildMap { put("ac", "detail"); put("pg", page.toString()); if (catId.isNotEmpty()) put("t", catId) })
-                    if (catId.isEmpty() && page == 1) {
-                        val parsedCats = MacCMS.parseCategories(o)
-                        if (parsedCats.isNotEmpty()) withContext(Dispatchers.Main) { store.cacheSiteCategories(repoId, site.key, parsedCats) }
-                    }
-                    MacCMS.page(o, site.key, page)
-                }
-                val seen = items.map { it.second.seriesId }.toHashSet()
-                items.addAll(p.items.filter { seen.add(it.seriesId) }.map { site to it })
-                hasMore = p.hasMore
-                page += 1
-                error = null
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            error = e.message ?: "加载失败"
-        } finally {
-            loading = false
+private fun SiteContent(model: TVBoxHubModel, pane: SitePane, site: TVBoxSiteRef, open: (VodItem) -> Unit, onPlay: (String, Int) -> Unit) {
+    val home = pane.home
+    var filterFor by remember(pane) { mutableStateOf<String?>(null) }
+    val tabs = remember(home, pane.loading, pane.category.isEmpty()) { buildList { if (home == null || home.items.isNotEmpty() || pane.loading && pane.category.isEmpty()) add("" to "推荐"); home?.categories?.forEach { add(it.id to it.name) } } }
+    if (tabs.size > 1) Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        ChipRow(tabs, tabs.firstOrNull { it.first == pane.category } ?: tabs.first(), { it.second }, { pane.category = it.first }, modifier = Modifier.weight(1f))
+        if (pane.category.isNotEmpty() && pane.filters(pane.category).isNotEmpty()) {
+            val on = pane.picked(pane.category).isNotEmpty()
+            RoundIconButton(Icons.Rounded.Tune, "筛选", if (on) app.iduanju.ui.components.Tone.Accent else app.iduanju.ui.components.Tone.Glass, 32.dp) { filterFor = pane.category }
+            Spacer(Modifier.width(16.dp))
         }
     }
-
-    LaunchedEffect(site.key, selCat, submittedQuery, searchAllSites) { loadMore() }
-    val nearEnd by remember {
-        derivedStateOf { (gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= gridState.layoutInfo.totalItemsCount - 6 }
+    if (pane.category.isEmpty()) {
+        LaunchedEffect(pane) { pane.show(null) }
+        val items = home?.items.orEmpty()
+        PosterGrid(pane.homeGrid, items, landscape = items.firstOrNull()?.landscape == true, open = open, header = {
+            item(key = "continue", span = { GridItemSpan(maxLineSpan) }) { ContinueRow(onPlay) }
+            item(key = "head", span = { GridItemSpan(maxLineSpan) }) {
+                SectionHeader2("推荐", site.site.name, inset = 0.dp, modifier = Modifier.padding(top = 4.dp)) { if (pane.loading && items.isNotEmpty()) TvSpinner(16) else MoreLink("刷新", Icons.Rounded.Refresh) { pane.refresh() } }
+            }
+        }, footer = { ListStatus(pane.loading, items.isEmpty(), pane.error, "这个站点没有推荐内容", { pane.load(true) }) })
+    } else {
+        val list = pane.list(pane.category, pane.picked(pane.category))
+        LaunchedEffect(list) { pane.show(list) }
+        key(list) { PagedList(list) { open(it) } }
     }
-    LaunchedEffect(nearEnd, items.size) { if (nearEnd && items.isNotEmpty()) loadMore() }
+    filterFor?.let { tid -> FilterSheet(pane, tid) { filterFor = null } }
+}
 
-    val latestWatch = store.recentWatches.firstOrNull()
+@Composable
+private fun PagedList(list: VodListState, open: (VodItem) -> Unit) {
+    LaunchedEffect(list) { list.ensure() }
+    LoadMore(list.grid, !list.loading && list.error == null) { list.load() }
+    PosterGrid(list.grid, list.items, landscape = list.items.firstOrNull()?.landscape == true, open = open, footer = { ListStatus(list.loading, list.items.isEmpty(), list.error, "这里还没有内容", { if (list.items.isEmpty()) list.load(true) else list.load() }) })
+}
 
+@Composable
+private fun FolderList(pane: SitePane, open: (VodItem) -> Unit) {
+    val c = IdjThemeColors
+    val current = pane.folders.last()
+    val list = pane.list(current.id)
+    LaunchedEffect(list) { pane.show(list) }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        MoreLink("返回", Icons.Rounded.Folder) { pane.folders.removeAt(pane.folders.lastIndex) }
+        pane.folders.forEachIndexed { i, f ->
+            Icon(Icons.Rounded.ChevronRight, null, Modifier.size(14.dp), tint = c.tertiary)
+            Text(f.title, color = if (i == pane.folders.lastIndex) c.text else c.secondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).clickable { while (pane.folders.size > i + 1) pane.folders.removeAt(pane.folders.lastIndex) })
+        }
+    }
+    key(list) { PagedList(list, open) }
+}
+
+@Composable
+private fun SearchResults(search: SearchPane, site: TVBoxSiteRef, open: (VodItem) -> Unit) {
+    val groups = remember(search.sites.toMap()) { listOf("" to ("全部" to search.items.size)) + search.sites.entries.map { it.key to it.value } }
+    if (search.all) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            if (groups.size > 1) ChipRow(groups, groups.firstOrNull { it.first == search.only } ?: groups.first(), { "${it.second.first} ${if (it.first.isEmpty()) search.items.size else it.second.second}" }, { search.only = it.first }, small = true)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("已返回 ${search.done} / ${search.total} 个站点" + if (search.failed > 0) " · ${search.failed} 个失败" else "", color = IdjThemeColors.secondary, fontSize = 12.sp)
+                if (search.loading) TvSpinner(12)
+            }
+        }
+    }
+    val shown = if (search.only.isEmpty()) search.items else search.items.filter { it.uid == search.only }
+    if (!search.all) LoadMore(search.grid, !search.loading && search.error == null) { search.more(site.uid) }
+    PosterGrid(search.grid, shown, landscape = false, open = open, label = if (search.all) { item -> search.sites[item.uid]?.first.orEmpty() } else null,
+        footer = { ListStatus(search.loading && !search.all || search.loading && search.items.isEmpty(), shown.isEmpty(), search.error, "没有找到「${search.submitted}」", null) })
+}
+
+/** The next page when the end comes near. [idle]: also when that happened while something was still loading. */
+@Composable
+private fun LoadMore(grid: LazyGridState, idle: Boolean, load: () -> Unit) {
+    val latest by rememberUpdatedState(load)
+    val near by remember(grid) { derivedStateOf { grid.layoutInfo.let { i -> i.totalItemsCount > 0 && (i.visibleItemsInfo.lastOrNull()?.index ?: 0) >= i.totalItemsCount - 8 } } }
+    val total by remember(grid) { derivedStateOf { grid.layoutInfo.totalItemsCount } }
+    LaunchedEffect(near, total, idle) { if (idle && near && total > 3) latest() }
+}
+
+/** Poster wall; landscape sites get 16:9 cards. Keys are stable, covers load at cell size. */
+@Composable
+private fun PosterGrid(state: LazyGridState, items: List<VodItem>, landscape: Boolean, open: (VodItem) -> Unit, label: ((VodItem) -> String)? = null, header: LazyGridScope.() -> Unit = {}, footer: @Composable () -> Unit) {
+    val m = LocalLayoutMetrics.current
     LazyVerticalGrid(
-        columns = GridCells.Fixed(app.iduanju.ui.components.LocalLayoutMetrics.current.posterCols),
-        state = gridState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 112.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(13.dp),
+        GridCells.Fixed(if (landscape) m.wideCardCols else m.posterCols), Modifier.fillMaxSize(), state, PaddingValues(start = m.pagePadding, end = m.pagePadding, top = 6.dp, bottom = DockSpace),
+        horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // 搜索胶囊（支持站内搜 / 全站聚合搜）
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(40.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(c.text.copy(0.065f))
-                    .border(0.7.dp, c.text.copy(0.11f), RoundedCornerShape(20.dp))
-                    .padding(start = 14.dp, end = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Filled.Search, null, tint = c.secondary, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                    if (query.isEmpty()) {
-                        Text("搜索 ${site.name}，或聚合全站片源", color = c.secondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    BasicTextField(
-                        value = query,
-                        onValueChange = {
-                            query = it
-                            if (it.isBlank()) submittedQuery = ""
-                        },
-                        singleLine = true,
-                        textStyle = TextStyle(color = c.text, fontSize = 13.sp),
-                        cursorBrush = SolidColor(c.accent),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { submittedQuery = query.trim() }),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                Box(
-                    Modifier
-                        .height(28.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(if (searchAllSites) c.accent.copy(0.20f) else c.text.copy(0.10f))
-                        .clickable {
-                            searchAllSites = !searchAllSites
-                            if (query.isNotBlank()) submittedQuery = query.trim()
-                        }
-                        .padding(horizontal = 10.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("全站搜", color = if (searchAllSites) c.accent else c.text, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
+        header()
+        itemsIndexed(items, key = { i, it -> "${it.uid}|${it.id}|$i" }, contentType = { _, _ -> "poster" }) { _, item -> PosterCell(item, landscape, label?.invoke(item), open) }
+        item(key = "footer", span = { GridItemSpan(maxLineSpan) }) { footer() }
+    }
+}
 
-        // 分类胶囊
-        if (submittedQuery.isBlank()) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    itemsIndexed(cats) { idx, (_, name) ->
-                        val on = idx == selCat
-                        Box(
-                            Modifier
-                                .height(30.dp)
-                                .clip(RoundedCornerShape(15.dp))
-                                .background(if (on) c.text else c.text.copy(0.068f))
-                                .clickable { selCat = idx }
-                                .padding(horizontal = 13.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(name, color = if (on) c.bg else c.secondary, fontSize = 12.5.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium)
-                        }
-                    }
-                }
-            }
+@Composable
+private fun PosterCell(item: VodItem, landscape: Boolean, label: String?, open: (VodItem) -> Unit) {
+    val c = IdjThemeColors
+    Column(Modifier.pressClick(0.97f, label = item.title) { open(item) }) {
+        Box(Modifier.fillMaxWidth().aspectRatio(if (landscape) 16f / 9f else 3f / 4f)) {
+            if (item.folder && item.cover.isEmpty()) Box(Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)).background(c.glass), contentAlignment = Alignment.Center) { IconWell(Icons.Rounded.Folder, 44.dp) }
+            else PosterArt(item.cover, Modifier.fillMaxSize(), badge = item.remark.ifEmpty { null })
+            if (!label.isNullOrEmpty()) Text(
+                label, Modifier.align(Alignment.TopStart).padding(6.dp).clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(0.55f)).padding(horizontal = 6.dp, vertical = 2.dp),
+                color = Color.White, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
         }
+        Spacer(Modifier.height(6.dp))
+        Text(item.title, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
 
-        // 轻量「继续观看」单行条
-        if (latestWatch != null && submittedQuery.isBlank()) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(c.text.copy(0.06f))
-                        .border(0.7.dp, c.text.copy(0.08f), RoundedCornerShape(14.dp))
-                        .clickable {
-                            onOpenVod(latestWatch.siteKey, latestWatch.seriesId, latestWatch.title, latestWatch.cover, latestWatch.episodeIndex)
-                        }
-                        .padding(9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    AsyncImage(
-                        model = latestWatch.cover,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(width = 56.dp, height = 38.dp).clip(RoundedCornerShape(8.dp)).background(c.elevated),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("${latestWatch.title} · ${latestWatch.episodeTitle}", color = c.text, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            "${latestWatch.siteName}${if (latestWatch.lineName.isNotBlank()) " · ${latestWatch.lineName}" else ""}",
-                            color = c.secondary,
-                            fontSize = 11.5.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (latestWatch.durationMs > 0L) {
-                            val pct = (latestWatch.positionMs.toFloat() / latestWatch.durationMs.toFloat()).coerceIn(0.05f, 1f)
-                            Spacer(Modifier.height(4.dp))
-                            Box(Modifier.fillMaxWidth().height(2.5.dp).clip(RoundedCornerShape(2.dp)).background(c.text.copy(0.12f))) {
-                                Box(Modifier.fillMaxWidth(pct).fillMaxHeight().background(c.accent))
-                            }
-                        }
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    Box(Modifier.size(30.dp).clip(CircleShape).background(c.text), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Filled.PlayArrow, null, tint = c.bg, modifier = Modifier.size(18.dp))
-                    }
-                }
+@Composable
+private fun ListStatus(loading: Boolean, empty: Boolean, error: String?, nothing: String, onRetry: (() -> Unit)?) {
+    val c = IdjThemeColors
+    Box(Modifier.fillMaxWidth().padding(vertical = if (empty) 48.dp else 16.dp), contentAlignment = Alignment.Center) {
+        when {
+            error != null -> Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(error, color = c.secondary, fontSize = 13.sp, lineHeight = 19.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                if (onRetry != null) MiniButton("重试", onRetry)
             }
+            loading -> TvSpinner()
+            empty -> Text(nothing, color = c.secondary, fontSize = 13.sp)
         }
+    }
+}
 
-        // 区块标题
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (submittedQuery.isNotBlank()) "搜索「$submittedQuery」" else cats.getOrNull(selCat)?.second ?: "最新更新",
-                    color = c.text,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    if (submittedQuery.isNotBlank() && searchAllSites) "聚合 ${allSites.size} 站" else "${site.name} · ${site.categories.size} 分类",
-                    color = c.secondary,
-                    fontSize = 12.sp,
-                )
-            }
-        }
-
-        // 3 列无框海报网格
-        items(items, key = { (s, item) -> "${s.key}:${item.seriesId}" }) { (itemSite, series) ->
-            Column(
-                Modifier.clickable {
-                    onOpenVod(itemSite.key, series.seriesId, series.title, series.cover, 0)
-                },
-            ) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(2f / 2.86f)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(c.elevated),
-                ) {
-                    AsyncImage(
-                        model = series.cover,
-                        contentDescription = series.title,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    if (!series.subtitle.isNullOrBlank()) {
-                        Box(
-                            Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(6.dp)
-                                .clip(RoundedCornerShape(5.dp))
-                                .background(Color(0xB80E1016))
-                                .padding(horizontal = 6.dp, vertical = 2.dp),
-                        ) {
-                            Text(series.subtitle!!, color = Color(0xFFEEF0F3), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        }
+/** 继续观看 of TVBox titles, straight into the player. */
+@Composable
+private fun ContinueRow(onPlay: (String, Int) -> Unit) {
+    val lib = IdjApp.instance.library
+    val repos = IdjApp.instance.tvbox.repos
+    val list = remember(lib.history.toList(), repos) { lib.continueWatching.filter { p -> TVBoxId.parseVod(p.seriesId)?.let { IdjApp.instance.tvbox.engine.site(it.uid) } != null }.take(12) }
+    if (list.isEmpty()) return
+    val c = IdjThemeColors
+    Column(Modifier.padding(bottom = 4.dp)) {
+        SectionHeader2("继续观看", inset = 0.dp)
+        Spacer(Modifier.height(10.dp))
+        LazyRow(contentPadding = PaddingValues(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(list, key = { it.seriesId }) { p ->
+                Row(Modifier.width(232.dp).dsCard(16.dp).pressClick(0.98f, label = "继续播放 ${p.title}") { onPlay(p.seriesId, p.episodeNumber) }.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(Modifier.size(48.dp, 64.dp).clip(RoundedCornerShape(9.dp)).background(c.glass)) { AsyncImage(p.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(p.title, color = c.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(p.resumeLabel, color = c.secondary, fontSize = 12.sp, maxLines = 1)
+                        DSProgressBar(p.fraction)
                     }
-                    if (searchAllSites && submittedQuery.isNotBlank()) {
-                        Box(
-                            Modifier
-                                .align(Alignment.BottomStart)
-                                .fillMaxWidth()
-                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC0A0C10))))
-                                .padding(horizontal = 6.dp, vertical = 5.dp),
-                        ) {
-                            Text(itemSite.name, color = Color(0xFFEEF0F3), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                Text(series.title, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                val sub = series.tags.take(2).joinToString(" · ").ifBlank { series.subtitle ?: itemSite.name }
-                Text(sub, color = c.secondary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-
-        // 加载/空状态尾项
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                when {
-                    loading -> CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = c.secondary)
-                    error != null -> Text("$error · 点击重试", color = c.secondary, fontSize = 13.sp, modifier = Modifier.clickable { scope.launch { loadMore() } })
-                    items.isEmpty() -> Text("暂无内容，试试切换分类或站点", color = c.secondary, fontSize = 13.sp)
+                    Icon(Icons.Rounded.PlayArrow, null, Modifier.size(20.dp), tint = c.accent)
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TVBoxLiveCatalogPane(
-    repoId: String,
-    live: TVBoxRepoLive,
-    onOpenLivePlayer: (channelIndex: Int) -> Unit,
-) {
+private fun FilterSheet(pane: SitePane, tid: String, onDismiss: () -> Unit) {
+    val c = IdjThemeColors
+    TvSheet("筛选", onDismiss, trailing = { MiniButton("重置") { pane.resetFilters(tid) } }) {
+        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            pane.filters(tid).forEach { f ->
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(f.name, color = c.secondary, fontSize = 13.sp)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val cur = pane.picked(tid)[f.key].orEmpty()
+                        f.options.forEach { (n, v) -> ToneChip(n, cur == v, small = true) { pane.pick(tid, f.key, v) } }
+                    }
+                }
+            }
+        }
+        PillButton("完成", Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 16.dp), height = 44.dp, onClick = onDismiss)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------- pickers
+
+@Composable
+private fun SitePicker(repo: TVBoxRepo, sites: List<TVBoxSiteRef>, current: String?, onDismiss: () -> Unit, onConfig: () -> Unit, onPick: (String) -> Unit) {
+    val store = IdjApp.instance.tvbox
+    var query by remember { mutableStateOf("") }
+    var kind by remember { mutableStateOf("全部") }
+    val kinds = remember(sites) { listOf("全部") + sites.map { it.site.kind.badge }.distinct() }
+    val shown = remember(sites, query, kind) { sites.filter { (kind == "全部" || it.site.kind.badge == kind) && (query.isBlank() || it.site.name.contains(query.trim(), true) || it.site.key.contains(query.trim(), true)) } }
+    TvSheet("选择站点", onDismiss, trailing = { MiniButton("切换配置", onConfig) }) {
+        TvSearchField(query, { query = it }, "搜索 ${sites.size} 个站点", Modifier.padding(horizontal = 16.dp))
+        if (kinds.size > 2) ChipRow(kinds, kind, { it }, { kind = it }, small = true, modifier = Modifier.padding(top = 8.dp))
+        Spacer(Modifier.height(6.dp))
+        LazyColumn(Modifier.weight(1f, fill = false)) {
+            items(shown, key = { it.uid }) { s ->
+                TvRow(s.site.name, siteStatus(repo, s), selected = s.uid == current, leading = { KindBadge(s.site.kind) }, onClick = { onPick(s.uid) }) {
+                    store.latency[s.uid]?.let { ms -> DSStatus(if (ms < 0) "失败" else "$ms ms", if (ms < 0) StatusTone.Muted else if (ms < 1500) StatusTone.Ok else StatusTone.Warn) }
+                }
+            }
+            if (shown.isEmpty()) item { TvEmpty("没有匹配的站点") }
+        }
+    }
+}
+
+private fun siteStatus(repo: TVBoxRepo, s: TVBoxSiteRef): String? = when {
+    s.site.kind == SiteKind.Unsupported -> "不支持的类型"
+    s.site.kind.isCode && !repo.trusted -> "需要信任配置"
+    s.site.kind == SiteKind.Py && !app.iduanju.tvbox.runtime.PyRuntime.INCLUDED -> "此版本未包含 Python 运行时"
+    IdjApp.instance.tvbox.engine.status(s.uid) == TVBoxEngine.SpiderStatus.Ready -> "已加载"
+    !s.site.searchable -> "不参与搜索"
+    else -> null
+}
+
+@Composable
+private fun LivePicker(repo: TVBoxRepo, lives: List<TVBoxLiveRef>, current: String?, onDismiss: () -> Unit, onPick: (String) -> Unit) = TvSheet("选择直播源", onDismiss) {
+    LazyColumn(Modifier.weight(1f, fill = false)) {
+        items(lives, key = { it.uid }) { l ->
+            val kind = l.live.kind
+            TvRow(l.live.name, if (kind != null && !repo.trusted) "需要信任配置" else l.live.url.ifEmpty { if (kind != null) l.live.api else "配置内置" }, selected = l.uid == current, leading = { if (kind != null) KindBadge(kind) }, onClick = { onPick(l.uid) })
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------- live
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun LiveSection(pane: LivePane, live: TVBoxLiveRef, onPlay: (String, Int) -> Unit) {
     val c = IdjThemeColors
     val store = IdjApp.instance.tvbox
     val scope = rememberCoroutineScope()
-
-    var channels by remember(repoId, live.id) { mutableStateOf(live.channels) }
-    var loading by remember(repoId, live.id) { mutableStateOf(false) }
-    var error by remember(repoId, live.id) { mutableStateOf<String?>(null) }
-    var selectedGroup by remember(repoId, live.id) { mutableStateOf("全部") }
-    var activeChannelName by remember(repoId, live.id) { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(repoId, live.id) {
-        if (channels.isEmpty()) {
-            loading = true
-            try {
-                channels = store.loadLiveChannels(repoId, live.id)
-                error = null
-            } catch (e: Exception) {
-                error = e.message ?: "拉取直播列表失败"
-            } finally {
-                loading = false
+    var query by remember { mutableStateOf("") }
+    var locked by remember { mutableStateOf<LiveGroup?>(null) }
+    LaunchedEffect(pane) { pane.ensure() }
+    val unlocked = store.state.unlocked[pane.uid]
+    LaunchedEffect(unlocked) { pane.show() }
+    val groups = remember(pane.data) { listOf(LivePane.ALL, LivePane.FAVORITES) + pane.data?.list?.groups.orEmpty().map { it.name } }
+    val favorites = store.state.favorites
+    val shown = remember(pane.rows, pane.group, favorites, query) {
+        val q = query.trim()
+        pane.rows.filter { r ->
+            r.number > 0 && (if (q.isNotEmpty()) r.channel.name.contains(q, true) else when (pane.group) { LivePane.ALL -> true; LivePane.FAVORITES -> r.channel.name in favorites; else -> r.group.name == pane.group })
+        }
+    }
+    Column(Modifier.fillMaxSize()) {
+        TvSearchField(query, { query = it }, "搜索 ${pane.rows.size} 个频道", Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        if (query.isBlank() && groups.size > 2) ChipRow(groups, pane.group, { g -> if (pane.data?.list?.groups?.firstOrNull { it.name == g }?.let { pane.locked(it) } == true) "$g（已锁）" else LivePane.label(g) }, { g ->
+            val target = pane.data?.list?.groups?.firstOrNull { it.name == g }
+            if (target != null && pane.locked(target)) locked = target else pane.group = g
+        }, modifier = Modifier.padding(vertical = 4.dp))
+        val epg = remember(pane.data) { pane.data?.let { d -> d.ref.live.epg.isNotEmpty() || d.list.epg.isNotEmpty() || d.list.groups.any { g -> g.channels.any { it.epg.isNotEmpty() } } } == true }
+        LazyColumn(Modifier.fillMaxSize(), pane.list, contentPadding = PaddingValues(bottom = DockSpace)) {
+            items(shown, key = { it.key }, contentType = { "channel" }) { row ->
+                if (epg) LaunchedEffect(row.key) { pane.nowPlaying(row) }
+                ChannelRow(row, pane.now[row.key]?.text.orEmpty(), row.channel.name in favorites, live.live.logo, onFavorite = { store.toggleFavorite(row.channel.name) }) {
+                    Catalog.rememberChannel(TVBoxId.live(pane.uid), LiveKey(row.number, row.group.name, row.channel.name, row.channel.urls.firstOrNull().orEmpty()))
+                    onPlay(TVBoxId.live(pane.uid), row.number)
+                }
+            }
+            item(key = "footer") {
+                ListStatus(pane.loading && shown.isEmpty(), shown.isEmpty(), pane.error?.takeIf { shown.isEmpty() || pane.data == null }, if (pane.group == LivePane.FAVORITES && query.isBlank()) "还没有收藏的频道" else "没有频道", { pane.load(true) })
             }
         }
     }
-
-    val groups = remember(channels) {
-        listOf("全部", "收藏") + channels.map { it.group }.distinct()
-    }
-    val filtered = remember(channels, selectedGroup, store.favoriteChannels.toList()) {
-        when (selectedGroup) {
-            "全部" -> channels
-            "收藏" -> channels.filter { store.isFavoriteChannel(it.name) }
-            else -> channels.filter { it.group == selectedGroup }
-        }
-    }
-    val activeCh = channels.firstOrNull { it.name == activeChannelName } ?: filtered.firstOrNull() ?: channels.firstOrNull()
-    val activeGlobalIndex = activeCh?.let { ch -> channels.indexOfFirst { it.name == ch.name }.coerceAtLeast(0) } ?: 0
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 112.dp),
-    ) {
-        // 唯一焦点直播预览卡
-        if (activeCh != null) {
-            item {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .height(172.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(
-                            Brush.linearGradient(
-                                listOf(Color(0xFF101624), Color(0xFF1D263B), Color(0xFF0E1118)),
-                            ),
-                        )
-                        .clickable { onOpenLivePlayer(activeGlobalIndex) }
-                        .padding(14.dp),
-                ) {
-                    Row(Modifier.fillMaxWidth().align(Alignment.TopStart), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Row(
-                            Modifier
-                                .clip(RoundedCornerShape(99.dp))
-                                .background(Color(0xA60E1016))
-                                .border(0.7.dp, Color.White.copy(0.14f), RoundedCornerShape(99.dp))
-                                .padding(horizontal = 9.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Box(Modifier.size(7.dp).clip(CircleShape).background(Color(0xFFFF6B6B)))
-                            Text("LIVE · HLS", color = Color(0xFFEEF0F3), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(99.dp))
-                                .background(Color(0xA60E1016))
-                                .border(0.7.dp, Color.White.copy(0.14f), RoundedCornerShape(99.dp))
-                                .padding(horizontal = 9.dp, vertical = 3.dp),
-                        ) {
-                            Text("线路 1 / ${activeCh.urls.size}", color = Color(0xFFEEF0F3), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-
-                    Row(Modifier.fillMaxWidth().align(Alignment.BottomStart), verticalAlignment = Alignment.Bottom) {
-                        Column(Modifier.weight(1f)) {
-                            Text(activeCh.name, color = Color(0xFFEEF0F3), fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${live.name} · ${activeCh.group}", color = Color(0xB8EEF0F3), fontSize = 11.5.sp)
-                        }
-                        Row(
-                            Modifier
-                                .height(32.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color(0xFFEEF0F3))
-                                .padding(horizontal = 13.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Icon(Icons.Filled.Fullscreen, null, tint = Color(0xFF111317), modifier = Modifier.size(16.dp))
-                            Text("全屏观看", color = Color(0xFF111317), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-
-        // 分组胶囊
-        item {
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-            ) {
-                items(groups) { g ->
-                    val on = g == selectedGroup
-                    val label = if (g == "全部") "全部 ${channels.size}" else g
-                    Box(
-                        Modifier
-                            .height(30.dp)
-                            .clip(RoundedCornerShape(15.dp))
-                            .background(if (on) c.text else c.text.copy(0.068f))
-                            .clickable { selectedGroup = g }
-                            .padding(horizontal = 13.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(label, color = if (on) c.bg else c.secondary, fontSize = 12.5.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium)
-                    }
-                }
-            }
-        }
-
-        if (loading) {
-            item {
-                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = c.accent)
-                }
-            }
-        } else if (error != null) {
-            item {
-                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text(
-                        "$error · 点击重试",
-                        color = c.secondary,
-                        fontSize = 13.sp,
-                        modifier = Modifier.clickable {
-                            scope.launch {
-                                loading = true
-                                try {
-                                    channels = store.loadLiveChannels(repoId, live.id, forceRefresh = true)
-                                    error = null
-                                } catch (e: Exception) {
-                                    error = e.message ?: "拉取失败"
-                                } finally {
-                                    loading = false
-                                }
-                            }
-                        },
-                    )
-                }
-            }
-        } else {
-            itemsIndexed(filtered, key = { idx, ch -> "${ch.name}:$idx" }) { idx, ch ->
-                val isPlaying = ch.name == activeCh?.name
-                val fav = store.isFavoriteChannel(ch.name)
-                val globalIdx = channels.indexOfFirst { it.name == ch.name }.coerceAtLeast(0)
-                Column(Modifier.padding(horizontal = 16.dp)) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                activeChannelName = ch.name
-                                onOpenLivePlayer(globalIdx)
-                            }
-                            .padding(vertical = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "%02d".format(idx + 1),
-                            color = if (isPlaying) c.accent else c.secondary.copy(0.65f),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.width(24.dp),
-                        )
-                        Box(
-                            Modifier
-                                .size(width = 46.dp, height = 30.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (isPlaying) c.accent.copy(0.16f) else c.text.copy(0.065f))
-                                .border(0.7.dp, if (isPlaying) c.accent.copy(0.42f) else c.text.copy(0.08f), RoundedCornerShape(8.dp)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                ch.name.take(5),
-                                color = if (isPlaying) c.accent else c.text,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                            )
-                        }
-                        Spacer(Modifier.width(11.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                ch.name,
-                                color = if (isPlaying) c.accent else c.text,
-                                fontSize = 14.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                "${ch.group} · ${ch.urls.size} 条信号源${if (isPlaying) " · 正在预览" else ""}",
-                                color = c.secondary,
-                                fontSize = 11.5.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        IconButton(onClick = { store.toggleFavoriteChannel(ch.name) }, modifier = Modifier.size(34.dp)) {
-                            Icon(
-                                if (fav) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                                null,
-                                tint = if (fav) c.accentWarm else c.secondary.copy(0.6f),
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                    }
-                    HorizontalDivider(thickness = 0.6.dp, color = c.text.copy(0.07f))
-                }
-            }
+    locked?.let { g ->
+        var pass by remember(g) { mutableStateOf("") }
+        var wrong by remember(g) { mutableStateOf(false) }
+        val open: () -> Unit = { if (pass.trim() == g.pass) { store.unlock(pane.uid, g.name); locked = null; scope.launch { pane.show(); pane.group = g.name } } else wrong = true }
+        TvDialog("「${g.name}」已加锁", "打开", open, { locked = null }) {
+            TvField(pass, { pass = it; wrong = false }, "输入分组密码", onAction = open)
+            if (wrong) Text("密码不正确", color = c.accentWarm, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
         }
     }
 }
 
 @Composable
-private fun EmptyTVBoxState(onOpenConfig: () -> Unit) {
+private fun ChannelRow(row: LiveRow, now: String, favorite: Boolean, logoTemplate: String, onFavorite: () -> Unit, onClick: () -> Unit) {
     val c = IdjThemeColors
-    Column(
-        Modifier.fillMaxSize().padding(horizontal = 28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text("TVBox 点播与直播", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "导入你的 HTTPS TVBox 配置或 M3U/TXT 直播源，支持多配置仓一键切换、多线路测速与横屏秒切台。",
-            color = c.secondary,
-            fontSize = 13.5.sp,
-            lineHeight = 20.sp,
-        )
-        Spacer(Modifier.height(22.dp))
-        Box(
-            Modifier
-                .height(44.dp)
-                .clip(RoundedCornerShape(22.dp))
-                .background(c.text)
-                .clickable(onClick = onOpenConfig)
-                .padding(horizontal = 24.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("配置 TVBox 片源", color = c.bg, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    val ch = row.channel
+    val logo = ch.logo.ifEmpty { if (logoTemplate.contains("{name}")) logoTemplate.replace("{name}", ch.guideName) else "" }
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Box(Modifier.size(56.dp, 40.dp).clip(RoundedCornerShape(10.dp)).background(c.glass).border(1.dp, c.hairline, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+            if (logo.isEmpty()) Text(ch.name.take(4), color = c.secondary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            else AsyncImage(ImageRequest.Builder(LocalContext.current).data(logo).crossfade(false).build(), null, Modifier.fillMaxSize().padding(5.dp), contentScale = ContentScale.Fit)
         }
-    }
-}
-
-@Composable
-private fun EmptySectionState(msg: String, cta: String, onClick: () -> Unit) {
-    val c = IdjThemeColors
-    Column(
-        Modifier.fillMaxSize().padding(horizontal = 28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(msg, color = c.secondary, fontSize = 14.sp)
-        Spacer(Modifier.height(14.dp))
-        Box(
-            Modifier
-                .height(38.dp)
-                .clip(RoundedCornerShape(19.dp))
-                .background(c.text)
-                .clickable(onClick = onClick)
-                .padding(horizontal = 20.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(cta, color = c.bg, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Column(Modifier.weight(1f)) {
+            Text(ch.name, color = c.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(now.ifEmpty { if (ch.urls.size > 1) "${row.group.name} · ${ch.urls.size} 条线路" else row.group.name }, color = if (now.isEmpty()) c.tertiary else c.secondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        Icon(if (favorite) Icons.Rounded.Star else Icons.Rounded.StarBorder, if (favorite) "取消收藏" else "收藏", Modifier.size(36.dp).clip(CircleShape).clickable(onClick = onFavorite).padding(8.dp), tint = if (favorite) c.accentWarm else c.tertiary)
     }
 }

@@ -14,13 +14,19 @@ enum Fmt {
     /// Short meta line, e.g. "剧 / 80集" or "1.2万播放".
     static func meta(_ s: HGSeries) -> String {
         if s.source.isLongVideo {
-            return [s.duration > 0 ? clock(s.duration) : nil, s.playCount > 0 ? count(s.playCount) + "观看" : nil]
-                .compactMap { $0 }.joined(separator: " · ")
+            let parts = [s.duration > 0 ? clock(s.duration) : s.episodeCount > 1 ? "\(s.episodeCount)集" : nil, s.playCount > 0 ? count(s.playCount) + "观看" : nil]
+                .compactMap { $0 }
+            // TVBox / 采集站 cards have neither: their remark ("更新至12集", "HD") is the only meta there is.
+            return parts.isEmpty ? (s.source.isDynamic ? s.subtitle ?? "" : "") : parts.joined(separator: " · ")
         }
         if s.episodeCount > 0 && s.playCount > 0 { return "\(s.episodeCount)集 · \(count(s.playCount))热度" }
         if s.episodeCount > 0 { return "\(s.episodeCount)集" }
         if s.playCount > 0 { return count(s.playCount) + "热度" }
         return s.subtitle ?? ""
+    }
+    /// Resume line. Single long videos resume by time, anything with episodes by episode (also multi-episode TVBox titles).
+    static func resume(_ p: WatchProgress) -> String {
+        p.series.source.isLongVideo && p.episodeIndex == 0 && p.series.episodeCount <= 1 ? "看到 " + clock(Int(p.seconds)) : "看到第\(p.episodeNumber)集"
     }
 }
 
@@ -85,8 +91,6 @@ enum Route: Hashable {
     case tdChat(Int64, String)
     case plugins
     case tvboxConfig
-    case tvboxVod(String, String, String, String, Int)
-    case tvboxLive(String, String, Int)
 }
 
 struct ZoomNamespaceKey: EnvironmentKey { static let defaultValue: Namespace.ID? = nil }
@@ -129,10 +133,6 @@ extension View {
             case .tdChat(let id, let t): TDChatView(chatId: id, title: t)
             case .plugins: PluginsView()
             case .tvboxConfig: TVBoxConfigView()
-            case .tvboxVod(let siteKey, let sid, let title, let cover, let ep):
-                TVBoxVodPlayerView(siteKey: siteKey, seriesId: sid, initialTitle: title, initialCover: cover, startEp: ep)
-            case .tvboxLive(let repoId, let liveId, let chIdx):
-                TVBoxLivePlayerView(repoId: repoId, liveId: liveId, startChannelIndex: chIdx)
             }
         }
     }
@@ -228,30 +228,21 @@ struct ErrorStateView: View {
         return t.source == .huangguo ? "需要验证" : "需要站点验证（自动验证未通过）"
     }
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: error.verifyTarget == nil ? "wifi.exclamationmark" : "shield.lefthalf.filled")
-                .font(.system(size: 38, weight: .light))
-                .foregroundStyle(STVTheme.secondary)
-            Text(title)
-                .font(.headline)
-                .foregroundStyle(STVTheme.text)
-            Text(error.localizedDescription)
-                .font(.subheadline)
-                .foregroundStyle(STVTheme.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-            HStack(spacing: 12) {
+        VStack(spacing: 0) {
+            DSEmptyState(title, systemImage: error.verifyTarget == nil ? "wifi.exclamationmark" : "shield.lefthalf.filled", message: error.localizedDescription)
+                .padding(.bottom, -22)
+            HStack(spacing: 10) {
                 if let t = error.verifyTarget {
-                    Button("去验证") { verify = t }.buttonStyle(.borderedProminent).tint(STVTheme.accent)
-                    Button("重试") { CFSolver.shared.resetCooldown(); retry() }.tint(STVTheme.secondary)
-                } else {
-                    Button("重试") { CFSolver.shared.resetCooldown(); retry() }.buttonStyle(.borderedProminent).tint(STVTheme.accent)
+                    Button { verify = t } label: { PillButtonLabel(title: "去验证", small: true) }
+                }
+                Button { CFSolver.shared.resetCooldown(); retry() } label: {
+                    if error.verifyTarget == nil { PillButtonLabel(title: "重试", small: true) } else { MiniButtonLabel(title: "重试") }
                 }
             }
-            .padding(.top, 4)
+            .buttonStyle(PressScale())
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 36)
+        .padding(.bottom, 36)
         .sheet(item: $verify) { t in SiteVerifySheet(target: t, onDone: retry) }
         .task {
             #if DEBUG
@@ -274,7 +265,8 @@ enum Catalog {
             guard let p = Sites.provider(s.source) else { throw ProviderError.unsupported(s.source.label) }
             d = try await p.detail(s)
         }
-        details[s.id] = d
+        // live lists are cached (and refreshed) by the TVBox engine; their groups depend on what the user unlocked
+        if s.source.tvboxLiveUID == nil { details[s.id] = d }
         return d
     }
 

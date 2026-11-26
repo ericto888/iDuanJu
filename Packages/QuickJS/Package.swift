@@ -12,7 +12,8 @@ let package = Package(
             path: "Sources/CQuickJS",
             sources: ["quickjs.c", "libregexp.c", "libunicode.c", "cutils.c", "xsum.c", "idj_sandbox.c"],
             publicHeadersPath: "include",
-            cSettings: [.define("_GNU_SOURCE"), .headerSearchPath(".")]
+            // NDEBUG: a script stopped in the middle may leak a few objects; that must not abort the app when its runtime closes.
+            cSettings: [.define("_GNU_SOURCE"), .define("NDEBUG"), .headerSearchPath(".")]
         )
     ]
 )

@@ -13,6 +13,7 @@
 - **多形态内容播放与阅读**
   - **短剧与长视频**：竖屏上下滑集、横屏全屏播放、剧集目录分组、关联系列推荐、演员作品聚合与检索。
   - **扩展源与直播**：支持用户自行导入自定义视频源、直播列表与扩展插件，支持多源切换与聚合搜索。
+  - **TVBox 配置**：单仓 / 多仓，CMS、T4、JS（drpy / CatVod）、Python、JAR 站点，解析、嗅探、弹幕、字幕、直播与 EPG / 回看；点播和直播与短剧、长视频使用同一个详情页和播放器。JAR 在 Android 本机运行，iOS 通过局域网桥接使用已配对的 Android 设备（详见 [`docs/unified-player-tvbox.md`](docs/unified-player-tvbox.md)）。
   - **小说与有声阅读**：支持本地 `TXT` / `EPUB` 导入与自定义书源规则，提供仿真/平滑翻页、滚动阅读、字体与主题切换、离线缓存、听书朗读与视频书播放。
   - **漫画 / 漫剧浏览**：支持条漫沉浸阅读与章节连续加载。
 - **精细化播放体验**
@@ -25,7 +26,7 @@
 
 ## 播放内核
 
-- **iOS / iPadOS（16.0+）**：默认采用 **MPVKit**（LGPL，`libmpv` + `FFmpeg` + `libdovi` + `libplacebo` + `libass`）+ `AVPlayer` 自动回退，支持硬解（VideoToolbox）、Dolby Vision / HDR10 / HLG、DTS / TrueHD / AC3 / E-AC3 音频解码与 ASS 字幕渲染。
+- **iOS / iPadOS（16.0+）**：按片源格式自动选择 **AVPlayer**（HLS、MP4 等系统擅长的格式）或 **MPVKit**（LGPL，`libmpv` + `FFmpeg` + `libdovi` + `libplacebo` + `libass`；FLV、MKV、TS、RTMP 等），打不开时自动换另一个内核，也可在设置里固定；支持硬解（VideoToolbox）、Dolby Vision / HDR10 / HLG、DTS / TrueHD / AC3 / E-AC3 音频解码与 ASS 字幕渲染。
 - **Android（8.0+）**：采用 **Media3 ExoPlayer** + FFmpeg 音频扩展解码器 + OpenGL ES CAS 实时锐化着色器。
 - 各第三方开源组件许可全文见 App 内「开源许可」及 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 

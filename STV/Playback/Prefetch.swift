@@ -39,15 +39,15 @@ enum HLSMedia {
         for raw in text.split(whereSeparator: \.isNewline) {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.uppercased().hasPrefix("#EXTINF:") {
-                pending = Double(line.dropFirst(8).split(separator: ",").first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? "") ?? 0
+                let d = Double(line.dropFirst(8).split(separator: ",").first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? "") ?? 0
+                pending = d.isFinite ? d : 0
             } else if line.uppercased().hasPrefix("#EXT-X-BYTERANGE:") {
                 let p = line.dropFirst(17).split(separator: "@")
-                if let len = Int(p[0]) { byteRange = (len, p.count > 1 ? Int(p[1]) : nil) }
+                if let len = p.first.flatMap({ Int($0) }), len > 0 { byteRange = (len, p.count > 1 ? Int(p[1]) : nil) }
             } else if !line.isEmpty, !line.hasPrefix("#"), let d = pending,
                       let u = URL(string: line, relativeTo: base)?.absoluteURL {
                 var range: ClosedRange<Int>?
-                if let br = byteRange {
-                    let off = br.off ?? lastEnd[u.absoluteString] ?? 0
+                if let br = byteRange, case let off = br.off ?? lastEnd[u.absoluteString] ?? 0, off >= 0, br.len <= Int.max - off {
                     range = off...(off + br.len - 1); lastEnd[u.absoluteString] = off + br.len
                 }
                 out.append(PrefetchUnit(key: PrefetchStore.key(u.absoluteString + (range.map { "#\($0.lowerBound)-\($0.upperBound)" } ?? "")),
@@ -163,6 +163,36 @@ final class PrefetchStore: @unchecked Sendable {
         return removed
     }
 
+    private var lastTrim = Date.distantPast
+    /// `trim` walks the whole cache directory: once per finished segment was constant disk work while playing.
+    func trimIfDue(to cap: Int64, every interval: TimeInterval = 20) {
+        lock.lock()
+        let due = Date().timeIntervalSince(lastTrim) > interval
+        if due { lastTrim = Date() }
+        lock.unlock()
+        if due { trim(to: cap) }
+    }
+
+    nonisolated(unsafe) private static var freeSample: (at: Date, bytes: Int64)?
+    nonisolated(unsafe) private static var sampling = false
+    private static let freeLock = NSLock()
+    private static let background = DispatchQueue(label: "stv.prefetch.disk", qos: .utility)
+    /// `freeSpace()` with a 15 s memory. Callers may be on the main thread: the slow volume query runs behind them.
+    static func recentFreeSpace() -> Int64 {
+        freeLock.lock(); defer { freeLock.unlock() }
+        let known = freeSample
+        if !sampling, known.map({ Date().timeIntervalSince($0.at) >= 15 }) ?? true {
+            sampling = true
+            background.async {
+                let now = freeSpace()
+                freeLock.lock(); freeSample = (Date(), now); sampling = false; freeLock.unlock()
+            }
+        }
+        return known?.bytes ?? .max
+    }
+
+    func trimLater(to cap: Int64) { Self.background.async { self.trim(to: cap) } }
+
     static func freeSpace() -> Int64 {
         let home = URL(fileURLWithPath: NSHomeDirectory())
         let v = try? home.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
@@ -178,6 +208,9 @@ final class Prefetcher: @unchecked Sendable {
     private let headers: [String: String]
     private let store: PrefetchStore
     private let fetch: @Sendable (PrefetchUnit, [String: String]) async throws -> Data
+    /// Opens a whole-segment download that can be followed while it runs (nil: units are only served complete).
+    private let open: (@Sendable (PrefetchUnit, [String: String]) -> SegmentFeed)?
+    private var feeds: [String: SegmentFeed] = [:]
     private let lock = NSLock()
     private var units: [PrefetchUnit] = []
     private var index: [String: Int] = [:]
@@ -192,8 +225,9 @@ final class Prefetcher: @unchecked Sendable {
     var cacheHits = 0
 
     init(token: String, budget: Int, headers: [String: String], store: PrefetchStore = .shared,
+         open: (@Sendable (PrefetchUnit, [String: String]) -> SegmentFeed)? = nil,
          fetch: @escaping @Sendable (PrefetchUnit, [String: String]) async throws -> Data) {
-        self.token = token; self.budget = budget; self.headers = headers; self.store = store; self.fetch = fetch
+        self.token = token; self.budget = budget; self.headers = headers; self.store = store; self.open = open; self.fetch = fetch
     }
 
     func setUnits(_ new: [PrefetchUnit]) {
@@ -214,14 +248,46 @@ final class Prefetcher: @unchecked Sendable {
         let changed = s != start
         start = s
         if changed { // seek: drop downloads that are now behind the playhead
-            for (i, t) in inFlight where i < s { t.cancel(); inFlight[i] = nil }
+            for (i, t) in inFlight where i < s {
+                t.cancel(); inFlight[i] = nil
+                if units.indices.contains(i) { feeds[units[i].key]?.cancelIfUnread() }
+            }
         }
         lock.unlock()
         pump()
     }
 
     func stop() {
-        lock.lock(); stopped = true; inFlight.values.forEach { $0.cancel() }; inFlight = [:]; lock.unlock()
+        lock.lock()
+        stopped = true
+        inFlight.values.forEach { $0.cancel() }; inFlight = [:]
+        let running = feeds.values
+        feeds = [:]
+        lock.unlock()
+        running.forEach { $0.cancel() }
+    }
+
+    /// Joins (or starts) the download of a whole segment so its bytes can be relayed as they arrive.
+    func follow(_ unit: PrefetchUnit) -> SegmentFeed? {
+        guard let open, unit.range == nil else { return nil }
+        lock.lock()
+        if stopped { lock.unlock(); return nil }
+        if let f = feeds[unit.key] { lock.unlock(); return f }
+        let feed = open(unit, headers)
+        feeds[unit.key] = feed
+        let i = index[unit.key]
+        lock.unlock()
+        Task { [weak self, store, token] in
+            let d = try? await feed.data()
+            if let d { store.put(token, unit.key, d) }
+            guard let self else { return }
+            self.lock.withLock {
+                if self.feeds[unit.key] === feed { self.feeds[unit.key] = nil }
+                if let d, let i { self.sizes[i] = d.count }
+            }
+            if d != nil { self.pump() }
+        }
+        return feed
     }
 
     func status() -> (bytes: Int, until: Double, total: Int) {
@@ -255,9 +321,9 @@ final class Prefetcher: @unchecked Sendable {
     private func pump() {
         lock.lock()
         guard !stopped, budget > 0, !units.isEmpty else { lock.unlock(); return }
-        if PrefetchStore.freeSpace() < BufferSettings.lowStorage {
+        if PrefetchStore.recentFreeSpace() < BufferSettings.lowStorage {
             lowStorage = true; lock.unlock()
-            store.trim(to: 0); return
+            store.trimLater(to: 0); return
         }
         let known = sizes.values
         let estimate = known.isEmpty ? 1_500_000 : known.reduce(0, +) / known.count
@@ -271,9 +337,15 @@ final class Prefetcher: @unchecked Sendable {
                 var ok = false
                 defer { self?.finish(i, ok: ok) }
                 if let d = store.get(token, u.key) { self?.record(i, d.count); ok = true; return d }
-                let d = try await fetch(u, headers)
-                try Task.checkCancellation()
-                store.put(token, u.key, d)
+                let d: Data
+                if let feed = self?.follow(u) {
+                    d = try await feed.data()      // `follow` stores it
+                    try Task.checkCancellation()
+                } else {
+                    d = try await fetch(u, headers)
+                    try Task.checkCancellation()
+                    store.put(token, u.key, d)
+                }
                 self?.record(i, d.count)
                 ok = true
                 return d
@@ -290,8 +362,7 @@ final class Prefetcher: @unchecked Sendable {
         inFlight[i] = nil
         if !ok && !cancelled { failures[i, default: 0] += 1 }
         lock.unlock()
-
-        store.trim(to: BufferSettings.cacheCap)
+        store.trimIfDue(to: BufferSettings.cacheCap)
         pump()
     }
 }
