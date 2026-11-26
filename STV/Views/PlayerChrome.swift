@@ -426,3 +426,23 @@ struct PlayerChromeShotHost: View {
         }
     }
 }
+
+/// Cue text the host draws over the video.
+struct PlayerSubtitleOverlay: View {
+    @ObservedObject var telemetry: PlaybackTelemetry
+    let landscape: Bool
+    let bottom: CGFloat
+    var body: some View {
+        if let sub = telemetry.subtitle {
+            VStack {
+                Spacer()
+                Text(sub).font(.system(size: landscape ? 18 : 16, weight: .semibold)).foregroundStyle(.white)
+                    .multilineTextAlignment(.center).shadow(color: .black, radius: 2).shadow(color: .black.opacity(0.8), radius: 4)
+                    .padding(.horizontal, 24).padding(.bottom, bottom)
+                    .accessibilityIdentifier("player.subtitle")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
+        }
+    }
+}
