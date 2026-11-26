@@ -203,11 +203,12 @@ struct MacCMSProvider: SiteProvider {
     }
 
     static func parseCategories(_ o: [String: Any]) -> [PluginCategory] {
-        ((o["class"] as? [[String: Any]]) ?? []).compactMap { c in
+        let all = ((o["class"] as? [[String: Any]]) ?? []).compactMap { c -> PluginCategory? in
             let id = PluginOut.s(c["type_id"]), name = PluginOut.s(c["type_name"], max: 30)
             guard !id.isEmpty, !name.isEmpty, !ContentFilter.isBlocked([name]) else { return nil }
             return PluginCategory(id: id, name: name)
         }
+        return PluginOut.unique(all) { $0.id }
     }
 
     static func fetchCategories(api: String, siteKey: String? = nil) async throws -> [PluginCategory] {
@@ -217,7 +218,7 @@ struct MacCMSProvider: SiteProvider {
     }
 
     static func parseItems(_ o: [String: Any], source: DramaSource) -> [HGSeries] {
-        ((o["list"] as? [[String: Any]]) ?? []).compactMap { v in
+        let all = ((o["list"] as? [[String: Any]]) ?? []).compactMap { v -> HGSeries? in
             let id = PluginOut.s(v["vod_id"]), title = PluginOut.s(v["vod_name"], max: 200)
             guard !id.isEmpty, !title.isEmpty else { return nil }
             let tags = [PluginOut.s(v["type_name"], max: 30), PluginOut.s(v["vod_class"], max: 60)].filter { !$0.isEmpty }
@@ -228,8 +229,9 @@ struct MacCMSProvider: SiteProvider {
             return HGSeries(source: source, seriesId: id, title: title, cover: cover, subtitle: PluginOut.s(v["vod_remarks"], max: 40).nilIfEmpty,
                             author: PluginOut.s(v["vod_director"], max: 60).nilIfEmpty,
                             actors: PluginOut.s(v["vod_actor"], max: 200).split(whereSeparator: { ",，/ ".contains($0) }).prefix(6).map(String.init),
-                            orientation: "portrait", tags: tags)
+                            orientation: "portrait", tags: PluginOut.unique(tags) { $0 })
         }
+        return PluginOut.unique(all) { $0.id }
     }
 
     static func page(_ o: [String: Any], source: DramaSource, page p: Int) -> HGPage {
