@@ -266,6 +266,7 @@ struct MacCMSProvider: SiteProvider {
         guard let v = (o["list"] as? [[String: Any]])?.first else { throw ProviderError.upstream("采集站没有返回详情") }
         let title = PluginOut.s(v["vod_name"], max: 200).nonEmptyOr(s.title)
         let tags = [PluginOut.s(v["type_name"], max: 30)] + PluginOut.s(v["vod_class"], max: 80).split(separator: ",").map(String.init)
+        let actors = PluginOut.unique(PluginOut.s(v["vod_actor"], max: 300).split(whereSeparator: { ",，/".contains($0) }).prefix(12).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }) { $0 }
         guard !ContentFilter.isBlocked([title] + tags) else { throw ProviderError.unsupported("该内容已被过滤") }
         let all = lines(from: PluginOut.s(v["vod_play_from"], max: 2000), urls: (v["vod_play_url"] as? String) ?? "")
         // Prefer lines with an explicit m3u8/mp4 suffix. Extensionless HTTP(S) endpoints are
@@ -286,9 +287,9 @@ struct MacCMSProvider: SiteProvider {
         return HGSeriesDetail(source: source, seriesId: s.seriesId, title: title, cover: cover.isEmpty ? s.cover : cover,
                               desc: [meta, desc].filter { !$0.isEmpty }.joined(separator: "\n"),
                               author: PluginOut.s(v["vod_director"], max: 60).nilIfEmpty,
-                              actors: PluginOut.s(v["vod_actor"], max: 300).split(whereSeparator: { ",，/".contains($0) }).prefix(12).map { $0.trimmingCharacters(in: .whitespaces) },
+                              actors: actors,
                               onlineTime: 0, totalEps: eps.count, episodes: eps, tags: tags.filter { !$0.isEmpty },
-                              episodeLabel: eps.count > 1 ? "共\(eps.count)集" : "长视频")
+                              episodeLabel: eps.count > 1 ? "共\(eps.count)集" : "长视频", tags: PluginOut.unique(tags.filter { !$0.isEmpty }) { $0 })
     }
 
     static func streams(for ep: HGEpisode) -> [HGStream] {
