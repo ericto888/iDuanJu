@@ -265,6 +265,8 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     private var prepared: [Int: Source] = [:]
     private var tasks: [Int: Task<Source, Error>] = [:]
     private var observer: Any?
+    /// Prevent duplicate cleanup from overlapping SwiftUI exit/onDisappear paths.
+    private var teardownCompleted = false
     private var endObserver: NSObjectProtocol?
     private var lastSave = Date.distantPast
     private var activation = UUID()
@@ -309,6 +311,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
 
     func start() {
         guard observer == nil else { return }
+        teardownCompleted = false
         let player = av.player
         let session = MPNowPlayingSession(players: [player])
         session.automaticallyPublishesNowPlayingInfo = true
@@ -381,6 +384,8 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     }
 
     func teardown() {
+        guard !teardownCompleted else { return }
+        teardownCompleted = true
         activation = UUID()
         watchdog?.cancel()
         watchdog = nil
