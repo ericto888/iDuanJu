@@ -300,6 +300,9 @@ struct PluginsView: View {
             }
             .accessibilityLabel("更多")
             DSSwitchControl(isOn: Binding(get: { s.enabled }, set: { cms.setEnabled(s.key, $0) }), label: "启用 \(s.name)")
+            NavigationLink { CMSLogView(site: s) } label: {
+                Image(systemName: "doc.text.magnifyingglass").foregroundStyle(STVTheme.secondary)
+            }.accessibilityIdentifier("cms.logs.\(s.key)")
         }
         .dsRow()
         .accessibilityElement(children: .contain)
@@ -572,6 +575,7 @@ struct PluginLogView: View {
     let id: String
     @State private var lines: [String] = []
     @State private var message: String?
+    @State private var confirmClear = false
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 6) {
@@ -583,12 +587,62 @@ struct PluginLogView: View {
             .padding(.horizontal, 16).padding(.bottom, 32)
         }
         .dsNavigation("运行日志") {
-            DSBarButton(systemName: "doc.on.doc") { UIPasteboard.general.string = lines.joined(separator: "\n"); message = "已复制" }.accessibilityLabel("复制")
+            DSBarButton(systemName: "doc.on.doc") { UIPasteboard.general.string = lines.joined(separator: "\n"); message = "已复制" }
+                .accessibilityLabel("复制")
+            DSBarButton(systemName: "trash") { confirmClear = true }
+                .disabled(lines.isEmpty).accessibilityLabel("清空").accessibilityIdentifier("plugin.logs.clear")
         }
+        .confirmationDialog("清空此插件的运行日志？", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("清空日志", role: .destructive) { PluginLog.clear(id); lines = [] }
+            Button("取消", role: .cancel) {}
+        } message: { Text("只删除「\(PluginStore.shared.plugin(id)?.manifest.name ?? id)」的日志，不会清除 Cookie、存储或插件设置。") }
         .dsToast($message, icon: "checkmark.circle.fill")
         .task { lines = PluginLog.lines(id) }
         .onReceive(NotificationCenter.default.publisher(for: PluginLog.changed)) { _ in lines = PluginLog.lines(id) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("plugin.logview")
+    }
+}
+
+struct CMSLogView: View {
+    let site: CMSSite
+    @State private var lines: [String] = []
+    @State private var confirmClear = false
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 6) {
+                if lines.isEmpty {
+                    Text("暂无日志。进入该采集站的首页、搜索、详情或播放后会在这里记录请求。")
+                        .font(.caption).foregroundStyle(STVTheme.secondary)
+                }
+                ForEach(Array(lines.enumerated().reversed()), id: \.offset) { _, line in
+                    Text(line).font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(STVTheme.text).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }.padding(16)
+        }
+        .background(STVTheme.bg.ignoresSafeArea())
+        .navigationTitle("采集站调试日志")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button { UIPasteboard.general.string = lines.joined(separator: "\n") } label: { Image(systemName: "doc.on.doc") }
+                    .disabled(lines.isEmpty)
+                Button(role: .destructive) { confirmClear = true } label: { Image(systemName: "trash") }
+                    .disabled(lines.isEmpty).accessibilityIdentifier("cms.logs.clear")
+            }
+        }
+        .confirmationDialog("清空「\(site.name)」的调试日志？", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("清空日志", role: .destructive) { CMSLog.clear(site.key); lines = [] }
+            Button("取消", role: .cancel) {}
+        } message: { Text("只删除此采集站的调试日志，不会删除采集站、分类或其他站点数据。") }
+        .task { lines = CMSLog.lines(site.key) }
+        .onReceive(NotificationCenter.default.publisher(for: CMSLog.notificationName())) { note in
+            guard (note.object as? String) == site.key else { return }
+            lines = CMSLog.lines(site.key)
+        }
+        .accessibilityIdentifier("cms.logview.\(site.key)")
     }
 }
