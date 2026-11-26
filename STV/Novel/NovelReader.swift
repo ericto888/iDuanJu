@@ -210,17 +210,19 @@ struct NovelReaderView: View {
                     Group {
                         if prefs.turn == .scroll {
                             scrollReader(geo)
+                                .frame(maxWidth: layout.readerMaxWidth)
+                                .frame(maxWidth: .infinity)
                         } else {
                             NovelPagedView(paginator: paginator, handle: handle, start: ref, style: prefs.turn, insets: insets,
                                 highlight: highlight, version: version,
                                 onPage: { r in ref = r; save() },
                                 onCenter: { menu ? hideMenu() : showMenu() },
                                 onSwipeUp: { showMenu() })
+                                .frame(maxWidth: layout.readerMaxWidth)
+                                .frame(maxWidth: .infinity)
                                 .ignoresSafeArea()
                         }
                     }
-                    .frame(maxWidth: layout.readerMaxWidth)
-                    .frame(maxWidth: .infinity)
                 }
                 if hint && !menu {
                     Text("↑上滑显示工具栏").font(.system(size: 12)).foregroundStyle(pal.secondary)
