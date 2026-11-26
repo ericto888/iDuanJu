@@ -46,6 +46,12 @@ fun SourcesScreen(onBack: () -> Unit) {
             SwitchRow("显示成人片源", ProfileIcons.film, "黄果短剧、成人采集站 / 插件 / 频道 / 漫画 · 仅限年满 18 周岁", adult) {
                 if (it) confirmAdult = true else { ia.cms.adultUnlocked = false; message = "已隐藏成人片源" }
             }
+            if (adult) {
+                RowDivider()
+                val installedAdult = ia.plugins.plugins.count { it.adult }
+                LinkRow("内置成人视频与漫画插件", ProfileIcons.plugin, trailing = if (installedAdult > 0) "已装 $installedAdult 个" else "去安装",
+                    sub = "MissAV、Jable、91Porn、Hanime1 等内置推荐插件在「插件管理」一键安装") { go("plugins") }
+            }
         }
         Group("插件与采集站") {
             LinkRow("插件管理", ProfileIcons.plugin, sub = "JS 插件、订阅、苹果 CMS 采集站；成人插件在这里解锁后才显示") { go("plugins") }
