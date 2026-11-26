@@ -344,7 +344,8 @@ struct PlayerScreen: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             let orientation = UIDevice.current.orientation
-            if orientation.isPortrait || orientation.isLandscape || orientation == .unknown {
+            // Ignore face-up / face-down / unknown readings; retain the last real device orientation.
+            if orientation.isPortrait || orientation.isLandscape {
                 displayOrientation = orientation
             }
         }
@@ -352,12 +353,16 @@ struct PlayerScreen: View {
             Button("好") { co.pipError = nil }
         } message: { Text(co.pipError ?? "") }
         .onAppear {
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            let orientation = UIDevice.current.orientation
+            if orientation.isPortrait || orientation.isLandscape { displayOrientation = orientation }
             StatusBarGate.shared.setHidden(landscape || !controlsVisible || panel == .danmaku, animated: false)
         }
         .compatOnChange(of: landscape || !controlsVisible || panel == .danmaku) { hideBar in
             StatusBarGate.shared.setHidden(hideBar)
         }
         .onDisappear {
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
             StatusBarGate.shared.setHidden(false)
             co.teardown()
             adjuster.restoreBrightness()
