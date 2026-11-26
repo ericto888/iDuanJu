@@ -570,40 +570,51 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     }
 
     func pictureInPictureControllerWillStartPictureInPicture(_ controller: AVPictureInPictureController) {
-        guard controller === pip else { return }
-        pipActive = true
-        engine.setPiPActive(true)
+        // AVKit may deliver delegate callbacks from a private queue. All coordinator state
+        // and renderer mutations that can trigger UIKit layout must stay on the main actor.
+        Task { @MainActor [weak self] in
+            guard let self, controller === self.pip else { return }
+            self.pipActive = true
+            self.engine.setPiPActive(true)
+        }
     }
 
     func pictureInPictureController(_ controller: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
-        guard controller === pip else { return }
-        pipActive = false
-        engine.setPiPActive(false)
-        continuePiP = false
-        if !backgrounded { pipError = error.localizedDescription }
+        Task { @MainActor [weak self] in
+            guard let self, controller === self.pip else { return }
+            self.pipActive = false
+            self.engine.setPiPActive(false)
+            self.continuePiP = false
+            if !self.backgrounded { self.pipError = error.localizedDescription }
+        }
     }
 
     func pictureInPictureController(_ controller: AVPictureInPictureController,
                                     restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completion: @escaping (Bool) -> Void) {
-        restoringPiP = true
-        completion(controller === pip && observer != nil)
+        Task { @MainActor [weak self] in
+            guard let self else { completion(false); return }
+            self.restoringPiP = true
+            completion(controller === self.pip && self.observer != nil)
+        }
     }
 
     func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
-        guard controller === pip else { return }
-        pipActive = false
-        // A software source or fallback can replace the PiP content during an episode load.
-        // That stop belongs to the handover, not to the user pressing the close button.
-        if continuePiP {
-            // Keep the replacement renderer alive until its own PiP controller starts. Clearing
-            // this flag here can tear down the newly loaded video while still backgrounded.
-            if readyIndex != nil { refreshPiP() }
-        } else {
-            engine.setPiPActive(false)
-            if !restoringPiP { setPaused(true) }
-            else { resumeIfRequested() }
+        Task { @MainActor [weak self] in
+            guard let self, controller === self.pip else { return }
+            self.pipActive = false
+            // A software source or fallback can replace the PiP content during an episode load.
+            // That stop belongs to the handover, not to the user pressing the close button.
+            if self.continuePiP {
+                // Keep the replacement renderer alive until its own PiP controller starts. Clearing
+                // this flag here can tear down the newly loaded video while still backgrounded.
+                if self.readyIndex != nil { self.refreshPiP() }
+            } else {
+                self.engine.setPiPActive(false)
+                if !self.restoringPiP { self.setPaused(true) }
+                else { self.resumeIfRequested() }
+            }
+            self.restoringPiP = false
         }
-        restoringPiP = false
     }
 
     func didEnterBackground() {
@@ -627,7 +638,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         // Engine foreground restoration may itself be asynchronous. Reconcile once afterwards,
         // re-reading intent so a pause pressed in the meantime always wins.
         let token = activation
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard let self, self.activation == token, !self.backgrounded else { return }
             self.resumeIfRequested()
