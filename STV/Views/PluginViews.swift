@@ -292,6 +292,9 @@ struct PluginsView: View {
                 Text("\(URL(string: s.api)?.host ?? s.api) · \(s.categories.count) 个分类").dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
+            NavigationLink { CMSLogView(site: s) } label: {
+                Image(systemName: "doc.text.magnifyingglass").foregroundStyle(STVTheme.secondary)
+            }.accessibilityIdentifier("cms.logs.\(s.key)")
             Menu {
                 Toggle("成人内容（需片源管理解锁）", isOn: Binding(get: { s.adult }, set: { cms.setAdult(s.key, $0) }))
                 Button("删除", systemImage: "trash", role: .destructive) { cms.remove(s.key) }
@@ -300,9 +303,6 @@ struct PluginsView: View {
             }
             .accessibilityLabel("更多")
             DSSwitchControl(isOn: Binding(get: { s.enabled }, set: { cms.setEnabled(s.key, $0) }), label: "启用 \(s.name)")
-            NavigationLink { CMSLogView(site: s) } label: {
-                Image(systemName: "doc.text.magnifyingglass").foregroundStyle(STVTheme.secondary)
-            }.accessibilityIdentifier("cms.logs.\(s.key)")
         }
         .dsRow()
         .accessibilityElement(children: .contain)
