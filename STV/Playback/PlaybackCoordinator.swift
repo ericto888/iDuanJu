@@ -97,9 +97,9 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     }
     @Published private(set) var prebuffer: (bytes: Int, until: Double, lowStorage: Bool)?
     @Published private(set) var subtitleText: String?
-    @Published private(set) var time: Double = 0
-    @Published private(set) var duration: Double = 0
-    @Published private(set) var bufferedUntil: Double = 0
+    var time: Double { clock.sample.time }
+    var duration: Double { clock.sample.duration }
+    var bufferedUntil: Double { clock.sample.bufferedUntil }
     @Published private(set) var tech: PlayerTech?
     private var compatibilitySubscriptions = Set<AnyCancellable>()
     /// User intent survives buffering, episode replacement and system interruptions.
@@ -297,13 +297,6 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         super.init()
         clock.$scrubPreview.sink { [weak self] _ in
             Task { @MainActor [weak self] in self?.objectWillChange.send() }
-        }.store(in: &compatibilitySubscriptions)
-        clock.$sample.sink { [weak self] sample in
-            Task { @MainActor [weak self] in
-                self?.time = sample.time
-                self?.duration = sample.duration
-                self?.bufferedUntil = sample.bufferedUntil
-            }
         }.store(in: &compatibilitySubscriptions)
         telemetry.$tech.sink { [weak self] value in
             Task { @MainActor [weak self] in self?.tech = value }
