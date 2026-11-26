@@ -1650,3 +1650,82 @@ struct BoardListView: View {
     }
     private func reload() { let b = board; pager.reset { try await b.fetch($0, $1) } }
 }
+
+// MARK: - Floating header plumbing
+
+/// Vertical extent of a view in window coordinates, and the bottom safe area under it.
+struct VSpan: Equatable {
+    var top: CGFloat
+    var bottom: CGFloat
+    var inset: CGFloat = 0
+}
+
+/// Reports where a view really is. Frames scaled by a running navigation transition are skipped.
+private struct SpanReader: View {
+    @Binding var span: VSpan?
+    var body: some View {
+        GeometryReader { g in
+            let f = g.frame(in: .global)
+            let now = abs(f.width - g.size.width) < 0.5 ? VSpan(top: f.minY, bottom: f.maxY, inset: g.safeAreaInsets.bottom) : nil
+            Color.clear.onAppear { set(now) }.compatOnChange(of: now) { set($0) }
+        }
+    }
+    private func set(_ now: VSpan?) {
+        guard let now else { return }
+        if let s = span, abs(s.top - now.top) < 0.5, abs(s.bottom - now.bottom) < 0.5, abs(s.inset - now.inset) < 0.5 { return }
+        span = now
+    }
+}
+
+/// What the pages under the floating home header need: where their content rests and where to report "scrolled".
+struct HomeHeader {
+    /// False outside 发现, where the same pages have a bar of their own.
+    var active = false
+    /// From the header's lower edge to the floating tab bar, in window coordinates; nil until the first layout.
+    var rest: VSpan?
+    /// Where the pager starts, and how far it reaches under the tab bar.
+    var pagerTop: CGFloat = 0
+    var tabBar: CGFloat = 0
+    var onScrolled: (Bool) -> Void = { _ in }
+}
+
+private struct HomeHeaderKey: EnvironmentKey { static let defaultValue = HomeHeader() }
+extension EnvironmentValues {
+    var homeHeader: HomeHeader {
+        get { self[HomeHeaderKey.self] }
+        set { self[HomeHeaderKey.self] = newValue }
+    }
+}
+
+/// Insets from geometry, not from assumptions: a pager cell's position and safe area differ between systems, so a page
+/// compares where its content would start and end with where the header and the tab bar really are.
+private struct HomePageInset: ViewModifier {
+    @Environment(\.homeHeader) private var header
+    @State private var own: VSpan?
+    /// A cell that is not on screen yet can report a frame of its own coordinate space: only believe plausible ones.
+    private var placed: VSpan? { own.flatMap { abs($0.top - header.pagerTop) < 40 ? $0 : nil } }
+    private var top: CGFloat {
+        guard let rest = header.rest else { return 114 }
+        return max(0, rest.top - (placed?.top ?? header.pagerTop))
+    }
+    private var bottom: CGFloat {
+        guard let rest = header.rest, let placed else { return header.tabBar }
+        return max(0, placed.bottom - rest.bottom)
+    }
+    func body(content: Content) -> some View {
+        if header.active {
+            content
+                .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: top) }
+                .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: bottom) }
+                .compatOnScrolled(threshold: 6) { header.onScrolled($0) }
+                .background { SpanReader(span: $own) }
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    /// For the scroll view of a home page: rest below the floating header, scroll under it. No-op outside 发现.
+    func homePageInset() -> some View { modifier(HomePageInset()) }
+}
