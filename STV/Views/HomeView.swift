@@ -473,7 +473,7 @@ struct HomeView: View {
             // it would be a dark band in light mode, so use a soft tint of the page colour instead.
             if url != nil { Color(red: 0.08, green: 0.10, blue: 0.15) } else { STVTheme.elevated }
             if let url {
-                CoverView(url: url, corner: 0).blur(radius: 48).opacity(0.75).id(url)
+                CoverBackdrop(url: url).opacity(0.75).id(url)
                     .transition(.opacity)
             }
         }
@@ -1376,7 +1376,7 @@ private struct PosterHero: View {
         if landscape {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top, spacing: 14) {
-                    CoverView(url: s.cover, corner: 12)
+                    CoverView(url: s.cover, corner: 12, maxPixelSize: CoverPixels.wide)
                         .frame(width: 176, height: 99)
                         .zoomSource(s.id, ns)
                         .overlay(alignment: .bottomTrailing) { if let p = HomeFmt.progress(s) { HomeBadge(text: p).padding(5) } }
@@ -1398,7 +1398,7 @@ private struct PosterHero: View {
             .padding(14)
         } else {
             HStack(alignment: .top, spacing: 14) {
-                CoverView(url: s.cover, corner: 12)
+                CoverView(url: s.cover, corner: 12, maxPixelSize: CoverPixels.poster)
                     .frame(width: 112, height: 112 * 4 / 3)
                     .overlay {
                         LinearGradient(stops: [.init(color: .clear, location: 0.46), .init(color: .black.opacity(0.62), location: 1)],
@@ -1491,7 +1491,7 @@ struct HomeContinueRow: View {
 
     private func card(_ p: WatchProgress) -> some View {
         HStack(spacing: 12) {
-            CoverView(url: p.series.cover, corner: 8).frame(width: 52, height: 52 * 4 / 3).zoomSource(p.series.id, ns)
+            CoverView(url: p.series.cover, corner: 8, maxPixelSize: CoverPixels.thumb).frame(width: 52, height: 52 * 4 / 3).zoomSource(p.series.id, ns)
             VStack(alignment: .leading, spacing: 0) {
                 Text(p.series.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
                 Text(line(p)).font(.system(size: 12)).foregroundStyle(STVTheme.secondary).lineLimit(1).padding(.top, 2)
@@ -1609,7 +1609,7 @@ struct HomePosterCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Color.clear
                 .aspectRatio(landscape ? 16/9 : 3/4, contentMode: .fit)
-                .overlay { CoverView(url: series.cover, corner: 0) }
+                .overlay { CoverView(url: series.cover, corner: 0, maxPixelSize: series.isLandscapeCover ? CoverPixels.wide : CoverPixels.poster) }
                 .clipShape(RoundedRectangle(cornerRadius: landscape ? 12 : 10, style: .continuous))
                 .zoomSource(series.id, ns)
                 .overlay(alignment: .bottomTrailing) {
