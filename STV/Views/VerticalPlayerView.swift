@@ -71,6 +71,8 @@ struct PlayerScreen: View {
     @State private var feed = FeedOffset()
     /// Preserve the inline destination's lift across PiP's temporary foreground size-class changes.
     @State private var pipRestoreLift: CGFloat?
+    @State private var pipRestoreWasWide: Bool?
+    @State private var pipRestoreWasLandscape: Bool?
     /// Running double-tap seek (+10/+20/… s) and which side it is on; drives the side bubble.
     @State private var seekRun: (total: Int, at: Date)?
     @State private var horizontalSeekStart: Double?
@@ -85,6 +87,12 @@ struct PlayerScreen: View {
     private var portraitLandscapeClip: Bool { !landscape && aspect > 1.0 }
     /// Keep landscape-format video visually above the phone's vertical midpoint.
     private var videoLift: CGFloat { pipRestoreLift ?? (portraitLandscapeClip ? 44 : 0) }
+
+    private func clearPiPRestoreLayout() {
+        pipRestoreLift = nil
+        pipRestoreWasWide = nil
+        pipRestoreWasLandscape = nil
+    }
     private var keepsChromeVisible: Bool { portraitLandscapeClip }
     private var canShowPadSplit: Bool {
         layoutMetrics.isPad && layoutMetrics.isLandscape && layoutMetrics.width >= 840 && aspect < 1.0 && !co.pipActive && !co.episodes.isEmpty
@@ -336,15 +344,18 @@ struct PlayerScreen: View {
         .compatOnChange(of: co.pipActive) { active in
             if active {
                 pipRestoreLift = videoLift
-            } else if layoutMetrics.isLandscape || aspect <= 1.0 {
-                pipRestoreLift = nil
+                pipRestoreWasWide = aspect > 1.0
+                pipRestoreWasLandscape = layoutMetrics.isLandscape
+            } else if pipRestoreWasWide != (aspect > 1.0)
+                        || pipRestoreWasLandscape != layoutMetrics.isLandscape {
+                clearPiPRestoreLayout()
             }
         }
         .compatOnChange(of: layoutMetrics.isLandscape) { _ in
-            if !co.pipActive { pipRestoreLift = nil }
+            if !co.pipActive { clearPiPRestoreLayout() }
         }
         .compatOnChange(of: aspect > 1.0) { _ in
-            if !co.pipActive { pipRestoreLift = nil }
+            if !co.pipActive { clearPiPRestoreLayout() }
         }
         .alert("画中画暂不可用", isPresented: Binding(get: { co.pipError != nil }, set: { if !$0 { co.pipError = nil } })) {
             Button("好") { co.pipError = nil }
