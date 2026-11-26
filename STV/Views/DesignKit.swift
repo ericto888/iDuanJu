@@ -1,13 +1,26 @@
 import SwiftUI
+import UIKit
 
 // i短剧 redesign building blocks (ui-redesign/styles.css + video.css). Colours come from STVTheme; every size here
 // is the spec's pt value. Screens compose these instead of styling controls ad hoc.
+// Floating controls (bars, round buttons, capsules) are Liquid Glass through GlassKit; cards, rows and chips inside
+// scrolling content stay plain. Form controls and overlays live in DSControls.swift / DSOverlays.swift.
 
 enum DS {
     /// One spring for selection changes (tabs, segments, chips) and one for panels / bars.
     static let select = Animation.spring(response: 0.32, dampingFraction: 0.86)
     static let panel = Animation.spring(response: 0.42, dampingFraction: 0.88)
     static let press = Animation.spring(response: 0.22, dampingFraction: 0.8)
+    /// Reduce Motion: cross-fade instead of springs.
+    static func motion(_ a: Animation, reduce: Bool) -> Animation { reduce ? .easeOut(duration: 0.18) : a }
+
+    @MainActor private static let selectionHaptic = UISelectionFeedbackGenerator()
+    /// Haptic tick for a meaningful selection (segment, tab, switch, reader theme). Never on plain navigation.
+    @MainActor static func tick() { selectionHaptic.selectionChanged() }
+
+    /// Puts the keyboard away.
+    @MainActor static func endEditing() { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+
     /// Spaced numbers like the spec: "512.6 万", "全 82 集".
     static func count(_ n: Int) -> String {
         if n >= 100_000_000 { return String(format: "%.1f 亿", Double(n) / 100_000_000) }
@@ -16,7 +29,7 @@ enum DS {
     }
     static func episodes(_ s: HGSeries) -> String? {
         if let sub = s.subtitle, sub.contains("更新至") || sub.hasPrefix("全") { return spaced(sub) }
-        if s.source.isLongVideo { return s.duration > 0 ? Fmt.clock(s.duration) : nil }
+        if s.source.isLongVideo { return s.duration > 0 ? Fmt.clock(s.duration) : s.episodeCount > 1 ? "全 \(s.episodeCount) 集" : nil }
         return s.episodeCount > 0 ? "全 \(s.episodeCount) 集" : nil
     }
     /// "更新至24集" → "更新至 24 集".
@@ -47,35 +60,88 @@ enum DS {
     }
 }
 
-// MARK: - Surfaces
+// MARK: - Type
+
+/// Spec pt size that follows Dynamic Type.
+private struct DSFont: ViewModifier {
+    @ScaledMetric private var size: CGFloat
+    let weight: Font.Weight
+    init(_ size: CGFloat, _ weight: Font.Weight, _ style: Font.TextStyle) {
+        _size = ScaledMetric(wrappedValue: size, relativeTo: style)
+        self.weight = weight
+    }
+    func body(content: Content) -> some View { content.font(.system(size: size, weight: weight)) }
+}
 
 extension View {
-    /// `.card`: card fill + 1 px border; light mode adds the soft drop shadow.
-    func dsCard(_ radius: CGFloat = 20) -> some View {
-        background(STVTheme.card, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(STVTheme.cardBorder, lineWidth: 1))
-            .shadow(color: STVTheme.shadowSoft, radius: 14, y: 10)
+    /// System font at the spec's pt size, scaled with Dynamic Type.
+    func dsFont(_ size: CGFloat, _ weight: Font.Weight = .regular, relativeTo style: Font.TextStyle = .body) -> some View {
+        modifier(DSFont(size, weight, style))
     }
-    /// Floating glass bar (tab bar, sticky filter strip, play bar).
-    func dsBar(_ radius: CGFloat) -> some View {
-        background(STVTheme.bar, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(STVTheme.glassBorder, lineWidth: 1))
-            .shadow(color: STVTheme.barShadow, radius: 15, y: 10)
-    }
-    /// Pinned header: 80 % page colour over a blur, hairline under it.
-    func dsPinned(_ on: Bool) -> some View {
-        background {
-            ZStack(alignment: .bottom) {
-                Rectangle().fill(.ultraThinMaterial)
-                STVTheme.pin
-                STVTheme.hairline.frame(height: 1)
+}
+
+// MARK: - Surfaces
+
+/// `.card`: card fill + 1 px border; light mode adds the soft drop shadow.
+private struct DSCardGround: ViewModifier {
+    let radius: CGFloat
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.onGlass) private var onGlass
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        content.background {
+            // The shadow is part of the static ground shape. A `.shadow` on the live content made every card an
+            // offscreen pass per frame while scrolling, in dark mode too (where it is fully transparent).
+            if onGlass {
+                // Inside a glass sheet a card is only a quiet fill, so the sheet stays one piece of glass.
+                shape.fill(STVTheme.glass)
+            } else if scheme == .light {
+                shape.fill(STVTheme.card.shadow(.drop(color: STVTheme.shadowSoft, radius: 14, y: 10)))
+            } else {
+                shape.fill(STVTheme.card)
             }
-            .ignoresSafeArea(edges: .top)
-            .opacity(on ? 1 : 0)
-            .animation(.easeOut(duration: 0.2), value: on)
+            if !onGlass || contrast == .increased {
+                shape.strokeBorder(contrast == .increased ? STVTheme.secondary.opacity(0.5) : STVTheme.cardBorder, lineWidth: 1)
+            }
         }
     }
+}
+
+/// Floating glass bar. Only the pre-iOS 26 fallback needs a drop shadow: the system material lifts itself.
+private struct DSBarGround: ViewModifier {
+    let radius: CGFloat
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.liquidGlass(corner: radius)
+        } else {
+            content.liquidGlass(corner: radius).shadow(color: STVTheme.barShadow, radius: 15, y: 10)
+        }
+    }
+}
+
+/// Root pages without a header: content dissolves under the status bar once it scrolls.
+private struct StatusFade: ViewModifier {
+    @State private var scrolled = false
+    func body(content: Content) -> some View {
+        content
+            .compatOnScrolled(threshold: 6) { if scrolled != $0 { scrolled = $0 } }
+            .overlay(alignment: .top) {
+                Color.clear.frame(height: 2).frame(maxWidth: .infinity)
+                    .background { LiquidEdgeFade(visible: scrolled) }
+                    .allowsHitTesting(false)
+            }
+    }
+}
+
+extension View {
+    /// On a root page's ScrollView (its content carries `compatScrollContent()`).
+    func dsStatusFade() -> some View { modifier(StatusFade()) }
+    func dsCard(_ radius: CGFloat = 20) -> some View { modifier(DSCardGround(radius: radius)) }
+    /// Floating glass bar (tab bar, sticky filter strip, play bar).
+    func dsBar(_ radius: CGFloat) -> some View { modifier(DSBarGround(radius: radius)) }
+    /// Pinned header: content dissolves into the page colour under it (no hairline, no slab).
+    func dsPinned(_ on: Bool) -> some View { background { LiquidEdgeFade(visible: on) } }
     /// Page ground with the spec's top glow (`.phone.amb` / `.amb-cool`).
     func dsAmbient(cool: Bool = false, visible: Bool = true) -> some View {
         background(alignment: .top) {
@@ -118,7 +184,7 @@ struct UnderlineTabs<T: Hashable>: View {
         HStack(alignment: .lastTextBaseline, spacing: small ? 24 : 22) {
             ForEach(items, id: \.self) { it in
                 let on = it == selection
-                Button { withAnimation(DS.select) { selection = it } } label: {
+                Button { if !on { DS.tick(); withAnimation(DS.select) { selection = it } } } label: {
                     UnderlineTabLabel(title: label(it), on: on, small: small, ns: ns)
                 }
                 .buttonStyle(.plain)
@@ -156,31 +222,36 @@ struct UnderlineTabLabel: View {
     }
 }
 
-// MARK: - Level 2: glass segmented control (`.seg`)
+// MARK: - Level 2: segmented control (`.seg`)
 
+/// Capsule track with one sliding thumb. The thumb is a single Liquid Glass piece that travels between segments
+/// (plain fill when the control itself sits on glass).
 struct SegmentedTabs<T: Hashable>: View {
     let items: [T]
     @Binding var selection: T
     let label: (T) -> String
     var idPrefix = "seg"
-    @Namespace private var ns
+    @Environment(\.onGlass) private var onGlass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var index: Int { items.firstIndex(of: selection) ?? 0 }
+
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             ForEach(items, id: \.self) { it in
                 let on = it == selection
-                Button { withAnimation(DS.select) { selection = it } } label: {
+                Button {
+                    guard !on else { return }
+                    DS.tick()
+                    withAnimation(DS.motion(DS.select, reduce: reduceMotion)) { selection = it }
+                } label: {
                     Text(label(it))
-                        .font(.system(size: 14, weight: on ? .semibold : .regular))
+                        .font(.system(size: 14, weight: on ? .semibold : .medium))
                         .foregroundStyle(on ? STVTheme.text : STVTheme.secondary)
-                        .lineLimit(1).minimumScaleFactor(0.8)
+                        .lineLimit(1).minimumScaleFactor(0.75)
+                        .padding(.horizontal, 4)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background {
-                            if on {
-                                RoundedRectangle(cornerRadius: 11, style: .continuous).fill(STVTheme.thumb)
-                                    .shadow(color: STVTheme.shadowThumb, radius: 3, y: 1.5)
-                                    .matchedGeometryEffect(id: "thumb", in: ns)
-                            }
-                        }
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -188,10 +259,29 @@ struct SegmentedTabs<T: Hashable>: View {
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
+        .background { thumb }
         .padding(3)
-        .frame(height: 40)
-        .background(STVTheme.glass, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(STVTheme.hairline, lineWidth: 1))
+        .frame(height: 42)
+        .background(STVTheme.glass, in: Capsule())
+        .overlay { if contrast == .increased { Capsule().strokeBorder(STVTheme.secondary.opacity(0.5), lineWidth: 1) } }
+    }
+
+    private var thumb: some View {
+        GeometryReader { g in
+            let w = g.size.width / CGFloat(max(items.count, 1))
+            Group {
+                if onGlass {
+                    Capsule().fill(STVTheme.thumb.shadow(.drop(color: STVTheme.shadowThumb, radius: 3, y: 1.5)))
+                } else if #available(iOS 26.0, *) {
+                    Color.clear.liquidGlassCapsule(interactive: true)
+                } else {
+                    Capsule().fill(STVTheme.thumb.shadow(.drop(color: STVTheme.shadowThumb, radius: 3, y: 1.5)))
+                }
+            }
+            .frame(width: w)
+            .offset(x: w * CGFloat(index))
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -202,8 +292,10 @@ struct ToneChipStyle: ButtonStyle {
     /// "全部" / range chips: neutral thumb when selected instead of the accent tint.
     var neutral = false
     var small = false
+    /// Chips in a floating header: Liquid Glass capsules. Chips inside scrolling content stay plain fills.
+    var floating = false
     func makeBody(configuration: Configuration) -> some View {
-        ToneChipBody(label: configuration.label, on: on, neutral: neutral, small: small, pressed: configuration.isPressed)
+        ToneChipBody(label: configuration.label, on: on, neutral: neutral, small: small, floating: floating, pressed: configuration.isPressed)
     }
 }
 
@@ -212,25 +304,47 @@ private struct ToneChipBody<L: View>: View {
     let on: Bool
     let neutral: Bool
     let small: Bool
+    let floating: Bool
     let pressed: Bool
     @Environment(\.isEnabled) private var enabled
+    @Environment(\.onGlass) private var onGlass
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var fill: Color {
+        on ? (neutral ? STVTheme.thumb : STVTheme.accentSoft) : (pressed ? STVTheme.glassBorder : STVTheme.glass)
+    }
+    private var rim: Color {
+        if on && !neutral { return STVTheme.accentLine }
+        return contrast == .increased ? STVTheme.secondary.opacity(0.5) : .clear
+    }
+
     var body: some View {
-        let fill: Color = on ? (neutral ? STVTheme.thumb : STVTheme.accentSoft) : (pressed ? STVTheme.glassBorder : STVTheme.glass)
         label
-            .font(.system(size: small ? 13 : 14, weight: on ? .semibold : .regular))
+            .dsFont(small ? 13 : 14, on ? .semibold : .regular, relativeTo: .subheadline)
             .foregroundStyle(on ? (neutral ? STVTheme.text : STVTheme.accent) : (pressed ? STVTheme.text : STVTheme.secondary))
             .lineLimit(1)
             .padding(.horizontal, small ? 12 : 14)
-            .frame(height: small ? 28 : 32)
-            .background {
-                Capsule().fill(fill).shadow(color: on && neutral ? STVTheme.shadowThumb : .clear, radius: 3, y: 1.5)
-            }
-            .overlay { Capsule().strokeBorder(on && !neutral ? STVTheme.accentLine : .clear, lineWidth: 1) }
+            .frame(minHeight: small ? 28 : 32)
+            .modifier(Ground(glass: floating && !onGlass, on: on, neutral: neutral, fill: fill, rim: rim))
             .contentShape(Capsule())
-            .scaleEffect(pressed ? 0.97 : 1)
+            .scaleEffect(pressed ? 0.96 : 1)
             .opacity(enabled ? 1 : 0.38)
             .animation(DS.press, value: pressed)
-            .animation(.easeOut(duration: 0.18), value: on)
+    }
+
+    private struct Ground: ViewModifier {
+        let glass: Bool, on: Bool, neutral: Bool
+        let fill: Color, rim: Color
+        func body(content: Content) -> some View {
+            if glass {
+                content.liquidGlassCapsule(tone: on && !neutral ? .tinted(STVTheme.accentSoft) : .regular, interactive: true)
+            } else {
+                content.background {
+                    Capsule().fill(on && neutral ? AnyShapeStyle(fill.shadow(.drop(color: STVTheme.shadowThumb, radius: 3, y: 1.5))) : AnyShapeStyle(fill))
+                    Capsule().strokeBorder(rim, lineWidth: 1)
+                }
+            }
+        }
     }
 }
 
@@ -260,9 +374,10 @@ struct ChipRow<T: Hashable>: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                // Lazy: a dimension can carry 40+ options and several rows sit in one panel.
+                LazyHStack(spacing: 8) {
                     ForEach(items, id: \.self) { it in
-                        Button { withAnimation(DS.select) { selection = it } } label: { Text(label(it)) }
+                        Button { DS.tick(); withAnimation(DS.select) { selection = it } } label: { Text(label(it)) }
                             .buttonStyle(ToneChipStyle(on: it == selection, neutral: neutral(it), small: small))
                             .id(it)
                             .accessibilityIdentifier("\(idPrefix).\(label(it))")
@@ -292,45 +407,47 @@ struct FadeMask: View {
 
 // MARK: - Buttons
 
-/// `.cbtn`: 36 pt round glass button (`.acc` tinted, `.ov` over imagery).
+/// `.cbtn`: round glass button (`.acc` accent glyph, `.ov` over imagery).
 struct RoundIconButton: View {
     enum Tone { case glass, accent, overlay }
     let systemName: String
     var tone: Tone = .glass
-    var size: CGFloat = 36
+    var size: CGFloat = 40
     var action: () -> Void
+    @Environment(\.onGlass) private var onGlass
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemName).font(.system(size: 16, weight: .semibold))
+            Image(systemName: systemName).font(.system(size: size * 0.40, weight: .semibold))
                 .foregroundStyle(tone == .accent ? STVTheme.accent : tone == .overlay ? .white : STVTheme.text)
                 .frame(width: size, height: size)
-                .background(Circle().fill(tone == .accent ? STVTheme.accentSoft : tone == .overlay ? Color.black.opacity(0.30) : STVTheme.glass))
-                .overlay(Circle().strokeBorder(tone == .accent ? .clear : tone == .overlay ? Color.white.opacity(0.16) : STVTheme.hairline, lineWidth: 1))
-                .contentShape(Circle())
+                .modifier(LiquidCircleGround(onGlass: onGlass, onMedia: tone == .overlay))
+                // 44 pt target around the smaller visual.
+                .contentShape(Circle().inset(by: min(0, (size - 44) / 2)))
         }
-        .buttonStyle(PressScale())
+        .buttonStyle(GlassPress())
     }
 }
 
-/// `.capbtn`: 36 pt capsule with an optional leading / trailing icon.
+/// `.capbtn`: 36 pt glass capsule with an optional leading / trailing icon.
 struct CapsuleLabel: View {
     let title: String
     var icon: String? = nil
     var trailingIcon: String? = nil
+    @Environment(\.onGlass) private var onGlass
     var body: some View {
-        HStack(spacing: 6) {
+        let label = HStack(spacing: 6) {
             if let icon { Image(systemName: icon).font(.system(size: 13, weight: .semibold)).foregroundStyle(STVTheme.secondary) }
             Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
             if let trailingIcon { Image(systemName: trailingIcon).font(.system(size: 11, weight: .semibold)).foregroundStyle(STVTheme.secondary) }
         }
-        .padding(.horizontal, 14).frame(height: 36)
-        .background(Capsule().fill(STVTheme.glass))
-        .overlay(Capsule().strokeBorder(STVTheme.hairline, lineWidth: 1))
+        .padding(.horizontal, 14).frame(height: 40)
         .contentShape(Capsule())
+        if onGlass { label.background(Capsule().fill(STVTheme.glass)) } else { label.liquidGlassCapsule(interactive: true) }
     }
 }
 
 /// `.btn`: accent / white(ink) capsule button; `small` is the 32 pt variant.
+/// `glass`: the primary action of a detail page, in the content or floating — tinted Liquid Glass instead of a flat fill.
 struct PillButtonLabel: View {
     enum Tone { case accent, ink, white }
     let title: String
@@ -339,17 +456,40 @@ struct PillButtonLabel: View {
     var small = false
     var height: CGFloat? = nil
     var expand = false
+    var glass = false
+    @Environment(\.onGlass) private var onGlass
+    private var fill: Color { tone == .accent ? STVTheme.accent : tone == .ink ? STVTheme.text : Color.white }
     var body: some View {
         let h = height ?? (small ? 32 : 48)
-        HStack(spacing: 6) {
+        let label = HStack(spacing: 6) {
             if let icon { Image(systemName: icon).font(.system(size: small ? 10 : 12, weight: .bold)) }
-            Text(title).font(.system(size: small ? 13 : 16, weight: .semibold)).lineLimit(1)
+            Text(title).font(.system(size: small ? 13 : 16, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
         }
         .foregroundStyle(tone == .accent ? STVTheme.onAccent : tone == .ink ? STVTheme.bg : Color(red: 0.067, green: 0.075, blue: 0.090))
         .padding(.horizontal, small ? 14 : 22)
         .frame(maxWidth: expand ? .infinity : nil)
         .frame(height: h)
-        .background(Capsule().fill(tone == .accent ? STVTheme.accent : tone == .ink ? STVTheme.text : Color.white))
+        .contentShape(Capsule())
+        if glass && !onGlass { label.liquidGlassCapsule(tone: .tinted(fill), interactive: true) } else { label.background(Capsule().fill(fill)) }
+    }
+}
+
+/// Secondary action next to a `PillButtonLabel`: neutral fill, same metrics.
+struct PillButtonPlain: View {
+    let title: String
+    var icon: String? = nil
+    var height: CGFloat = 48
+    var expand = true
+    var body: some View {
+        HStack(spacing: 6) {
+            if let icon { Image(systemName: icon).font(.system(size: 14, weight: .semibold)) }
+            Text(title).font(.system(size: 16, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .foregroundStyle(STVTheme.text)
+        .padding(.horizontal, 18)
+        .frame(maxWidth: expand ? .infinity : nil)
+        .frame(height: height)
+        .background(Capsule().fill(STVTheme.glass))
         .contentShape(Capsule())
     }
 }
@@ -365,6 +505,23 @@ struct PressScale: ButtonStyle {
     }
 }
 
+/// Press feedback for buttons whose label is interactive Liquid Glass. The system material already lights up and stretches
+/// under the finger on iOS 26; fading or squeezing it hard on top of that would flatten the glass.
+struct GlassPress: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        if #available(iOS 26.0, *) {
+            configuration.label
+                .scaleEffect(configuration.isPressed ? 0.98 : 1)
+                .animation(DS.press, value: configuration.isPressed)
+        } else {
+            configuration.label
+                .scaleEffect(configuration.isPressed ? 0.95 : 1)
+                .opacity(configuration.isPressed ? 0.85 : 1)
+                .animation(DS.press, value: configuration.isPressed)
+        }
+    }
+}
+
 // MARK: - Navigation bar (`.nav`)
 
 struct DSNavBar<Leading: View, Trailing: View>: View {
@@ -372,14 +529,20 @@ struct DSNavBar<Leading: View, Trailing: View>: View {
     @ViewBuilder var leading: Leading
     @ViewBuilder var trailing: Trailing
     var body: some View {
-        HStack(spacing: 0) {
-            leading.frame(width: 96, alignment: .leading)
-            Text(title).font(.system(size: 17, weight: .semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
-                .frame(maxWidth: .infinity)
-            trailing.frame(width: 96, alignment: .trailing)
+        ZStack {
+            Text(title).dsFont(17, .semibold, relativeTo: .headline).foregroundStyle(STVTheme.text).lineLimit(1)
+                .padding(.horizontal, 104)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("nav.title")
+            HStack(spacing: 8) {
+                leading
+                Spacer(minLength: 0)
+                LiquidGlassGroup(spacing: 8) { HStack(spacing: 8) { trailing } }
+            }
         }
         .frame(height: 44)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 8)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 }
 
@@ -392,7 +555,67 @@ struct DSBackButton: View {
     var tone: RoundIconButton.Tone = .glass
     var action: () -> Void
     var body: some View {
-        RoundIconButton(systemName: "chevron.left", tone: tone, action: action).accessibilityLabel("返回").accessibilityIdentifier("nav.back")
+        RoundIconButton(systemName: "chevron.left", tone: tone, size: 44, action: action).accessibilityLabel("返回").accessibilityIdentifier("nav.back")
+    }
+}
+
+/// Trailing bar action: one glass capsule (text) or circle (icon) like a system toolbar item.
+struct DSBarButton: View {
+    var title: String? = nil
+    var systemName: String? = nil
+    var tint: Color? = nil
+    var action: () -> Void
+    @Environment(\.isEnabled) private var enabled
+    var body: some View {
+        Button(action: action) { DSBarLabel(title: title, systemName: systemName, tint: tint) }
+            .buttonStyle(GlassPress())
+            .opacity(enabled ? 1 : 0.4)
+    }
+}
+
+struct DSBarLabel: View {
+    var title: String? = nil
+    var systemName: String? = nil
+    var tint: Color? = nil
+    @Environment(\.onGlass) private var onGlass
+    var body: some View {
+        let label = Group {
+            if let systemName { Image(systemName: systemName).font(.system(size: 17, weight: .medium)) }
+            else if let title { Text(title).font(.system(size: 15, weight: .semibold)).lineLimit(1).fixedSize() }
+        }
+        .foregroundStyle(tint ?? STVTheme.text)
+        .padding(.horizontal, systemName == nil ? 14 : 0)
+        .frame(minWidth: 44, minHeight: 44)
+        .contentShape(Capsule())
+        if onGlass { label.background(Capsule().fill(STVTheme.glass)) } else { label.liquidGlassCapsule(interactive: true) }
+    }
+}
+
+private struct DSNavigation<T: View>: ViewModifier {
+    let title: String
+    var back: (() -> Void)?
+    @ViewBuilder var trailing: () -> T
+    @Environment(\.dismiss) private var dismiss
+    func body(content: Content) -> some View {
+        content
+            .liquidTopBar {
+                DSNavBar(title: title) {
+                    DSBackButton { if let back { back() } else { dismiss() } }
+                } trailing: { trailing() }
+            }
+            .background(STVTheme.bg.ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
+    }
+}
+
+extension View {
+    /// Sub-page chrome: floating glass back button, centred title, glass trailing actions. The navigation stack and its
+    /// swipe-back are untouched, only the stock bar is replaced.
+    func dsNavigation<T: View>(_ title: String, back: (() -> Void)? = nil, @ViewBuilder trailing: @escaping () -> T) -> some View {
+        modifier(DSNavigation(title: title, back: back, trailing: trailing))
+    }
+    func dsNavigation(_ title: String, back: (() -> Void)? = nil) -> some View {
+        modifier(DSNavigation(title: title, back: back, trailing: { EmptyView() }))
     }
 }
 
@@ -420,8 +643,8 @@ struct DSSectionHeader<Trailing: View>: View {
     @ViewBuilder var trailing: Trailing
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(title).font(.system(size: 19, weight: .bold)).foregroundStyle(STVTheme.text)
-            if let note { Text(note).font(.system(size: 13)).foregroundStyle(STVTheme.secondary) }
+            Text(title).dsFont(19, .bold, relativeTo: .title3).foregroundStyle(STVTheme.text).accessibilityAddTraits(.isHeader)
+            if let note { Text(note).dsFont(13, relativeTo: .footnote).foregroundStyle(STVTheme.secondary) }
             Spacer(minLength: 0)
             trailing
         }
@@ -444,6 +667,7 @@ struct MoreLabel: View {
             if icon == nil { Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)) }
         }
         .font(.system(size: 13)).foregroundStyle(STVTheme.secondary)
+        .contentShape(Rectangle().inset(by: -10))
     }
 }
 
@@ -477,27 +701,50 @@ struct DSStatus: View {
     }
 }
 
-/// `.bar`: 3 pt progress track.
+/// Source label on hero artwork: on the page colour, so it reads over any picture.
+struct DSHeroTag: View {
+    let text: String
+    var trailingIcon: String? = nil
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(text).font(.system(size: 11.5, weight: .semibold)).lineLimit(1)
+            if let trailingIcon { Image(systemName: trailingIcon).font(.system(size: 9, weight: .bold)) }
+        }
+        .foregroundStyle(STVTheme.accent)
+        .padding(.horizontal, 9).frame(height: 24)
+        .background(STVTheme.bg.opacity(0.82), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+/// `.bar`: 3 pt progress track. Scaled fill instead of a GeometryReader: it sits in scrolling cells.
 struct DSProgressBar: View {
     var value: Double
+    var height: CGFloat = 3
+    var track: Color = STVTheme.glassBorder
+    var tint: Color = STVTheme.accent
     var body: some View {
-        GeometryReader { g in
-            Capsule().fill(STVTheme.glassBorder)
-                .overlay(alignment: .leading) { Capsule().fill(STVTheme.accent).frame(width: g.size.width * min(max(value, 0), 1)) }
-        }
-        .frame(height: 3)
-        .animation(.easeOut(duration: 0.3), value: value)
+        Capsule().fill(track)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(tint).scaleEffect(x: min(max(value.isFinite ? value : 0, 0), 1), y: 1, anchor: .leading)
+            }
+            .clipShape(Capsule())
+            .frame(height: height)
+            .animation(.easeOut(duration: 0.3), value: value)
+            .accessibilityElement()
+            .accessibilityValue("\(Int((min(max(value.isFinite ? value : 0, 0), 1) * 100).rounded()))%")
     }
 }
 
 /// `.mini`: small accent capsule action.
 struct MiniButtonLabel: View {
     let title: String
+    var tint: Color = STVTheme.accent
+    var ground: Color = STVTheme.accentSoft
     var body: some View {
-        Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(STVTheme.accent)
+        Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(tint).lineLimit(1)
             .padding(.horizontal, 12).frame(height: 30)
-            .background(Capsule().fill(STVTheme.accentSoft))
-            .contentShape(Capsule())
+            .background(Capsule().fill(ground))
+            .contentShape(Capsule().inset(by: -7))
     }
 }
 
@@ -506,10 +753,13 @@ struct IconWell: View {
     let systemName: String
     var size: CGFloat = 34
     var corner: CGFloat? = nil
+    var tint: Color = STVTheme.accent
+    var ground: Color = STVTheme.accentSoft
     var body: some View {
-        Image(systemName: systemName).font(.system(size: size * 0.5, weight: .medium)).foregroundStyle(STVTheme.accent)
+        Image(systemName: systemName).font(.system(size: size * 0.5, weight: .medium)).foregroundStyle(tint)
             .frame(width: size, height: size)
-            .background(STVTheme.accentSoft, in: RoundedRectangle(cornerRadius: corner ?? size / 2, style: .continuous))
+            .background(ground, in: RoundedRectangle(cornerRadius: corner ?? size / 2, style: .continuous))
+            .accessibilityHidden(true)
     }
 }
 
@@ -540,7 +790,7 @@ struct PosterArt: View {
     var body: some View {
         Color.clear
             .aspectRatio(series.isLandscapeCover ? 16 / 9 : 3 / 4, contentMode: .fit)
-            .overlay { CoverView(url: series.cover, corner: 0) }
+            .overlay { CoverView(url: series.cover, corner: 0, maxPixelSize: series.isLandscapeCover ? CoverPixels.wide : CoverPixels.poster) }
             .overlay {
                 LinearGradient(stops: [.init(color: .clear, location: 0.46), .init(color: .black.opacity(0.62), location: 1)],
                                startPoint: .top, endPoint: .bottom).allowsHitTesting(false)
@@ -598,7 +848,7 @@ struct RankListRow: View {
                 Text("\(rank)").font(.system(size: 20, weight: .heavy)).italic()
                     .foregroundStyle(STVTheme.rankColor(rank)).frame(width: 26)
                     .minimumScaleFactor(0.6).lineLimit(1)
-                CoverView(url: series.cover, corner: 9).frame(width: 62, height: 84).zoomSource(series.id, ns)
+                CoverView(url: series.cover, corner: 9, maxPixelSize: CoverPixels.thumb).frame(width: 62, height: 84).zoomSource(series.id, ns)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(series.title).font(.system(size: 16, weight: .semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
                     let tags = Array((series.tags + (series.isNew ? ["新剧"] : [])).prefix(3))

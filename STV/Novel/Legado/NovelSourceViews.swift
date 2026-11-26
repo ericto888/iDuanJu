@@ -11,65 +11,86 @@ struct NovelSourcesView: View {
 
     enum Filter: String, CaseIterable { case all = "全部", on = "已启用", login = "需登录", unsupported = "不支持" }
 
-    private func matches(_ s: LegadoSource, _ f: Filter) -> Bool {
-        switch f {
-        case .all: true
-        case .on: s.isOn && s.supported
-        case .login: s.hasLogin && !LegadoSourceState.isLoggedIn(s.bookSourceUrl)
-        case .unsupported: !s.supported
+    /// One pass over the sources per change: classification reads the login state (JSON per source), and it used to run
+    /// five times over the whole list in every body.
+    private struct Board {
+        var counts: [Filter: Int] = [:]
+        var loggedIn: Set<String> = []
+        var enabled = 0
+        var total = 0
+    }
+    @State private var board = Board()
+
+    private func classify() {
+        var b = Board()
+        b.total = store.sources.count
+        for s in store.sources {
+            let logged = s.hasLogin && LegadoSourceState.isLoggedIn(s.bookSourceUrl)
+            if logged { b.loggedIn.insert(s.id) }
+            b.counts[.all, default: 0] += 1
+            if s.isOn && s.supported { b.enabled += 1; b.counts[.on, default: 0] += 1 }
+            if s.hasLogin && !logged { b.counts[.login, default: 0] += 1 }
+            if !s.supported { b.counts[.unsupported, default: 0] += 1 }
+        }
+        board = b
+    }
+
+    private var visible: [LegadoSource] {
+        switch filter {
+        case .all: store.sources
+        case .on: store.sources.filter { $0.isOn && $0.supported }
+        case .login: store.sources.filter { $0.hasLogin && !board.loggedIn.contains($0.id) }
+        case .unsupported: store.sources.filter { !$0.supported }
         }
     }
-    private var visible: [LegadoSource] { store.sources.filter { matches($0, filter) } }
 
     /// ui-redesign 08: count line, status chips with counts, one card of rows with status labels, 登录 and a switch.
+    /// (A List for its native swipe-to-delete; every row draws the app's own card.)
     var body: some View {
-        VStack(spacing: 0) {
+        let list = visible
+        List {
+            Group {
+                Text("共 \(board.total) 个书源 · 已启用 \(board.enabled) 个")
+                    .dsFont(13, relativeTo: .footnote).foregroundStyle(STVTheme.secondary)
+                    .padding(.horizontal, 20).padding(.top, 4)
+                filterChips.padding(.top, 10).padding(.bottom, 14)
+            }
+            .listRowInsets(EdgeInsets()).listRowBackground(Color.clear).listRowSeparator(.hidden)
+            if store.sources.isEmpty {
+                DSEmptyState("还没有书源", systemImage: "books.vertical", message: "导入「阅读」(Legado) 的书源 JSON。App 不内置任何书源。", actionTitle: "导入书源") { importing = true }
+                    .listRowInsets(EdgeInsets()).listRowBackground(Color.clear).listRowSeparator(.hidden)
+            }
+            ForEach(Array(list.enumerated()), id: \.element.id) { i, s in
+                row(s)
+                    .overlay(alignment: .top) { if i > 0 { Hairline() } }
+                    .padding(.horizontal, 14)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(CardSlice(first: i == 0, last: i == list.count - 1).padding(.horizontal, 16))
+            }
+            .onDelete { idx in store.remove(Set(idx.map { list[$0].id })) }
+            if !store.sources.isEmpty {
+                Text("左滑可删除书源。").font(.system(size: 12)).foregroundStyle(STVTheme.tertiary)
+                    .padding(.horizontal, 30).padding(.top, 14).padding(.bottom, 40)
+                    .listRowInsets(EdgeInsets()).listRowBackground(Color.clear).listRowSeparator(.hidden)
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .liquidTopBar {
             DSNavBar(title: "书源") {
                 DSBackButton { dismiss() }
             } trailing: {
-                RoundIconButton(systemName: "plus", tone: .accent) { importing = true }.accessibilityIdentifier("sources.add")
+                RoundIconButton(systemName: "plus", tone: .accent, size: 44) { importing = true }
+                    .accessibilityLabel("导入书源").accessibilityIdentifier("sources.add")
             }
-            List {
-                Group {
-                    Text("共 \(store.sources.count) 个书源 · 已启用 \(store.enabled.count) 个")
-                        .font(.system(size: 13)).foregroundStyle(STVTheme.secondary)
-                        .padding(.horizontal, 20).padding(.top, 12)
-                    filterChips.padding(.top, 12).padding(.bottom, 16)
-                }
-                .listRowInsets(EdgeInsets()).listRowBackground(Color.clear).listRowSeparator(.hidden)
-                if store.sources.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "books.vertical").font(.system(size: 30)).foregroundStyle(STVTheme.tertiary)
-                        Text("还没有书源").font(.system(size: 16, weight: .semibold)).foregroundStyle(STVTheme.text)
-                        Text("点右上角 ＋ 导入「阅读」(Legado) 的书源 JSON。App 不内置任何书源。")
-                            .font(.system(size: 13)).foregroundStyle(STVTheme.secondary).multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity).padding(.vertical, 40).padding(.horizontal, 24)
-                    .listRowInsets(EdgeInsets()).listRowBackground(Color.clear).listRowSeparator(.hidden)
-                }
-                let list = visible
-                ForEach(Array(list.enumerated()), id: \.element.id) { i, s in
-                    row(s)
-                        .overlay(alignment: .top) { if i > 0 { Hairline() } }
-                        .padding(.horizontal, 14)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(CardSlice(first: i == 0, last: i == list.count - 1).padding(.horizontal, 16))
-                }
-                .onDelete { idx in store.remove(Set(idx.map { list[$0].id })) }
-                if !store.sources.isEmpty {
-                    Text("左滑可删除书源。").font(.system(size: 12)).foregroundStyle(STVTheme.tertiary)
-                        .padding(.horizontal, 30).padding(.top, 14).padding(.bottom, 40)
-                        .listRowInsets(EdgeInsets()).listRowBackground(Color.clear).listRowSeparator(.hidden)
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .animation(DS.panel, value: filter)
         }
         .dsAmbient(cool: true)
         .tint(STVTheme.accent)
         .toolbar(.hidden, for: .navigationBar)
+        .onAppear { classify() }
+        .onReceive(store.$sources.receive(on: DispatchQueue.main)) { _ in classify() }
+        .compatOnChange(of: login?.id) { classify() }
         .sheet(item: $login) { s in NovelSourceLoginView(source: s) }
         .sheet(isPresented: $importing) { NovelImportSheet(showBooks: false) }
     }
@@ -78,10 +99,11 @@ struct NovelSourcesView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(Filter.allCases, id: \.self) { f in
-                    Button { withAnimation(DS.select) { filter = f } } label: {
-                        CountLabel(title: f.rawValue, count: store.sources.filter { matches($0, f) }.count)
+                    Button { DS.tick(); withAnimation(DS.select) { filter = f } } label: {
+                        CountLabel(title: f.rawValue, count: board.counts[f] ?? 0)
                     }
                     .buttonStyle(ToneChipStyle(on: filter == f, neutral: f == .all))
+                    .accessibilityAddTraits(filter == f ? .isSelected : [])
                     .accessibilityIdentifier("sources.filter.\(f.rawValue)")
                 }
             }
@@ -90,7 +112,7 @@ struct NovelSourcesView: View {
     }
 
     private func row(_ s: LegadoSource) -> some View {
-        let loggedIn = LegadoSourceState.isLoggedIn(s.bookSourceUrl)
+        let loggedIn = board.loggedIn.contains(s.id)
         let dim = !s.supported
         return HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
@@ -106,8 +128,8 @@ struct NovelSourcesView: View {
             if s.supported, s.hasLogin, !loggedIn {
                 Button { login = s } label: { MiniButtonLabel(title: "登录") }.buttonStyle(PressScale())
             }
-            Toggle("", isOn: Binding(get: { s.isOn && s.supported }, set: { store.setEnabled(s, $0) }))
-                .labelsHidden().tint(STVTheme.accent).disabled(!s.supported).opacity(s.supported ? 1 : 0.4)
+            DSSwitchControl(isOn: Binding(get: { s.isOn && s.supported }, set: { store.setEnabled(s, $0) }), label: "启用 \(s.bookSourceName)")
+                .disabled(!s.supported)
         }
         .frame(minHeight: 66)
         .contentShape(Rectangle())
@@ -155,46 +177,43 @@ struct NovelSearchView: View {
         var id: String { name + "|" + author }
     }
 
-    @State private var scrolled = false
     @State private var submitted = ""
+    /// Results waiting for the next flush.
+    @State private var pendingItems: [LegadoSearchItem] = []
     @FocusState private var focused: Bool
 
-    /// Unified STVTheme 0-card search: integrated single-row top bar, live progress line, open hairline results.
+    /// Unified STVTheme 0-card search: floating glass search bar, live progress line, open hairline results.
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                topBar.dsPinned(scrolled)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if sources.enabled.isEmpty {
-                            empty("还没有可用的书源", "先在「书源」里导入「阅读」(Legado) 书源", action: ("管理书源", { manage = true }))
-                        } else if total > 0 {
-                            progress.padding(.horizontal, 18).padding(.top, 10)
-                            LazyVStack(spacing: 0) {
-                                ForEach(Array(groups.enumerated()), id: \.element.id) { i, g in
-                                    NavigationLink(value: g) { resultRow(g, lead: i == 0) }
-                                        .buttonStyle(PressScale(scale: 0.985))
-                                        .overlay(alignment: .top) {
-                                            if i > 0 { Hairline().padding(.leading, i == 1 ? 0 : 71) }
-                                        }
-                                        .accessibilityIdentifier("search.result.\(g.name)")
-                                        .transition(.opacity)
-                                }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if sources.enabled.isEmpty {
+                        empty("还没有可用的书源", "先在「书源」里导入「阅读」(Legado) 书源", action: ("管理书源", { manage = true }))
+                    } else if total > 0 {
+                        progress.padding(.horizontal, 18).padding(.top, 10)
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(groups.enumerated()), id: \.element.id) { i, g in
+                                NavigationLink(value: g) { resultRow(g, lead: i == 0) }
+                                    .buttonStyle(PressScale(scale: 0.985))
+                                    .overlay(alignment: .top) {
+                                        if i > 0 { Hairline().padding(.leading, i == 1 ? 0 : 71) }
+                                    }
+                                    .accessibilityIdentifier("search.result.\(g.name)")
+                                    .transition(.opacity)
                             }
-                            .padding(.horizontal, 18).padding(.top, 4)
-                            .animation(DS.panel, value: groups.map(\.id))
-                            if done >= total && groups.isEmpty {
-                                empty("没有找到书籍", "换个关键词，或在书源配置中启用其他来源。")
-                            }
-                        } else {
-                            empty("搜索你的下一本书", "输入书名或作者，同时搜索已启用的书源，相同书籍会自动合并。")
                         }
+                        .padding(.horizontal, 18).padding(.top, 4)
+                        if done >= total && groups.isEmpty {
+                            empty("没有找到书籍", "换个关键词，或在书源配置中启用其他来源。")
+                        }
+                    } else {
+                        empty("搜索你的下一本书", "输入书名或作者，同时搜索已启用的书源，相同书籍会自动合并。")
                     }
-                    .padding(.bottom, 40)
                 }
-                .compatOnScrolled(threshold: 4) { scrolled = $0 }
-                .scrollDismissesKeyboard(.immediately)
+                .padding(.bottom, 40)
             }
+            .scrollDismissesKeyboard(.immediately)
+            .liquidTopBar { topBar }
             .dsAmbient(cool: true)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Group.self) { g in NovelWebDetailView(items: g.items) }
@@ -211,7 +230,7 @@ struct NovelSearchView: View {
     }
 
     private var topBar: some View {
-        HStack(spacing: 8) {
+        LiquidGlassGroup(spacing: 8) { HStack(spacing: 8) {
             DSBackButton { task?.cancel(); dismiss() }
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass").font(.system(size: 15, weight: .medium)).foregroundStyle(STVTheme.secondary)
@@ -226,12 +245,11 @@ struct NovelSearchView: View {
                             .frame(width: 18, height: 18).background(Circle().fill(STVTheme.tertiary))
                     }
                     .buttonStyle(PressScale()).accessibilityLabel("清除").transition(.scale.combined(with: .opacity))
-                    Button("搜索", action: run).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(STVTheme.accent)
+                    Button("搜索", action: run).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(STVTheme.accent).buttonStyle(PressScale())
                 }
             }
-            .padding(.leading, 13).padding(.trailing, 10).frame(height: 40)
-            .background(Capsule().fill(STVTheme.glass))
-            .overlay(Capsule().strokeBorder(STVTheme.glassBorder, lineWidth: 1))
+            .padding(.leading, 13).padding(.trailing, 12).frame(height: 44)
+            .liquidGlassCapsule(interactive: true)
             .animation(DS.press, value: query.isEmpty)
 
             Button { manage = true } label: {
@@ -241,14 +259,13 @@ struct NovelSearchView: View {
                         Text("\(sources.enabled.count)").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(STVTheme.accent)
                     }
                 }
-                .padding(.horizontal, 11).frame(height: 36)
-                .background(Capsule().fill(STVTheme.glass))
-                .overlay(Capsule().strokeBorder(STVTheme.hairline, lineWidth: 1))
+                .padding(.horizontal, 12).frame(height: 44)
                 .contentShape(Capsule())
+                .liquidGlassCapsule(interactive: true)
             }
-            .buttonStyle(PressScale()).accessibilityIdentifier("search.sources")
-        }
-        .padding(.horizontal, 16).padding(.vertical, 8)
+            .buttonStyle(GlassPress()).accessibilityIdentifier("search.sources")
+        } }
+        .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 8)
     }
 
     private var progress: some View {
@@ -272,15 +289,7 @@ struct NovelSearchView: View {
     }
 
     private func empty(_ title: String, _ text: String, action: (String, () -> Void)? = nil) -> some View {
-        VStack(spacing: 10) {
-            Image(systemName: "magnifyingglass").font(.system(size: 30)).foregroundStyle(STVTheme.tertiary)
-            Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(STVTheme.text)
-            Text(text).font(.system(size: 13)).foregroundStyle(STVTheme.secondary).multilineTextAlignment(.center)
-            if let action {
-                Button(action: action.1) { PillButtonLabel(title: action.0, small: true) }.buttonStyle(PressScale()).padding(.top, 6)
-            }
-        }
-        .frame(maxWidth: .infinity).padding(.horizontal, 32).padding(.top, 80)
+        DSEmptyState(title, systemImage: "magnifyingglass", message: text, actionTitle: action?.0, action: action?.1).padding(.top, 50)
     }
 
     private func highlighted(_ name: String) -> AttributedString {
@@ -342,10 +351,14 @@ struct NovelSearchView: View {
         focused = false
         submitted = q
         task?.cancel()
-        groups = []; done = 0; failures = 0
+        groups = []; done = 0; failures = 0; pendingItems = []
         let list = sources.enabled
         total = list.count
         task = Task {
+            // Sources answer in bursts: merge at most a few times per second instead of re-sorting and re-diffing the whole
+            // list for every single answer.
+            let flusher = Task { while !Task.isCancelled { try? await Task.sleep(nanoseconds: 180_000_000); flush(q) } }
+            defer { flusher.cancel(); flush(q) }
             await withTaskGroup(of: (Bool, [LegadoSearchItem]).self) { tg in
                 var it = list.makeIterator()
                 func add() -> Bool {
@@ -360,14 +373,22 @@ struct NovelSearchView: View {
                     if Task.isCancelled { tg.cancelAll(); return }
                     done += 1
                     if !ok { failures += 1 }
-                    merge(items, query: q)
+                    pendingItems += items
                     _ = add()
                 }
             }
         }
     }
 
+    private func flush(_ q: String) {
+        guard !pendingItems.isEmpty, submitted == q else { return }
+        let items = pendingItems
+        pendingItems = []
+        withAnimation(DS.panel) { merge(items, query: q) }
+    }
+
     private func merge(_ items: [LegadoSearchItem], query q: String) {
+        var groups = self.groups
         for it in items {
             let author = it.author.trimmingCharacters(in: .whitespaces)
             if let i = groups.firstIndex(where: { $0.name == it.name && ($0.author == author || $0.author.isEmpty || author.isEmpty) }) {
@@ -380,6 +401,7 @@ struct NovelSearchView: View {
             func rank(_ g: Group) -> Int { g.name == q ? 0 : g.name.contains(q) || g.author == q ? 1 : 2 }
             return (rank(a), -a.items.count) < (rank(b), -b.items.count)
         }
+        self.groups = groups
     }
 }
 
@@ -393,16 +415,11 @@ struct WebCover: View {
 
     var body: some View {
         Color.clear
-            .overlay {
-                AsyncImage(url: url.flatMap(URL.init(string:))) { phase in
-                    if let img = phase.image { img.resizable().scaledToFill() }
-                    else { GeneratedBookCover(title: title, author: author) }
-                }
-            }
+            .overlay { BookArt(url: url, title: title, author: author, maxPixelSize: rank == nil ? CoverPixels.thumb : CoverPixels.poster) }
             .overlay { BookSpineOverlay(corner: corner) }
             .overlay(alignment: .topLeading) { if let rank { PosterRankNumeral(rank: rank) } }
             .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-            .shadow(color: .black.opacity(0.24), radius: 7, y: 4)
+            .modifier(BookShadow(corner: corner))
     }
 }
 
@@ -428,8 +445,12 @@ struct NovelWebDetailView: View {
     @State private var loadGeneration = UUID()
     @State private var pinned = false
     @State private var actionsOut = false
+    @State private var barCompact = false
+    @State private var scrollTrack = ScrollTrack()
+    @State private var choosingSource = false
     @State private var introOpen = false
     @State private var cachedChapters = 0
+    private final class ScrollTrack { var turn: CGFloat = 0 }
 
     private var allItems: [LegadoSearchItem] { items + alternatives.filter { candidate in !items.contains { $0.id == candidate.id } } }
     @ObservedObject private var store = NovelStore.shared
@@ -470,45 +491,48 @@ struct NovelWebDetailView: View {
             VStack(alignment: .leading, spacing: 0) {
                 hero
                 metricsStrip.padding(.top, 4)
-                actionRow
-                    .padding(.horizontal, 16)
-                    .padding(.top, 15)
+                readButton(height: 52)
+                    .accessibilityIdentifier("detail.read")
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
                     .compatOnFrame(in: .named("novelDetail")) { f in
-                        let out = f.maxY < 60
-                        if actionsOut != out { withAnimation(DS.panel) { actionsOut = out } }
+                        let out = f.maxY < 100
+                        if actionsOut != out { actionsOut = out }
                     }
 
                 if !tags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 7) {
                             ForEach(tags, id: \.self) { t in
-                                Text(t).font(.system(size: 12)).foregroundStyle(STVTheme.secondary)
-                                    .padding(.horizontal, 10).frame(height: 24)
+                                Text(t).dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary)
+                                    .padding(.horizontal, 10).frame(minHeight: 26)
                                     .background(Capsule().fill(STVTheme.glass))
                             }
                         }
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, 20)
                     }
-                    .padding(.top, 15)
+                    .compatScrollBounceBasedOnSize(axes: .horizontal)
+                    .padding(.top, 16)
                 }
 
                 if !intro.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(intro)
-                            .font(.system(size: 13.5))
+                            .dsFont(14, relativeTo: .subheadline)
                             .lineSpacing(5)
                             .foregroundStyle(STVTheme.secondary)
                             .lineLimit(introOpen ? nil : 4)
                             .textSelection(.enabled)
                         if intro.count > 72 {
-                            Button(introOpen ? "收起" : "展开") { withAnimation(DS.panel) { introOpen.toggle() } }
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(STVTheme.accent)
-                                .buttonStyle(.plain)
+                            Button { withAnimation(DS.panel) { introOpen.toggle() } } label: {
+                                Text(introOpen ? "收起" : "展开").font(.system(size: 13, weight: .semibold)).foregroundStyle(STVTheme.accent)
+                                    .contentShape(Rectangle().inset(by: -8))
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 14)
                 }
 
                 // Open hairline Directory & Source rows (0 cards)
@@ -516,104 +540,97 @@ struct NovelWebDetailView: View {
                     Hairline()
                     Button { read(open: true, chapter: chapterCount > 0 ? chapterCount - 1 : nil) } label: {
                         HStack(spacing: 10) {
-                            Text("目录").font(.system(size: 14, weight: .semibold)).foregroundStyle(STVTheme.text)
+                            Text("目录").dsFont(15, .semibold, relativeTo: .subheadline).foregroundStyle(STVTheme.text)
                             Text(!latest.isEmpty ? "最新：" + latest : (toc?.last?.title ?? onShelf?.chapters.last?.title ?? "暂无章节信息"))
-                                .font(.system(size: 13)).foregroundStyle(STVTheme.secondary).lineLimit(1)
+                                .dsFont(13, relativeTo: .footnote).foregroundStyle(STVTheme.secondary).lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                            if loading && chapterCount == 0 { DSSpinner(size: 15) }
                             if chapterCount > 0 {
-                                Text("共 \(chapterCount) 章").font(.system(size: 13, weight: .medium)).foregroundStyle(STVTheme.secondary)
+                                Text("共 \(chapterCount) 章").dsFont(13, .medium, relativeTo: .footnote).foregroundStyle(STVTheme.secondary)
                             }
                             Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(STVTheme.tertiary)
                         }
-                        .frame(minHeight: 46)
+                        .frame(minHeight: 50)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressScale(scale: 0.99))
                     .disabled(!canOpen)
 
                     Hairline()
 
-                    Menu { sourceMenuContent } label: {
+                    Button { choosingSource = true } label: {
                         HStack(spacing: 10) {
-                            Text("书源").font(.system(size: 14, weight: .semibold)).foregroundStyle(STVTheme.text)
+                            Text("书源").dsFont(15, .semibold, relativeTo: .subheadline).foregroundStyle(STVTheme.text)
                             HStack(spacing: 6) {
                                 Circle().fill(STVTheme.ok).frame(width: 6, height: 6)
-                                Text(item.sourceName).font(.system(size: 13)).foregroundStyle(STVTheme.secondary).lineLimit(1)
+                                Text(item.sourceName).dsFont(13, relativeTo: .footnote).foregroundStyle(STVTheme.secondary).lineLimit(1)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             Text(allItems.count > 1 ? "换源 (\(allItems.count))" : "换源")
-                                .font(.system(size: 13, weight: .semibold)).foregroundStyle(STVTheme.accent)
+                                .dsFont(13, .semibold, relativeTo: .footnote).foregroundStyle(STVTheme.accent)
                             Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(STVTheme.accent)
                         }
-                        .frame(minHeight: 46)
+                        .frame(minHeight: 50)
                         .contentShape(Rectangle())
                     }
+                    .buttonStyle(PressScale(scale: 0.99))
                     .accessibilityIdentifier("detail.source")
 
                     Hairline()
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
 
                 // Open hairline Preview Chapters (0 cards)
                 if !isMedia, chapterCount > 0 {
                     VStack(alignment: .leading, spacing: 0) {
                         HStack(alignment: .firstTextBaseline) {
-                            Text("试读章节").font(.system(size: 16.5, weight: .bold)).foregroundStyle(STVTheme.text)
+                            Text("试读章节").dsFont(18, .bold, relativeTo: .title3).foregroundStyle(STVTheme.text)
                             Spacer()
-                            Text("点击直接阅读").font(.system(size: 12)).foregroundStyle(STVTheme.tertiary)
+                            Text("点击直接阅读").dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.tertiary)
                         }
-                        .padding(.top, 18).padding(.bottom, 6)
+                        .padding(.top, 22).padding(.bottom, 6)
 
                         ForEach(0..<min(3, chapterCount), id: \.self) { index in
                             if index > 0 { Hairline() }
                             Button { read(open: true, chapter: index) } label: {
                                 HStack(spacing: 10) {
                                     Text(String(format: "%02d", index + 1))
-                                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(STVTheme.tertiary)
+                                        .font(.system(size: 12, weight: .semibold).monospacedDigit()).foregroundStyle(STVTheme.tertiary)
                                         .frame(width: 20, alignment: .leading)
-                                    Text(toc?[index].title ?? onShelf?.chapters[index].title ?? "")
-                                        .font(.system(size: 14)).foregroundStyle(STVTheme.text).lineLimit(1)
+                                    Text(chapterTitle(index))
+                                        .dsFont(15, relativeTo: .subheadline).foregroundStyle(STVTheme.text).lineLimit(1)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                     if index == 0 { DSStatus(text: "试读", tone: .accent) }
                                     Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(STVTheme.tertiary)
                                 }
-                                .frame(minHeight: 43)
+                                .frame(minHeight: 48)
                                 .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressScale(scale: 0.99))
                         }
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 20)
                 }
 
-                if findingSources {
-                    HStack(spacing: 8) {
-                        ProgressView("正在查找其他书源…").font(.system(size: 13))
-                        Button("停止") { sourceTask?.cancel() }.font(.system(size: 13, weight: .semibold)).foregroundStyle(STVTheme.accent)
-                    }
-                    .padding(.horizontal, 16).padding(.top, 14)
-                }
-                if loading {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text("正在读取目录…").font(.system(size: 13)).foregroundStyle(STVTheme.secondary)
-                    }
-                    .padding(.horizontal, 16).padding(.top, 14)
-                }
                 if let error {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(error).font(.system(size: 13)).foregroundStyle(STVTheme.accentWarm)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(error).dsFont(13, relativeTo: .footnote).foregroundStyle(STVTheme.accentWarm)
                         Button { Task { await load() } } label: { MiniButtonLabel(title: "重试") }.buttonStyle(PressScale())
                     }
-                    .padding(.horizontal, 16).padding(.top, 12)
+                    .padding(.horizontal, 20).padding(.top, 14)
                 }
             }
             .padding(.bottom, 108)
+            .compatScrollContent()
         }
         .coordinateSpace(name: "novelDetail")
         .compatOnScrolled(threshold: 210) { value in
             if pinned != value { pinned = value }
+        }
+        .compatOnScrollY { y in
+            if y > scrollTrack.turn + 36 { scrollTrack.turn = y; if !barCompact { barCompact = true } }
+            else if y < scrollTrack.turn - 36 { scrollTrack.turn = y; if barCompact { barCompact = false } }
         }
         .scrollIndicators(.hidden)
         .ignoresSafeArea(edges: .top)
@@ -633,6 +650,7 @@ struct NovelWebDetailView: View {
         .onDisappear { sourceTask?.cancel() }
         .fullScreenCover(item: $reading) { NovelReaderView(book: $0) }
         .sheet(item: $downloadBook) { book in NovelDownloadView(book: book) }
+        .sheet(isPresented: $choosingSource) { sourceSheet }
         .fullScreenCover(isPresented: $showingMedia) {
             if let source {
                 NovelMediaPlayer(
@@ -650,69 +668,128 @@ struct NovelWebDetailView: View {
         }
     }
 
-    @ViewBuilder private var sourceMenuContent: some View {
-        ForEach(allItems.indices, id: \.self) { i in
-            Button { pick = i } label: { Label(allItems[i].sourceName, systemImage: i == pick ? "checkmark" : "book") }
+    private func chapterTitle(_ i: Int) -> String {
+        if let toc, toc.indices.contains(i) { return toc[i].title }
+        if let c = onShelf?.chapters, c.indices.contains(i) { return c[i].title }
+        return ""
+    }
+
+    /// 换源: every known source of this book, plus the search for more.
+    private var sourceSheet: some View {
+        DSSheet("换源", subtitle: "共 \(allItems.count) 个可用书源") {
+            DSOptionList(options: Array(allItems.indices), selected: pick, label: { allItems.indices.contains($0) ? allItems[$0].sourceName : "" },
+                         note: { allItems.indices.contains($0) ? (allItems[$0].latest.isEmpty ? nil : "最新：" + allItems[$0].latest) : nil }) { i in
+                pick = i
+                choosingSource = false
+            }
+        } footer: {
+            DSSheetFooter {
+                if findingSources {
+                    HStack(spacing: 10) {
+                        DSSpinner(size: 16)
+                        Text("正在查找其他书源…").dsFont(14, relativeTo: .subheadline).foregroundStyle(STVTheme.secondary)
+                        Spacer(minLength: 0)
+                        Button { sourceTask?.cancel() } label: { MiniButtonLabel(title: "停止") }.buttonStyle(PressScale())
+                    }
+                    .frame(minHeight: 48)
+                } else {
+                    Button { sourceTask?.cancel(); sourceTask = Task { await findSources() } } label: { PillButtonPlain(title: "搜索其他书源", icon: "magnifyingglass") }
+                        .buttonStyle(PressScale(scale: 0.98))
+                }
+            }
         }
-        Button("搜索其他书源") { sourceTask?.cancel(); sourceTask = Task { await findSources() } }
+        .dsSheetChrome()
     }
 
     private var navBar: some View {
-        HStack(spacing: 0) {
-            DSBackButton(tone: pinned ? .glass : .overlay) { dismiss() }.frame(width: 96, alignment: .leading)
-            Text(title).font(.system(size: 17, weight: .semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
-                .frame(maxWidth: .infinity)
-                .opacity(pinned ? 1 : 0).offset(y: pinned ? 0 : 6)
-            Color.clear.frame(width: 96, height: 1)
+        LiquidGlassGroup(spacing: 12) {
+            ZStack {
+                Text(title).dsFont(17, .semibold, relativeTo: .headline).foregroundStyle(STVTheme.text).lineLimit(1)
+                    .padding(.horizontal, 112)
+                    .opacity(pinned ? 1 : 0).offset(y: pinned ? 0 : 6)
+                    .accessibilityHidden(!pinned)
+                HStack(spacing: 0) {
+                    DSBackButton(tone: pinned ? .glass : .overlay) { dismiss() }
+                    Spacer(minLength: 0)
+                    HStack(spacing: 0) {
+                        barIcon(onShelf == nil ? "bookmark" : "bookmark.fill", active: onShelf != nil, enabled: canOpen && onShelf == nil && !isMedia) { read(open: false) }
+                            .accessibilityLabel(onShelf == nil ? "加入书架" : "已在书架")
+                            .accessibilityIdentifier("detail.add")
+                        barIcon("arrow.down.to.line", active: false, enabled: canOpen && !isMedia) { downloadBook = onShelf ?? store.addWeb(item, info: info, toc: toc ?? []) }
+                            .accessibilityLabel("下载")
+                            .accessibilityIdentifier("detail.download")
+                    }
+                    .liquidGlassCapsule(tone: pinned ? .regular : .clear, interactive: true, onMedia: !pinned)
+                }
+            }
         }
         .frame(height: 44)
-        .padding(.horizontal, 16).padding(.bottom, 6)
-        .dsPinned(pinned)
+        .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 8)
+        .background { LiquidEdgeFade(visible: pinned) }
         .animation(.easeOut(duration: 0.2), value: pinned)
     }
 
-    @ViewBuilder private var floatingBar: some View {
-        if canOpen, actionsOut {
-            HStack(spacing: 10) {
-                Button { read(open: true) } label: {
-                    PillButtonLabel(title: readLabel, icon: "play.fill", tone: .ink, height: 46, expand: true)
-                }
-                .buttonStyle(PressScale(scale: 0.98))
-                roundAction(icon: onShelf == nil ? "bookmark" : "checkmark", active: onShelf != nil, enabled: canOpen && onShelf == nil && !isMedia, size: 46) {
-                    read(open: false)
-                }
-                roundAction(icon: "arrow.down.to.line", active: false, enabled: canOpen && !isMedia, size: 46) {
-                    downloadBook = onShelf ?? store.addWeb(item, info: info, toc: toc ?? [])
-                }
-            }
-            .padding(8)
-            .dsBar(32)
-            .padding(.horizontal, 16).padding(.bottom, -4)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+    private func barIcon(_ icon: String, active: Bool, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 17, weight: .medium))
+                .foregroundStyle(active ? (pinned ? STVTheme.accent : Color(red: 0.62, green: 0.78, blue: 1)) : (pinned ? STVTheme.text : .white))
+                .compatSymbolReplace()
+                .frame(width: 46, height: 44).contentShape(Rectangle())
         }
+        .buttonStyle(GlassPress())
+        .disabled(!enabled)
+        .opacity(enabled || active ? 1 : 0.5)
+    }
+
+    private func readButton(height: CGFloat, expand: Bool = true) -> some View {
+        Button { read(open: true) } label: {
+            PillButtonLabel(title: readLabel, icon: isMedia ? "play.fill" : "book.fill", tone: .accent, height: height, expand: expand, glass: true)
+        }
+        .buttonStyle(GlassPress())
+        .disabled(!canOpen)
+        .opacity(canOpen ? 1 : 0.45)
+    }
+
+    /// Sticky glass actions, shrinking while the page scrolls down (same behaviour as the drama detail).
+    private var floatingBar: some View {
+        ZStack(alignment: .bottom) {
+            if canOpen, actionsOut {
+                LiquidGlassGroup(spacing: 14) {
+                    HStack(spacing: 10) {
+                        readButton(height: 54, expand: !barCompact)
+                        if !isMedia {
+                            Button { downloadBook = onShelf ?? store.addWeb(item, info: info, toc: toc ?? []) } label: {
+                                Image(systemName: "arrow.down.to.line").font(.system(size: 19, weight: .medium)).foregroundStyle(STVTheme.text)
+                                    .frame(width: 54, height: 54).liquidGlass(Circle(), interactive: true).contentShape(Circle())
+                            }
+                            .buttonStyle(GlassPress()).accessibilityLabel("下载")
+                        }
+                        if barCompact { Spacer(minLength: 0) }
+                    }
+                }
+                .padding(.horizontal, 20).padding(.bottom, 2)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(DS.panel, value: barCompact)
+        .animation(DS.panel, value: actionsOut)
     }
 
     private var hero: some View {
         let cloth = GeneratedBookCover.clothColors(title)
         return ZStack(alignment: .bottomLeading) {
-            Color.clear
-                .frame(height: 286)
-                .overlay {
-                    if let u = coverURL, !u.isEmpty {
-                        CoverView(url: u, corner: 0, maxPixelSize: 320)
-                            .frame(maxWidth: .infinity).frame(height: 380)
-                            .blur(radius: 22, opaque: true).saturation(1.15)
-                    } else {
-                        LinearGradient(colors: [cloth.0, cloth.1], startPoint: .top, endPoint: .bottom)
-                    }
-                }
-                .clipped()
-                .overlay(
+            ZStack {
+                LinearGradient(colors: [cloth.0, cloth.1], startPoint: .top, endPoint: .bottom)
+                if let u = coverURL, !u.isEmpty { CoverBackdrop(url: u) }
+            }
+            .frame(maxWidth: .infinity).frame(height: 304)
+            .liquidBackgroundExtension()
+            .overlay(
                 LinearGradient(
                     stops: [
-                        .init(color: .black.opacity(0.32), location: 0),
-                        .init(color: .black.opacity(0.10), location: 0.36),
-                        .init(color: STVTheme.bg.opacity(0.84), location: 0.78),
+                        .init(color: .black.opacity(0.34), location: 0),
+                        .init(color: .black.opacity(0.08), location: 0.36),
+                        .init(color: STVTheme.bg.opacity(0.80), location: 0.78),
                         .init(color: STVTheme.bg, location: 1),
                     ],
                     startPoint: .top,
@@ -723,43 +800,30 @@ struct NovelWebDetailView: View {
 
             HStack(alignment: .bottom, spacing: 16) {
                 WebCover(url: coverURL, title: title, author: author, corner: 11)
-                    .frame(width: 106, height: 150)
-                    .shadow(color: .black.opacity(0.36), radius: 14, y: 12)
+                    .frame(width: 108, height: 152)
                 VStack(alignment: .leading, spacing: 0) {
-                    Menu { sourceMenuContent } label: {
-                        HStack(spacing: 4) {
-                            Text(allItems.count > 1 ? "\(item.sourceName) · \(allItems.count) 源" : item.sourceName)
-                                .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(STVTheme.accent).lineLimit(1)
-                            Image(systemName: "chevron.down").font(.system(size: 9.5, weight: .bold)).foregroundStyle(STVTheme.accent)
-                        }
-                        .padding(.horizontal, 9).frame(height: 23)
-                        .background(STVTheme.accentSoft, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    Button { choosingSource = true } label: {
+                        DSHeroTag(text: allItems.count > 1 ? "\(item.sourceName) · \(allItems.count) 源" : item.sourceName, trailingIcon: "chevron.down")
+                        .contentShape(Rectangle().inset(by: -10))
                     }
+                    .buttonStyle(PressScale())
                     Text(title)
-                        .font(.system(size: 23, weight: .heavy))
+                        .dsFont(23, .heavy, relativeTo: .title2)
                         .foregroundStyle(STVTheme.text)
                         .lineLimit(2)
                         .padding(.top, 8)
                     if !author.isEmpty || !tags.isEmpty {
-                        HStack(spacing: 0) {
-                            if !author.isEmpty {
-                                Text(author).font(.system(size: 13)).foregroundStyle(STVTheme.secondary).lineLimit(1)
-                            }
-                            let kindText = tags.prefix(2).joined(separator: " · ")
-                            if !kindText.isEmpty {
-                                Text(author.isEmpty ? kindText : " · " + kindText)
-                                    .font(.system(size: 13)).foregroundStyle(STVTheme.secondary).lineLimit(1)
-                            }
-                        }
-                        .padding(.top, 6)
+                        Text([author, tags.prefix(2).joined(separator: " · ")].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .dsFont(13, relativeTo: .footnote).foregroundStyle(STVTheme.secondary).lineLimit(1)
+                            .padding(.top, 6)
                     }
                 }
                 .padding(.bottom, 2)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 18).padding(.bottom, 12)
+            .padding(.horizontal, 20).padding(.bottom, 12)
         }
-        .frame(height: 286)
+        .frame(height: 304)
     }
 
     private var metricsStrip: some View {
@@ -776,57 +840,18 @@ struct NovelWebDetailView: View {
         }
         .padding(.vertical, 13)
         .dsCard(18)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 20)
     }
 
     private func metricCell(value: String, unit: String, label: String) -> some View {
         VStack(spacing: 2) {
             HStack(alignment: .lastTextBaseline, spacing: 2) {
-                Text(value).font(.system(size: 17, weight: .bold)).foregroundStyle(STVTheme.text).lineLimit(1)
-                if !unit.isEmpty { Text(unit).font(.system(size: 11.5, weight: .medium)).foregroundStyle(STVTheme.secondary) }
+                Text(value).dsFont(17, .bold, relativeTo: .headline).foregroundStyle(STVTheme.text).lineLimit(1)
+                if !unit.isEmpty { Text(unit).dsFont(11, .medium, relativeTo: .caption2).foregroundStyle(STVTheme.secondary) }
             }
-            Text(label).font(.system(size: 11)).foregroundStyle(STVTheme.tertiary)
+            Text(label).dsFont(11, relativeTo: .caption2).foregroundStyle(STVTheme.tertiary)
         }
         .frame(maxWidth: .infinity)
-    }
-
-    private var actionRow: some View {
-        HStack(spacing: 10) {
-            Button { read(open: true) } label: {
-                PillButtonLabel(title: readLabel, icon: "play.fill", tone: .ink, height: 48, expand: true)
-            }
-            .buttonStyle(PressScale(scale: 0.98))
-            .disabled(!canOpen)
-            .opacity(canOpen ? 1 : 0.45)
-            .accessibilityIdentifier("detail.read")
-
-            roundAction(icon: onShelf == nil ? "bookmark" : "checkmark", active: onShelf != nil, enabled: canOpen && onShelf == nil && !isMedia, size: 48) {
-                read(open: false)
-            }
-            .accessibilityLabel(onShelf == nil ? "加入书架" : "已在书架")
-            .accessibilityIdentifier("detail.add")
-
-            roundAction(icon: "arrow.down.to.line", active: false, enabled: canOpen && !isMedia, size: 48) {
-                downloadBook = onShelf ?? store.addWeb(item, info: info, toc: toc ?? [])
-            }
-            .accessibilityLabel("下载")
-            .accessibilityIdentifier("detail.download")
-        }
-    }
-
-    private func roundAction(icon: String, active: Bool, enabled: Bool, size: CGFloat, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(active ? STVTheme.accent : STVTheme.text)
-                .frame(width: size, height: size)
-                .background(Circle().fill(active ? STVTheme.accentSoft : STVTheme.glass))
-                .overlay(Circle().strokeBorder(active ? STVTheme.accentLine : STVTheme.hairline, lineWidth: 1))
-                .contentShape(Circle())
-        }
-        .buttonStyle(PressScale())
-        .disabled(!enabled)
-        .opacity(enabled || active ? 1 : 0.42)
     }
 
     private func findSources() async {

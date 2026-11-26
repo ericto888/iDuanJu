@@ -279,12 +279,36 @@ object PlayerPrefs {
     /** 播完连刷推荐: after the final episode, continue with a recommended drama. */
     fun getAutoContinueNextDrama(ctx: Context): Boolean = prefs(ctx).getBoolean("auto_continue_next_drama", true)
     fun setAutoContinueNextDrama(ctx: Context, on: Boolean) = prefs(ctx).edit().putBoolean("auto_continue_next_drama", on).apply()
+    fun getAutoNext(ctx: Context): Boolean = prefs(ctx).getBoolean("auto_next", true)
+    fun setAutoNext(ctx: Context, on: Boolean) = prefs(ctx).edit().putBoolean("auto_next", on).apply()
+    fun getDanmaku(ctx: Context): Boolean = prefs(ctx).getBoolean("danmaku_on", true)
+    fun setDanmaku(ctx: Context, on: Boolean) = prefs(ctx).edit().putBoolean("danmaku_on", on).apply()
     fun getAmbientMode(ctx: Context): Boolean = getAmbientLevel(ctx) > 0
     fun setAmbientMode(ctx: Context, on: Boolean) = setAmbientLevel(ctx, if (on) 2 else 0)
 }
 
+/**
+ * GPU enhancement of one player. `setVideoEffects`, even with an empty list, routes every frame through Media3's
+ * effect pipeline (GL set-up before the first frame, extra copies afterwards), so it is only ever called once an
+ * enhancement is really on; a running player is re-prepared in place because the renderer builds that pipeline after
+ * a reset only.
+ */
 @OptIn(UnstableApi::class)
-fun installVideoEnhance(player: ExoPlayer, effect: VideoEnhanceEffect?) {
-    runCatching { player.setVideoEffects(listOfNotNull(effect)) }
-        .onFailure { Log.w("IDJ", "setVideoEffects failed", it) }
+class VideoEnhancer(private val player: ExoPlayer, private val effect: VideoEnhanceEffect) {
+    private var pipeline = false
+
+    fun install(on: Boolean, live: Boolean) {
+        if (!on && !pipeline) return
+        val effects = if (on) listOf(effect) else emptyList()
+        runCatching {
+            val first = !pipeline
+            pipeline = true
+            player.setVideoEffects(effects)
+            if (first && player.playbackState != androidx.media3.common.Player.STATE_IDLE) {
+                player.stop()
+                if (live) player.seekToDefaultPosition()
+                player.prepare()
+            }
+        }.onFailure { Log.w("IDJ", "setVideoEffects failed", it) }
+    }
 }

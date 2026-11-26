@@ -3,13 +3,8 @@ package app.iduanju.novel
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -18,13 +13,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.automirrored.rounded.ArrowBackIos
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.rounded.BookmarkAdd
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material3.*
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +45,9 @@ import androidx.compose.ui.unit.sp
 import app.iduanju.core.novel.*
 import app.iduanju.ui.components.*
 import app.iduanju.ui.theme.IdjThemeColors
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
 /** Aligned with short-drama DetailScreen: blurred cover hero, single 3-column metrics strip, ink CTA + round actions, open hairline sections. */
 @Composable
@@ -93,28 +94,37 @@ internal fun NovelBookDetail(
     var introExpanded by remember { mutableStateOf(false) }
     var introHasOverflow by remember { mutableStateOf(false) }
     val tags = remember(kind) { kind.split('·', '/', ',', '，', '|').map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(5) }
+    // Local backdrop of the page content: the back button and the floating bar are siblings drawn on top of it.
+    val ground = c.bg
+    val pageBackdrop = rememberLayerBackdrop {
+        drawRect(ground)
+        drawContent()
+    }
+    val contentWidth = LocalLayoutMetrics.current.detailMaxWidth
 
-    Box(Modifier.fillMaxSize().background(c.bg).testTag("novel.detail")) {
+    Box(Modifier.fillMaxSize().background(c.bg).testTag("novel.detail"), contentAlignment = Alignment.TopCenter) {
+      Box(Modifier.fillMaxSize().layerBackdrop(pageBackdrop), contentAlignment = Alignment.TopCenter) {
         Column(
             Modifier
+                .then(if (contentWidth != Dp.Unspecified) Modifier.widthIn(max = contentWidth) else Modifier)
                 .fillMaxSize()
                 .verticalScroll(scroll)
                 .navigationBarsPadding()
                 .padding(bottom = 96.dp),
         ) {
             // 1. Blurred cover hero (exact sibling to DetailScreen DetailHero)
-            Box(Modifier.fillMaxWidth().height(286.dp)) {
-                Box(Modifier.fillMaxSize().clipToBounds()) {
+            Box(Modifier.fillMaxWidth().heightIn(min = 286.dp)) {
+                Box(Modifier.matchParentSize().clipToBounds()) {
                     if (cover.isNotBlank()) {
                         NovelBlurredBackdrop(cover, Modifier.fillMaxSize(), radius = 30.dp)
                     } else {
-                        val (c1, c2) = bookCoverBaseColor(title)
+                        val (c1, c2) = remember(title) { bookCoverBaseColor(title) }
                         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(c1, c2))))
                     }
                 }
                 Box(
                     Modifier
-                        .fillMaxSize()
+                        .matchParentSize()
                         .background(
                             Brush.verticalGradient(
                                 0f to Color.Black.copy(0.32f),
@@ -128,21 +138,22 @@ internal fun NovelBookDetail(
                     Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth()
+                        .statusBarsPadding()
                         .padding(horizontal = 18.dp)
-                        .padding(bottom = 12.dp),
+                        .padding(top = 52.dp, bottom = 12.dp),
                     verticalAlignment = Alignment.Bottom,
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    NovelPoster(displayBook, Modifier.size(106.dp, 150.dp), corner = 11.dp)
+                    NovelPoster(displayBook, Modifier.size(106.dp, 150.dp), corner = 11.dp, thumb = 106.dp)
                     Column(Modifier.weight(1f).padding(bottom = 2.dp)) {
                         if (sourceName.isNotBlank()) {
                             Row(
                                 Modifier
-                                    .height(23.dp)
+                                    .heightIn(min = 24.dp)
                                     .clip(RoundedCornerShape(7.dp))
                                     .background(c.accentSoft)
                                     .pressClick(0.96f) { sourceMenu = true }
-                                    .padding(horizontal = 9.dp),
+                                    .padding(horizontal = 9.dp, vertical = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(3.dp),
                             ) {
@@ -198,7 +209,7 @@ internal fun NovelBookDetail(
                     .padding(horizontal = 16.dp)
                     .padding(top = 4.dp)
                     .fillMaxWidth()
-                    .dsCard(18.dp)
+                    .dsCard(20.dp)
                     .padding(vertical = 13.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -264,12 +275,7 @@ internal fun NovelBookDetail(
             }
 
             if (downloading) {
-                LinearProgressIndicator(
-                    progress = { downloadProgress },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp),
-                    color = c.accent,
-                    trackColor = c.glassBorder,
-                )
+                GlassProgressBar({ downloadProgress }, Modifier.padding(horizontal = 16.dp).padding(top = 12.dp))
             }
 
             // 4. Open tags + folding synopsis (0 cards)
@@ -279,8 +285,8 @@ internal fun NovelBookDetail(
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
                 ) {
-                    items(tags) { tag ->
-                        Box(Modifier.height(24.dp).clip(CircleShape).background(c.glass).padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
+                    items(tags, key = { it }, contentType = { "tag" }) { tag ->
+                        Box(Modifier.heightIn(min = 24.dp).clip(CircleShape).background(c.glass).padding(horizontal = 10.dp, vertical = 3.dp), contentAlignment = Alignment.Center) {
                             Text(tag, color = c.secondary, fontSize = 12.sp, maxLines = 1)
                         }
                     }
@@ -299,13 +305,12 @@ internal fun NovelBookDetail(
                         modifier = Modifier.testTag("novel.detail.intro"),
                     )
                     if (introHasOverflow || introExpanded) {
-                        Text(
+                        GlassTextButton(
                             if (introExpanded) "收起" else "展开",
-                            color = c.accent,
+                            Modifier.offset(x = (-12).dp),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(top = 4.dp).clickable { introExpanded = !introExpanded },
-                        )
+                        ) { introExpanded = !introExpanded }
                     }
                 }
             }
@@ -356,9 +361,9 @@ internal fun NovelBookDetail(
                         Text(if (sourceCount > 1) "换源 ($sourceCount)" else "换源", color = c.accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         Icon(Icons.Outlined.ChevronRight, null, Modifier.size(16.dp), tint = c.accent)
                     }
-                    DropdownMenu(sourceMenu, { sourceMenu = false }) {
-                        DropdownMenuItem(text = { Text(sourceName) }, onClick = { sourceMenu = false }, trailingIcon = { Icon(Icons.Outlined.Check, null) })
-                        DropdownMenuItem(text = { Text("搜索其他书源") }, onClick = { sourceMenu = false; onSwitch() })
+                    GlassMenu(sourceMenu, { sourceMenu = false }) {
+                        GlassMenuItem(sourceName, selected = true) { sourceMenu = false }
+                        GlassMenuItem("搜索其他书源", icon = Icons.Rounded.Search) { sourceMenu = false; onSwitch() }
                     }
                 }
                 Hairline()
@@ -379,7 +384,7 @@ internal fun NovelBookDetail(
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .heightIn(min = 43.dp)
+                                .heightIn(min = 46.dp)
                                 .pressClick(0.985f, enabled = enabled) { onRead(index) }
                                 .padding(vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -400,36 +405,31 @@ internal fun NovelBookDetail(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = c.accent)
+                    GlassSpinner(size = 16.dp, stroke = 2.dp)
                     Text("正在读取目录…", color = c.secondary, fontSize = 13.sp)
                 }
             }
             if (error != null) {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                    Text(error, color = c.danger, fontSize = 13.sp, lineHeight = 19.sp)
                     MiniButton("重试", onRetry)
                 }
             }
         }
+      }
 
         // Pinned translucent nav bar matching DetailScreen
-        Box(Modifier.fillMaxWidth().dsPinned(pinned)) {
-            DSNavBar(
-                title = title,
-                modifier = Modifier.statusBarsPadding().padding(bottom = 6.dp),
-                titleAlpha = animateFloatAsState(if (pinned) 1f else 0f, label = "novelDetailNav").value,
-                leading = { BackButton(if (pinned) Tone.Glass else Tone.Overlay, onBack) },
-            )
-        }
+        DetailNav(title, pinned, pageBackdrop, onBack)
 
         // Floating glass bar when scrolled past hero actions (exact sibling to DetailScreen playbar)
         AnimatedVisibility(
             visible = enabled && actionsOut,
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 16.dp).padding(bottom = 8.dp),
-            enter = slideInVertically(DS.panel()) { it } + fadeIn(),
-            exit = slideOutVertically(DS.panel()) { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 16.dp).padding(bottom = 8.dp)
+                .then(if (contentWidth != Dp.Unspecified) Modifier.widthIn(max = contentWidth) else Modifier),
+            enter = Motion.riseEnter,
+            exit = Motion.riseExit,
         ) {
-            Row(Modifier.fillMaxWidth().dsBar(32.dp).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(32.dp), backdrop = pageBackdrop, shadowRadius = 20.dp).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 PillButton(readLabel, Modifier.weight(1f), icon = Icons.Rounded.PlayArrow, tone = PillTone.Ink, height = 46.dp, enabled = enabled) { onRead(null) }
                 DetailRoundAction(
                     icon = if (onShelf) Icons.Rounded.Check else Icons.Rounded.BookmarkAdd,
@@ -449,6 +449,27 @@ internal fun NovelBookDetail(
                 )
             }
         }
+    }
+}
+
+/** Own scope, so the title fade recomposes the bar only. */
+@Composable
+private fun DetailNav(title: String, pinned: Boolean, backdrop: Backdrop, onBack: () -> Unit) {
+    val c = IdjThemeColors
+    val alpha by animateFloatAsState(if (pinned) 1f else 0f, Motion.fade(), label = "novelDetailNav")
+    Box(Modifier.fillMaxWidth().dsPinned(pinned)) {
+        DSNavBar(
+            title = title,
+            modifier = Modifier.statusBarsPadding().padding(bottom = 6.dp),
+            titleAlpha = alpha,
+            leading = {
+                // over the hero: dark glass + white glyph; pinned: theme glass
+                GlassIconButton(
+                    Icons.AutoMirrored.Rounded.ArrowBackIos, "返回", backdrop = backdrop, size = 36.dp, iconSize = 18.dp,
+                    dark = !pinned || c.dark, fallbackAlpha = if (pinned) 0.70f else 0.30f, onClick = onBack,
+                )
+            },
+        )
     }
 }
 

@@ -51,7 +51,8 @@ import UIKit
         transport.acceptingRequests = false
         transport.expectPaused(true)
         statusObservation = nil
-        guard let item = PlaybackCoordinator.makeItem(src) else { throw URLError(.badURL) }
+        guard let item = PlaybackCoordinator.makeItem(src, stream: stream) else { throw URLError(.badURL) }
+        awaitingFirstPlay = true
         item.nowPlayingInfo = [MPMediaItemPropertyTitle: title]
         audioGroup = nil; legibleGroup = nil; audioTracks = []; subtitleTracks = []; selectedAudio = nil; selectedSubtitle = nil
         player.replaceCurrentItem(with: item)
@@ -81,10 +82,19 @@ import UIKit
         Task { [weak self] in await self?.refreshTracks(item) }
     }
 
+    /// Set by `load`: the first play of an item starts on the first decodable data instead of waiting until
+    /// AVPlayer predicts it can play through (that prediction is what makes slow CDNs sit on a spinner).
+    private var awaitingFirstPlay = false
+
     func play(rate: Double) {
         transport.expectPaused(false)
         player.defaultRate = Float(rate)
-        player.play()
+        if awaitingFirstPlay {
+            awaitingFirstPlay = false
+            player.playImmediately(atRate: Float(rate))
+        } else {
+            player.play()
+        }
     }
 
     func pause() { transport.expectPaused(true); player.pause() }
@@ -130,15 +140,22 @@ import UIKit
 
     // MARK: Tracks (AVMediaSelection)
 
+    /// `displayName` is "Unknown language" (in the system's language) for tracks without one.
+    private static func title(_ o: AVMediaSelectionOption, _ fallback: String) -> String {
+        let tag = o.extendedLanguageTag ?? o.locale?.identifier ?? ""
+        let named = o.commonMetadata.contains { $0.commonKey == .commonKeyTitle }
+        return (tag.isEmpty || tag == "und") && !named ? fallback : o.displayName(with: Locale(identifier: "zh-Hans"))
+    }
+
     private func refreshTracks(_ item: AVPlayerItem) async {
         if let g = try? await item.asset.loadMediaSelectionGroup(for: .audible) {
             audioGroup = g
-            audioTracks = g.options.enumerated().map { MediaTrack(id: $0.offset, title: $0.element.displayName, language: $0.element.extendedLanguageTag) }
+            audioTracks = g.options.enumerated().map { MediaTrack(id: $0.offset, title: Self.title($0.element, "音轨 \($0.offset + 1)"), language: $0.element.extendedLanguageTag) }
             selectedAudio = item.currentMediaSelection.selectedMediaOption(in: g).flatMap { g.options.firstIndex(of: $0) }
         }
         if let g = try? await item.asset.loadMediaSelectionGroup(for: .legible) {
             legibleGroup = g
-            subtitleTracks = g.options.enumerated().map { MediaTrack(id: $0.offset, title: $0.element.displayName, language: $0.element.extendedLanguageTag) }
+            subtitleTracks = g.options.enumerated().map { MediaTrack(id: $0.offset, title: Self.title($0.element, "字幕 \($0.offset + 1)"), language: $0.element.extendedLanguageTag) }
             selectedSubtitle = item.currentMediaSelection.selectedMediaOption(in: g).flatMap { g.options.firstIndex(of: $0) }
         }
     }

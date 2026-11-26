@@ -17,20 +17,9 @@ struct HongguoLoginView: View {
     @State private var loggedInName: String?
 
     var body: some View {
-        NavigationStack {
+        DSSheet("红果短剧扫码登录", subtitle: "使用红果短剧 App 扫描下方二维码，同步本机观看进度") {
             ScrollView {
                 VStack(spacing: 20) {
-                    VStack(spacing: 6) {
-                        Text("红果短剧扫码登录")
-                            .font(.title2.weight(.heavy))
-                            .foregroundStyle(STVTheme.text)
-                        Text("使用红果短剧 App 扫描下方二维码，同步本机观看进度")
-                            .font(.subheadline)
-                            .foregroundStyle(STVTheme.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding(.top, 12)
-
                     // QR card
                     VStack(spacing: 14) {
                         ZStack {
@@ -42,7 +31,7 @@ struct HongguoLoginView: View {
                                 VStack(spacing: 10) {
                                     Image(systemName: "checkmark.circle.fill")
                                         .font(.system(size: 48))
-                                        .foregroundStyle(.green)
+                                        .foregroundStyle(STVTheme.ok)
                                     Text("已登录：\(loggedInName)")
                                         .font(.headline)
                                         .foregroundStyle(.black)
@@ -70,12 +59,12 @@ struct HongguoLoginView: View {
                                         }
                                         .foregroundStyle(.black)
                                         .padding(14)
-                                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                                        .background(.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                                     }
                                 }
                             } else {
                                 VStack(spacing: 10) {
-                                    ProgressView().tint(.gray)
+                                    DSSpinner(size: 24, tint: .gray)
                                     Text("正在获取二维码…")
                                         .font(.caption)
                                         .foregroundStyle(.gray)
@@ -89,35 +78,22 @@ struct HongguoLoginView: View {
                     }
                     .padding(22)
                     .frame(maxWidth: 320)
-                    .background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(STVTheme.hairline, lineWidth: 1))
+                    .dsCard(24)
 
                     HStack(spacing: 12) {
                         Button {
                             saveNotice = nil
                             qrStatus = "loading"
                             refreshNonce += 1
-                        } label: {
-                            Label("刷新二维码", systemImage: "arrow.clockwise")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(STVTheme.surface, in: Capsule())
-                        }
-                        .foregroundStyle(STVTheme.text)
+                        } label: { PillButtonPlain(title: "刷新二维码", icon: "arrow.clockwise") }
+                            .buttonStyle(PressScale())
 
                         if let qrImage {
                             Button {
                                 UIImageWriteToSavedPhotosAlbum(qrImage, nil, nil, nil)
                                 saveNotice = "已保存二维码到相册，可在红果短剧 App 内相册扫码"
-                            } label: {
-                                Label("保存到相册", systemImage: "square.and.arrow.down")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 12)
-                                    .background(STVTheme.accent, in: Capsule())
-                            }
-                            .foregroundStyle(.white)
+                            } label: { PillButtonLabel(title: "保存到相册", icon: "square.and.arrow.down", expand: true) }
+                                .buttonStyle(PressScale())
                         }
                     }
                     .frame(maxWidth: 320)
@@ -143,11 +119,9 @@ struct HongguoLoginView: View {
                                 }
                             }
                         } label: {
-                            Text("我已扫码确认，立即检查登录状态")
-                                .font(.footnote.weight(.medium))
-                                .foregroundStyle(STVTheme.accent)
-                                .padding(.vertical, 6)
+                            MiniButtonLabel(title: "我已扫码确认，立即检查登录状态")
                         }
+                        .buttonStyle(PressScale())
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -181,12 +155,6 @@ struct HongguoLoginView: View {
                 .clipped()
                 .ignoresSafeArea()
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { dismiss() }
-                }
-            }
             .onChange(of: scenePhase) { phase in
                 if phase == .active, loggedInName == nil {
                     checkNonce += 1
@@ -215,6 +183,9 @@ struct HongguoLoginView: View {
                 }
             }
         }
+        // The hidden login page sits behind an opaque ground, so this sheet is full height and not glass.
+        .dsSheetChrome([.large])
+        .compatPresentationBackground(STVTheme.bg)
     }
 
     private func completeLogin(nickname: String, avatarUrl: String) {

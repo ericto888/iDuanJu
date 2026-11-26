@@ -61,7 +61,8 @@ enum J {
     static func int(_ v: Any?) -> Int {
         switch v {
         case let n as NSNumber: return n.intValue
-        case let s as String: return Int(s) ?? Int(Double(s) ?? 0)
+        // "NaN", "Infinity" and 1e400 arrive from real sites; a plain conversion of those traps
+        case let s as String: return Int(s) ?? Double(s).flatMap { Int(exactly: $0.rounded(.towardZero)) } ?? 0
         default: return 0
         }
     }

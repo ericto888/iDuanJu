@@ -298,6 +298,8 @@ struct DanmakuOverlay: View {
     let co: PlaybackCoordinator
     let seriesId: String
     let vid: String
+    /// 弹幕 file delivered by the source (TVBox); nil = 红果 comments.
+    var source: String? = nil
     var landscape = false
     /// Screen-space y of lane 0 (the overlay itself covers the whole screen).
     var laneTop: CGFloat = 96
@@ -372,9 +374,15 @@ struct DanmakuOverlay: View {
 
     private func load() async {
         raw = []; placed = []; parsedColors = []; key = ""
-        guard !vid.isEmpty, seriesId.allSatisfy(\.isNumber) else { return }
-        settings.status = "弹幕加载中…"
-        let r = await HGDanmakuClient.shared.fetch(seriesId: seriesId, vid: vid)
+        let r: HGDanmakuResult
+        if let source {
+            settings.status = "弹幕加载中…"
+            r = await DanmakuFile.fetch(source, lan: co.streamLan)
+        } else {
+            guard !vid.isEmpty, seriesId.allSatisfy(\.isNumber) else { return }
+            settings.status = "弹幕加载中…"
+            r = await HGDanmakuClient.shared.fetch(seriesId: seriesId, vid: vid)
+        }
         guard !Task.isCancelled else { return }
         raw = r.items
         settings.status = r.items.isEmpty ? r.notice : (r.notice.isEmpty ? "本集 \(r.items.count) 条" : r.notice)

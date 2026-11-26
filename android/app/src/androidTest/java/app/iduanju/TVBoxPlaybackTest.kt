@@ -1,41 +1,44 @@
 package app.iduanju
 
 import android.content.Intent
-import androidx.test.core.app.ActivityScenario
 import android.os.SystemClock
-import org.junit.Assert.assertTrue
+import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
-import app.iduanju.core.cms.CMSSite
-import app.iduanju.core.cms.MacCMS
-import app.iduanju.plugin.PluginStore
+import app.iduanju.core.tvbox.Trust
+import app.iduanju.tvbox.ImportResult
 import app.iduanju.ui.UiEvidence
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 
-/** Opt-in device check against an actual pasted TVBox collection and one caller-selected catalog. */
+/** Opt-in device check against a real TVBox config (`-e tvboxUrl …`) and one caller-selected site (`-e tvboxSite <key>`). */
 class TVBoxPlaybackTest {
-    @Test fun importedCatalogPlaysInSeriesPlayer() {
+    @Test fun importedSitePlaysInSeriesPlayer() {
         val args = InstrumentationRegistry.getArguments()
         val url = args.getString("tvboxUrl")
-        val api = args.getString("cmsApi")
-        assumeTrue(url != null && api != null)
-        val app = IdjApp.instance
-        val config = (app.plugins.interpret(url!!) as PluginStore.Pasted.TVBox).config
-        val site = config.sites.first { it.api == MacCMS.normalize(api!!) }
-        val key = CMSSite.key(site.api)
-        val existing = app.cms.site(key)
-        val saved = existing ?: app.cms.add(site.name, site.api, site.adult, "TVBox QA")
+        val key = args.getString("tvboxSite")
+        assumeTrue(url != null && key != null)
+        val store = IdjApp.instance.tvbox
+        val repo = runBlocking { withContext(Dispatchers.Main) { (store.importUrl(url!!) as ImportResult.Imported).repo.also { store.setTrust(it.id, Trust.Trusted) } } }
         try {
-            val series = MacCMS.list(saved, "", 1).items.first()
+            val site = repo.sites.first { it.site.key == key }
+            val item = runBlocking {
+                val home = store.engine.home(site.uid).toList().last().value
+                home.items.firstOrNull { !it.folder } ?: store.engine.category(site.uid, home.categories.first().id, 1).toList().last().value.items.first { !it.folder }
+            }
             UiEvidence.playerPositionMs = 0
             UiEvidence.playerPlaying = false
             val ctx = InstrumentationRegistry.getInstrumentation().targetContext
-            val intent = Intent(ctx, MainActivity::class.java).putExtra("route", "player/${android.net.Uri.encode(series.seriesId)}/1")
+            val intent = Intent(ctx, MainActivity::class.java).putExtra("route", "player/${android.net.Uri.encode(item.sid)}/1")
             ActivityScenario.launch<MainActivity>(intent).use {
                 val deadline = SystemClock.elapsedRealtime() + 90000
                 while (SystemClock.elapsedRealtime() < deadline && !(UiEvidence.playerPlaying && UiEvidence.playerPositionMs > 2000)) SystemClock.sleep(200)
                 assertTrue("player position ${UiEvidence.playerPositionMs} ms", UiEvidence.playerPlaying && UiEvidence.playerPositionMs > 2000)
             }
-        } finally { if (existing == null) InstrumentationRegistry.getInstrumentation().runOnMainSync { app.cms.remove(key) } }
+        } finally { runBlocking { withContext(Dispatchers.Main) { store.remove(repo.id) } } }
     }
 }

@@ -4,7 +4,6 @@ import SwiftUI
 /// in-app browser. Values are saved as the source's login info; 「登录」 runs the source's `login()`.
 struct NovelSourceLoginView: View {
     let source: LegadoSource
-    @Environment(\.dismiss) private var dismiss
     @State private var fields: [LegadoClient.LoginField] = []
     @State private var values: [String: String] = [:]
     @State private var busy = false
@@ -12,71 +11,85 @@ struct NovelSourceLoginView: View {
     @State private var loggedIn = false
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    HStack {
-                        Text(loggedIn ? "已登录 / 已保存登录信息" : "未登录").foregroundStyle(loggedIn ? .green : .secondary)
-                        Spacer()
-                        if loggedIn { Button("退出登录", role: .destructive) { LegadoSourceState.logout(source.bookSourceUrl); values = [:]; loggedIn = false } }
-                    }
-                }
-                if let url = LegadoClient.loginPage(source) {
-                    Section {
-                        Button {
-                            Task { await LegadoBrowser.open(url: url, html: nil, title: "登录 " + source.bookSourceName, sourceURL: source.bookSourceUrl); refresh() }
-                        } label: { Label("在内置浏览器里登录", systemImage: "safari") }
-                        .accessibilityIdentifier("login.browser")
-                    } footer: { Text("在网页里登录账号后点右上角「完成」，登录状态（Cookie）会用于这个书源的请求。") }
-                }
-                let inputs = fields.filter { $0.type != "button" }
-                if !inputs.isEmpty {
-                    Section {
-                        ForEach(inputs, id: \.name) { f in input(f) }
-                    }
-                }
-                let buttons = fields.filter { $0.type == "button" }
-                if !buttons.isEmpty || LegadoClient.loginJS(source) != nil {
-                    Section {
-                        ForEach(buttons, id: \.name) { f in
-                            Button(f.name) { run(f.action ?? "") }.disabled(busy || (f.action ?? "").isEmpty)
+        let inputs = fields.filter { $0.type != "button" }, buttons = fields.filter { $0.type == "button" }
+        let canLogin = LegadoClient.loginJS(source) != nil
+        DSSheet(source.bookSourceName, subtitle: "书源登录") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    DSSection {
+                        HStack(spacing: 10) {
+                            Circle().fill(loggedIn ? STVTheme.ok : STVTheme.tertiary).frame(width: 8, height: 8)
+                            Text(loggedIn ? "已登录 / 已保存登录信息" : "未登录").dsFont(15, .medium).foregroundStyle(loggedIn ? STVTheme.ok : STVTheme.secondary)
+                            Spacer(minLength: 0)
+                            if loggedIn {
+                                Button { LegadoSourceState.logout(source.bookSourceUrl); values = [:]; loggedIn = false } label: { MiniButtonLabel(title: "退出登录", tint: DSTone.danger, ground: DSTone.dangerSoft) }
+                                    .buttonStyle(PressScale())
+                            }
                         }
-                        if LegadoClient.loginJS(source) != nil {
-                            Button("登录") { save(); run("typeof login === 'function' ? login() : ''") }.disabled(busy)
-                                .accessibilityIdentifier("login.submit")
+                        .dsRow()
+                    }
+                    if let url = LegadoClient.loginPage(source) {
+                        DSSection(footer: "在网页里登录账号后点右上角「完成」，登录状态（Cookie）会用于这个书源的请求。") {
+                            DSRow("在内置浏览器里登录", icon: "safari", chevron: true) {
+                                Task { await LegadoBrowser.open(url: url, html: nil, title: "登录 " + source.bookSourceName, sourceURL: source.bookSourceUrl); refresh() }
+                            }
+                            .accessibilityIdentifier("login.browser")
                         }
-                    } footer: {
-                        if busy { ProgressView() }
+                    }
+                    if !inputs.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(inputs, id: \.name) { f in input(f) }
+                            Button { save(); message = "已保存" } label: { PillButtonPlain(title: "保存") }.buttonStyle(PressScale(scale: 0.98))
+                        }
+                        .padding(.horizontal, 20)
+                    }
+                    if !buttons.isEmpty {
+                        DSSection {
+                            ForEach(buttons, id: \.name) { f in
+                                DSRow(f.name, icon: "bolt") { run(f.action ?? "") }.disabled(busy || (f.action ?? "").isEmpty)
+                            }
+                        }
+                    }
+                    if let message {
+                        Text(message).dsFont(14, .medium, relativeTo: .subheadline).foregroundStyle(STVTheme.accent)
+                            .padding(.horizontal, 20).textSelection(.enabled)
                     }
                 }
-                if let message { Section { Text(message).font(.callout) } }
+                .padding(.bottom, 16)
             }
-            .novelScreen()
-            .navigationTitle(source.bookSourceName)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) { NovelBackButton { dismiss() } }
-                if !fields.filter({ $0.type != "button" }).isEmpty {
-                    ToolbarItem(placement: .navigationBarTrailing) { Button("保存") { save(); message = "已保存" } }
+        } footer: {
+            if canLogin {
+                DSSheetFooter {
+                    Button { save(); run("typeof login === 'function' ? login() : ''") } label: {
+                        ZStack {
+                            PillButtonLabel(title: busy ? "" : "登录", expand: true)
+                            if busy { DSSpinner(size: 18, tint: STVTheme.onAccent) }
+                        }
+                    }
+                    .buttonStyle(PressScale(scale: 0.98))
+                    .disabled(busy)
+                    .accessibilityLabel("登录")
+                    .accessibilityIdentifier("login.submit")
                 }
             }
-            .onAppear {
-                fields = LegadoClient.loginFields(source)
-                values = LegadoSourceState.loginInfo(source.bookSourceUrl)
-                for f in fields where values[f.name] == nil && !f.defaultValue.isEmpty && f.type == "select" { values[f.name] = f.defaultValue }
-                refresh()
-            }
+        }
+        .dsSheetChrome([.large])
+        .onAppear {
+            fields = LegadoClient.loginFields(source)
+            values = LegadoSourceState.loginInfo(source.bookSourceUrl)
+            for f in fields where values[f.name] == nil && !f.defaultValue.isEmpty && f.type == "select" { values[f.name] = f.defaultValue }
+            refresh()
         }
     }
 
     @ViewBuilder private func input(_ f: LegadoClient.LoginField) -> some View {
         let b = Binding(get: { values[f.name] ?? "" }, set: { values[f.name] = $0 })
         switch f.type {
-        case "password": LabeledContent(f.name) { SecureField(f.name, text: b).multilineTextAlignment(.trailing) }
+        case "password": DSTextField(f.name, text: b, icon: "lock", secure: true)
         case "select":
-            Picker(f.name, selection: b) { ForEach(f.options, id: \.self) { Text($0).tag($0) } }
-        default:
-            LabeledContent(f.name) { TextField(f.name, text: b).textInputAutocapitalization(.never).autocorrectionDisabled().multilineTextAlignment(.trailing) }
+            DSPicker(f.name, options: f.options, selection: b, style: .row) { $0 }
+                .background(STVTheme.glass, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        default: DSTextField(f.name, text: b, icon: "person").textInputAutocapitalization(.never).autocorrectionDisabled()
         }
     }
 

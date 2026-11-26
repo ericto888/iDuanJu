@@ -29,36 +29,38 @@ struct ImageViewer: View {
                 .onChanged { v in if abs(v.translation.height) > abs(v.translation.width) { drag = v.translation.height } }
                 .onEnded { v in
                     if abs(v.translation.height) > 120 || abs(v.predictedEndTranslation.height) > 300 { dismiss() }
-                    else { withAnimation(.spring(response: 0.3)) { drag = 0 } }
+                    else { withAnimation(DS.select) { drag = 0 } }
                 })
             VStack {
-                HStack {
-                    Button { dismiss() } label: { Image(systemName: "xmark").font(.headline).padding(12).background(.ultraThinMaterial, in: Circle()) }
-                        .accessibilityIdentifier("viewer.close")
-                    Spacer()
-                    Text("\(index + 1) / \(items.count)").font(.subheadline.monospacedDigit()).foregroundStyle(.white)
-                        .accessibilityIdentifier("viewer.counter")
-                    Spacer()
-                    if let onSave {
-                        Button {
-                            Task {
-                                do { try await onSave(items[index]); toast = "已保存到相册" } catch { toast = error.localizedDescription }
+                LiquidGlassGroup(spacing: 10) {
+                    HStack {
+                        LiquidGlassIconButton(systemName: "xmark", label: "关闭", size: 44, onMedia: true) { dismiss() }
+                            .accessibilityIdentifier("viewer.close")
+                        Spacer()
+                        Text("\(index + 1) / \(items.count)").font(.subheadline.weight(.medium).monospacedDigit()).foregroundStyle(.white)
+                            .padding(.horizontal, 16).frame(height: 36)
+                            .liquidGlassCapsule(tone: .clear, onMedia: true)
+                            .accessibilityIdentifier("viewer.counter")
+                        Spacer()
+                        if let onSave {
+                            LiquidGlassIconButton(systemName: "square.and.arrow.down", label: "保存到相册", size: 44, onMedia: true) {
+                                Task {
+                                    do { try await onSave(items[index]); toast = "已保存到相册" } catch { toast = error.localizedDescription }
+                                }
                             }
-                        } label: { Image(systemName: "square.and.arrow.down").font(.headline).padding(12).background(.ultraThinMaterial, in: Circle()) }
-                            .accessibilityLabel("保存到相册")
-                    } else { Color.clear.frame(width: 44, height: 44) }
+                        } else { Color.clear.frame(width: 44, height: 44) }
+                    }
                 }
-                .foregroundStyle(.white).padding(.horizontal, 16)
+                .padding(.horizontal, 16)
                 Spacer()
-                if let toast { Text(toast).font(.footnote).foregroundStyle(.white).padding(10).background(.black.opacity(0.6), in: Capsule()).padding(.bottom, 30) }
             }
             .opacity(drag == 0 ? 1 : 0)
         }
+        .dsToast($toast, icon: "checkmark.circle.fill", bottom: 30)
         .statusBarHidden()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tg.viewer")
         .preferredColorScheme(.dark)
-        .task(id: toast) { if toast != nil { try? await Task.sleep(for: .seconds(2)); toast = nil } }
     }
 }
 
@@ -87,7 +89,7 @@ struct ZoomableImage: View {
             } else if failed {
                 Image(systemName: "photo").font(.largeTitle).foregroundStyle(.white.opacity(0.4))
             } else {
-                ProgressView().tint(.white)
+                DSSpinner(size: 28, tint: .white.opacity(0.85))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

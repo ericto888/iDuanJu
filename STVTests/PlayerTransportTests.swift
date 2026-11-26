@@ -140,6 +140,79 @@ import AVKit
         XCTAssertNil(co.errors[0]); XCTAssertFalse(e.isPaused); XCTAssertFalse(co.paused)
     }
 
+    /// Two lines of three episodes; the resolver serves the same fixture for every index.
+    private func multiLine(_ engine: TestPlayerEngine) -> PlaybackCoordinator {
+        let co = coordinator(engine)
+        func eps(_ p: String) -> [HGEpisode] { (1...3).map { HGEpisode(ep: $0, vid: "\(p)\($0)", duration: 60, title: "第\($0)集") } }
+        co.detail?.lines = [HGPlayLine(id: "a", name: "甲", episodes: eps("a")), HGPlayLine(id: "b", name: "乙", episodes: eps("b")),
+                            HGPlayLine(id: "c", name: "丙", episodes: eps("c")), HGPlayLine(id: "d", name: "丁", episodes: eps("d")),
+                            HGPlayLine(id: "e", name: "戊", episodes: eps("e"))]
+        return co
+    }
+
+    func testDeadLineFallsThroughToTheNextOneAndKeepsTheEpisode() async throws {
+        let e = TestPlayerEngine(); e.failLoads = 1
+        let co = multiLine(e); defer { co.teardown() }
+        co.select(1); try await ready(co, 1)
+        XCTAssertEqual(co.lineIndex, 1)
+        XCTAssertEqual(co.episodes[1].vid, "b2")
+        XCTAssertNotNil(co.notice)
+        XCTAssertNil(co.errors[1]); XCTAssertFalse(co.paused)
+    }
+
+    func testAutomaticLineSwitchesAreBoundedAndEndInAnError() async throws {
+        let e = TestPlayerEngine(); e.failLoad = true
+        let co = multiLine(e); defer { co.teardown() }
+        co.select(0)
+        for _ in 0..<300 where co.errors[0] == nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNotNil(co.errors[0])
+        XCTAssertEqual(co.lineIndex, PlaybackCoordinator.maxAutoSwitches, "three automatic switches, then stop")
+        // 重试 starts over with every line allowed again.
+        e.failLoad = false
+        co.retry(0); try await ready(co, 0)
+        XCTAssertNil(co.errors[0])
+    }
+
+    func testManualLineSwitchKeepsEpisodeAndPosition() async throws {
+        let e = TestPlayerEngine()
+        let co = multiLine(e); defer { co.teardown() }
+        co.select(2); try await ready(co, 2)
+        e.currentTime = 33
+        try await Task.sleep(for: .milliseconds(600))   // let a tick see the frame
+        co.selectLine(2); try await ready(co, 2)
+        XCTAssertEqual(co.current, 2)
+        XCTAssertEqual(co.episodes[2].vid, "c3")
+        XCTAssertEqual(e.lastStart ?? 0, 33, accuracy: 0.5)
+    }
+
+    func testLiveListIgnoresTimelineAndReconnectsWhenItEnds() async throws {
+        let e = TestPlayerEngine(); e.duration = 0
+        let co = coordinator(e); defer { co.teardown() }
+        co.detail?.isLive = true
+        co.select(0); try await ready(co, 0)
+        e.currentTime = 5
+        co.seek(fraction: 0.5)
+        XCTAssertEqual(e.currentTime, 5, "live has no timeline")
+        let loads = e.loads
+        e.onEnded?()   // a live source that ends dropped its connection: same channel, not the next one
+        for _ in 0..<200 where e.loads == loads { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(e.loads, loads + 1)
+        XCTAssertEqual(co.current, 0); XCTAssertNil(co.errors[0])
+    }
+
+    func testSeekTargetIsShownUntilTheCoreArrives() async throws {
+        let e = TestPlayerEngine(); e.holdSeeks = true
+        let co = coordinator(e); defer { co.teardown() }
+        co.select(0); try await ready(co, 0)
+        try await Task.sleep(for: .milliseconds(400))
+        co.seek(fraction: 0.5)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(co.time, 30, accuracy: 0.1, "the knob must not jump back to the old position")
+        e.currentTime = 30.2
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(co.time, 30.2, accuracy: 0.1)
+    }
+
     func testNativeObserverIgnoresExpectedCommandsAndBackgroundPauses() async throws {
         let player = AVPlayer(); let observer = PlayerTransportObserver()
         var requests: [Bool] = []
@@ -192,16 +265,25 @@ import AVKit
     var loadDelay: Duration = .zero
     var notifyInternalPause = false
     var failLoad = false
+    /// Fail this many loads, then succeed.
+    var failLoads = 0
+    var loads = 0
+    var lastStart: Double?
+    /// Accept seeks without moving the clock (a core still fetching).
+    var holdSeeks = false
     func supports(_ src: PlaybackCoordinator.Source) -> Bool { true }
     func load(_ src: PlaybackCoordinator.Source, stream: HGStream?, start: Double?, title: String) async throws {
         try await Task.sleep(for:loadDelay); isPaused = true
+        loads += 1
+        lastStart = start
+        if failLoads > 0 { failLoads -= 1; throw URLError(.cannotOpenFile) }
         if failLoad { throw URLError(.cannotOpenFile) }
         if replacePiPOnLoad { pipLayer = AVPlayerLayer() }
     }
     func play(rate: Double) { isPaused = false }
     func pause() { isPaused = true; if notifyInternalPause { onPlaybackRequested?(false) } }
     func setRate(_ rate: Double) {}
-    func seek(to seconds: Double) async { currentTime = seconds }
+    func seek(to seconds: Double) async { if !holdSeeks { currentTime = seconds } }
     func stop() { isPaused = true }
     func selectAudio(_ id: Int) {}
     func selectSubtitle(_ id: Int?) {}

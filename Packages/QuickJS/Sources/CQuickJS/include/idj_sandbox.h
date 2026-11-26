@@ -34,6 +34,28 @@ size_t idj_memory_used(IDJBox *b);
 void idj_free(IDJBox *b);
 void idj_str_free(char *s);
 
+// TVBox scripts (shared/tvbox/HOST_ABI.md): a full context with eval and ES modules, unrelated to the plugin sandbox above.
+// A context belongs to one thread; only idj_tv_interrupt may be called from another one.
+typedef struct IDJTv IDJTv;
+
+/// `__tv(name, args)`; returns malloc'd UTF-8 text or NULL for `undefined`.
+typedef char *(*idj_tv_call_fn)(void *opaque, const char *name, const char *args);
+/// Resolves an import; returns the malloc'd module name, or NULL with a malloc'd message in *err.
+typedef char *(*idj_tv_normalize_fn)(void *opaque, const char *base, const char *name, char **err);
+/// Returns the malloc'd source of a module, or NULL with a malloc'd message in *err.
+typedef char *(*idj_tv_load_fn)(void *opaque, const char *name, char **err);
+
+IDJTv *idj_tv_new(size_t mem_limit, size_t stack_limit, idj_tv_call_fn call, idj_tv_normalize_fn normalize, idj_tv_load_fn load, void *opaque);
+/// Evaluates a (sloppy) global script and drains the job queue. `src[len]` must be 0. *out receives the completion value as
+/// a malloc'd string, NULL for undefined / null. Returns 0, -1 (error: malloc'd "message\x01stack" in *err) or -2 (interrupted).
+int idj_tv_script(IDJTv *t, const char *src, size_t len, const char *filename, char **out, char **err);
+/// Evaluates an ES module and drains the job queue; a rejected module is an error.
+int idj_tv_module(IDJTv *t, const char *src, size_t len, const char *filename, char **err);
+/// Any thread: stops the running script (and every later one) until idj_tv_resume.
+void idj_tv_interrupt(IDJTv *t);
+void idj_tv_resume(IDJTv *t);
+void idj_tv_free(IDJTv *t);
+
 #ifdef __cplusplus
 }
 #endif

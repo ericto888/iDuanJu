@@ -51,7 +51,7 @@ final class TDLibUITests: XCTestCase {
         XCTAssertTrue(waitLabelPrefix(el("tdlib.state"), "已登录"), "login failed: \(el("tdlib.state").label)")
 
         // Leave the page and come back: still logged in.
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap(el("nav.back"))
         app.terminate()
 
         // Cold start, no input: the session is restored by itself.

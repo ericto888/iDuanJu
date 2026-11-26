@@ -60,7 +60,9 @@ object DecoderCaps {
         }
     }
 
-    fun pick(streams: List<HGStream>): HGStream? = (streams.firstOrNull { canPlay(it) } ?: streams.firstOrNull()).also { p ->
+    /** [prefer] = the quality label the viewer chose for this series. */
+    fun pick(streams: List<HGStream>, prefer: String? = null): HGStream? = (prefer?.let { q -> streams.firstOrNull { it.quality == q && canPlay(it) } }
+        ?: streams.firstOrNull { canPlay(it) } ?: streams.firstOrNull()).also { p ->
         android.util.Log.i("idj", "DecoderCaps.pick " + streams.joinToString { "${it.quality}/${it.codec}/${it.width}x${it.height}" } + " -> " + p?.let { "${it.quality}/${it.codec}" })
     }
 }

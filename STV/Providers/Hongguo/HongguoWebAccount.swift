@@ -162,7 +162,8 @@ final class HongguoWebAccount: ObservableObject {
         path: String,
         method: String = "GET",
         headers: [String: String] = [:],
-        body: String? = nil
+        body: String? = nil,
+        referrer: String? = nil
     ) async -> (status: Int, text: String)? {
         guard let wv = await ensureApiWebView() else { return nil }
         let isDedicatedApiWV = (wv === apiWebView)
@@ -179,6 +180,7 @@ final class HongguoWebAccount: ObservableObject {
         let methodLit = Self.jsStringLiteral(method)
         let reqIdLit = Self.jsStringLiteral(reqId)
         let bodyExpr = body.map { Self.jsStringLiteral($0) } ?? "undefined"
+        let referrerExpr = referrer.map { Self.jsStringLiteral($0) } ?? "undefined"
 
         let js = """
         (function() {
@@ -186,6 +188,8 @@ final class HongguoWebAccount: ObservableObject {
           var opts = { method: \(methodLit), credentials: 'include', headers: \(hdrJSON) };
           var bodyVal = \(bodyExpr);
           if (bodyVal !== undefined) opts.body = bodyVal;
+          var refVal = \(referrerExpr);
+          if (refVal !== undefined) opts.referrer = refVal;
           fetch(\(pathLit), opts)
             .then(function(r) { return r.text().then(function(t) { return { status: r.status, text: t }; }); })
             .then(function(res) {
@@ -286,6 +290,8 @@ final class HongguoWebAccount: ObservableObject {
         let trimmed = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         lastConfirmedLoginAt = Date()
+        sessionTags.removeAll()
+        lastSyncNote = nil
         saveProfile(Profile(nickname: trimmed, avatarUrl: avatarUrl.trimmingCharacters(in: .whitespacesAndNewlines)))
         _ = await syncCookiesFromWebView()
         try? await Task.sleep(nanoseconds: 500_000_000)
@@ -383,7 +389,7 @@ final class HongguoWebAccount: ObservableObject {
         guard isLoggedIn,
               !seriesId.isEmpty, seriesId.allSatisfy(\.isNumber),
               !vid.isEmpty, vid.allSatisfy(\.isNumber),
-              episodeNumber > 0, positionMs >= 0 else { return }
+              episodeNumber > 0, positionMs > 0 else { return }
 
         let key = "\(seriesId):\(vid)"
         let now = Date()
@@ -395,10 +401,7 @@ final class HongguoWebAccount: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             let cookie = await self.syncCookiesFromWebView() ?? ""
-            guard let sessionTag = await self.fetchSessionTag(seriesId: seriesId, vid: vid, cookie: cookie) else {
-                self.lastSyncNote = "未获取到网页同步会话，请尝试重新登录"
-                return
-            }
+            let playerPath = "/player/\(seriesId)/\(vid)"
             let payload: [String: Any] = [
                 "book_id": seriesId,
                 "book_type": 2,
@@ -406,74 +409,92 @@ final class HongguoWebAccount: ObservableObject {
                 "read_timestamp_ms": String(Int64(Date().timeIntervalSince1970 * 1000)),
                 "vid": vid,
                 "vid_index": String(episodeNumber),
-                "current_play_position": String(max(0, positionMs)),
+                "current_play_position": String(max(1, positionMs)),
                 "player_accumulate_total_time": String(max(1000, accumulatedMs))
             ]
             guard let bodyData = try? JSONSerialization.data(withJSONObject: payload),
                   let bodyString = String(data: bodyData, encoding: .utf8) else { return }
 
-            // Primary: same-origin POST inside WebKit so HttpOnly session cookies & Origin/Referer match natively.
-            if let res = await self.webViewFetch(
-                path: "/api/pc/watch-history",
-                method: "POST",
-                headers: [
-                    "Content-Type": "application/json; charset=utf-8",
-                    "Accept": "application/json",
-                    "X-PC-History-Session": sessionTag
-                ],
-                body: bodyString
-            ), res.status > 0 {
-                let json = res.text.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-                let ok = (json?["isSuccess"] as? Bool) == true
-                if ok {
-                    self.lastSyncNote = "已同步第 \(episodeNumber) 集到红果"
+            var lastReason: String?
+            for attempt in 0..<2 {
+                guard let sessionTag = await self.fetchSessionTag(
+                    seriesId: seriesId,
+                    vid: vid,
+                    cookie: cookie,
+                    forceRefresh: attempt > 0
+                ) else {
+                    self.lastSyncNote = "未获取到网页同步会话，请尝试重新登录"
                     return
-                } else if res.status == 401 || res.status == 403 {
-                    self.sessionTags.removeValue(forKey: seriesId)
+                }
+
+                // Primary: same-origin POST inside WebKit with explicit player Referer so HttpOnly cookies match natively.
+                if let res = await self.webViewFetch(
+                    path: "/api/pc/watch-history",
+                    method: "POST",
+                    headers: [
+                        "Content-Type": "application/json; charset=utf-8",
+                        "Accept": "application/json",
+                        "X-PC-History-Session": sessionTag
+                    ],
+                    body: bodyString,
+                    referrer: playerPath
+                ), res.status > 0 {
+                    let json = res.text.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                    let ok = (json?["isSuccess"] as? Bool) == true
+                    if ok {
+                        self.lastSyncNote = "已同步第 \(episodeNumber) 集到红果"
+                        return
+                    }
+                    self.sessionTags.removeValue(forKey: key)
+                    lastReason = (json?["reason"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "HTTP \(res.status)"
+                    if attempt == 0 { continue }
+                }
+
+                // Fallback: URLSession
+                guard !cookie.isEmpty, let url = URL(string: "\(Self.webOrigin)/api/pc/watch-history") else { break }
+                var req = URLRequest(url: url)
+                req.httpMethod = "POST"
+                req.httpBody = bodyData
+                req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+                req.setValue("application/json", forHTTPHeaderField: "Accept")
+                req.setValue(cookie, forHTTPHeaderField: "Cookie")
+                req.setValue(Self.pcUserAgent, forHTTPHeaderField: "User-Agent")
+                req.setValue(Self.webOrigin, forHTTPHeaderField: "Origin")
+                req.setValue("\(Self.webOrigin)\(playerPath)", forHTTPHeaderField: "Referer")
+                req.setValue(sessionTag, forHTTPHeaderField: "X-PC-History-Session")
+
+                do {
+                    let (data, resp) = try await self.session.data(for: req)
+                    let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                    let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                    let ok = (json?["isSuccess"] as? Bool) == true
+                    if ok {
+                        self.lastSyncNote = "已同步第 \(episodeNumber) 集到红果"
+                        return
+                    }
+                    self.sessionTags.removeValue(forKey: key)
+                    lastReason = (json?["reason"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "HTTP \(code)"
+                } catch {
+                    // Silent network failure during background sync
+                    return
                 }
             }
-
-            // Fallback: URLSession
-            guard !cookie.isEmpty, let url = URL(string: "\(Self.webOrigin)/api/pc/watch-history") else { return }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.httpBody = bodyData
-            req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-            req.setValue(cookie, forHTTPHeaderField: "Cookie")
-            req.setValue(Self.pcUserAgent, forHTTPHeaderField: "User-Agent")
-            req.setValue(Self.webOrigin, forHTTPHeaderField: "Origin")
-            req.setValue("\(Self.webOrigin)/player/\(seriesId)/\(vid)", forHTTPHeaderField: "Referer")
-            req.setValue(sessionTag, forHTTPHeaderField: "X-PC-History-Session")
-
-            do {
-                let (data, resp) = try await self.session.data(for: req)
-                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-                let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-                let ok = (json?["isSuccess"] as? Bool) == true
-                if ok {
-                    self.lastSyncNote = "已同步第 \(episodeNumber) 集到红果"
-                } else {
-                    if code == 401 || code == 403 || !ok {
-                        self.sessionTags.removeValue(forKey: seriesId)
-                    }
-                    let reason = (json?["reason"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "HTTP \(code)"
-                    self.lastSyncNote = "同步未生效（\(reason)）"
-                }
-            } catch {
-                // Silent network failure during background sync
+            if let reason = lastReason {
+                self.lastSyncNote = "同步未生效（\(reason)）"
             }
         }
     }
 
-    private func fetchSessionTag(seriesId: String, vid: String, cookie: String) async -> String? {
-        if let cached = sessionTags[seriesId], Date().timeIntervalSince(cached.at) < Self.sessionTagTTL {
+    private func fetchSessionTag(seriesId: String, vid: String, cookie: String, forceRefresh: Bool = false) async -> String? {
+        let key = "\(seriesId):\(vid)"
+        if !forceRefresh, let cached = sessionTags[key], Date().timeIntervalSince(cached.at) < Self.sessionTagTTL {
             return cached.tag
         }
         let paths = ["/player/\(seriesId)/\(vid)", "/player/\(seriesId)"]
         for path in paths {
-            if let res = await webViewFetch(path: path), (200..<300).contains(res.status),
+            if let res = await webViewFetch(path: path, referrer: "/"), (200..<300).contains(res.status),
                let tag = Self.extractSessionTag(from: res.text) {
-                sessionTags[seriesId] = (tag, Date())
+                sessionTags[key] = (tag, Date())
                 return tag
             }
             guard !cookie.isEmpty, let url = URL(string: "\(Self.webOrigin)\(path)") else { continue }
@@ -486,7 +507,7 @@ final class HongguoWebAccount: ObservableObject {
                   let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
                   let html = String(data: data, encoding: .utf8),
                   let tag = Self.extractSessionTag(from: html) else { continue }
-            sessionTags[seriesId] = (tag, Date())
+            sessionTags[key] = (tag, Date())
             return tag
         }
         return nil

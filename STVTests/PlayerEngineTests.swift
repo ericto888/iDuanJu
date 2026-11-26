@@ -42,11 +42,87 @@ final class PlayerEngineTests: XCTestCase {
         XCTAssertTrue(MediaTrack.title(name: "", language: "jpn", codec: "aac", channels: 6, index: 1).hasSuffix("AAC 5.1"))
     }
 
-    func testEngineSettingDefaultsToMPV() {
+    func testEngineSettingDefaultsToAuto() {
         let d = UserDefaults.standard
         let old = d.object(forKey: PlayerEngineSettings.key)
         defer { d.set(old, forKey: PlayerEngineSettings.key) }
         d.removeObject(forKey: PlayerEngineSettings.key)
-        XCTAssertEqual(PlayerEngineSettings.preferred, ProcessInfo.processInfo.environment["STV_ENGINE"] == "avplayer" ? .avplayer : .mpv)
+        switch ProcessInfo.processInfo.environment["STV_ENGINE"] {
+        case "avplayer": XCTAssertEqual(PlayerEngineSettings.preferred, .avplayer)
+        case "mpv", "aether": XCTAssertEqual(PlayerEngineSettings.preferred, .mpv)
+        default: XCTAssertEqual(PlayerEngineSettings.preferred, .auto)
+        }
+        d.set("avplayer", forKey: PlayerEngineSettings.key)
+        if ProcessInfo.processInfo.environment["STV_ENGINE"] == nil { XCTAssertEqual(PlayerEngineSettings.preferred, .avplayer) }
+    }
+
+    func testEngineOrderFollowsTheContainer() {
+        for c in [MediaContainer.hls, .mp4, .audio, .unknown] {
+            XCTAssertEqual(PlayerEngineSettings.order(c, preferred: .auto), [.avplayer, .mpv], c.rawValue)
+        }
+        for c in [MediaContainer.ffmpeg, .dash] {
+            XCTAssertEqual(PlayerEngineSettings.order(c, preferred: .auto), [.mpv, .avplayer], c.rawValue)
+            // AVFoundation cannot open these at all, whatever the preference.
+            XCTAssertEqual(PlayerEngineSettings.order(c, preferred: .avplayer), [.mpv, .avplayer], c.rawValue)
+        }
+        XCTAssertEqual(PlayerEngineSettings.order(.hls, preferred: .mpv), [.mpv, .avplayer])
+    }
+
+    func testContainerDetection() throws {
+        func c(_ s: String, _ stream: HGStream? = nil) throws -> MediaContainer { MediaContainer.of(try XCTUnwrap(URL(string: s)), stream: stream) }
+        XCTAssertEqual(try c("https://v.example/a/index.m3u8?x=1"), .hls)
+        XCTAssertEqual(try c("http://127.0.0.1:1/abcd/p.m3u8?u=x"), .hls)
+        XCTAssertEqual(try c("https://v.example/play.php?url=https://x/a.m3u8"), .hls)
+        XCTAssertEqual(try c("https://v.example/a.mp4"), .mp4)
+        XCTAssertEqual(try c("https://v.example/a.flv?auth=1"), .ffmpeg)
+        XCTAssertEqual(try c("https://v.example/a.mkv"), .ffmpeg)
+        XCTAssertEqual(try c("rtmp://l.example/app/s"), .ffmpeg)
+        XCTAssertEqual(try c("rtsp://l.example/s"), .ffmpeg)
+        XCTAssertEqual(try c("https://v.example/a.mpd"), .dash)
+        XCTAssertEqual(try c("https://v.example/live/1"), .unknown)
+        // The source's MIME hint wins over the URL; a plain "mp4" tag on an extensionless link proves nothing.
+        let hinted = HGStream(url: "https://v.example/live/1", key: "", kind: .mp4Clear, format: "application/x-mpegURL")
+        XCTAssertEqual(try c(hinted.url, hinted), .hls)
+        XCTAssertEqual(try c("https://v.example/live/1", HGStream(url: "https://v.example/live/1", key: "", kind: .mp4Clear)), .unknown)
+        XCTAssertEqual(try c("https://v.example/x", HGStream(url: "https://v.example/x", key: "", kind: .hls)), .hls)
+    }
+
+    func testContainerSniffing() {
+        XCTAssertEqual(MediaContainer.sniff(Data("\u{FEFF}#EXTM3U\n#EXTINF:1,\n".utf8)), .hls)
+        XCTAssertEqual(MediaContainer.sniff(Data([0, 0, 0, 0x20]) + Data("ftypisom".utf8)), .mp4)
+        XCTAssertEqual(MediaContainer.sniff(Data("FLV".utf8) + Data([1, 5, 0, 0])), .ffmpeg)
+        XCTAssertEqual(MediaContainer.sniff(Data([0x1A, 0x45, 0xDF, 0xA3, 0])), .ffmpeg)
+        var ts = Data(count: 376); ts[0] = 0x47; ts[188] = 0x47
+        XCTAssertEqual(MediaContainer.sniff(ts), .ffmpeg)
+        XCTAssertEqual(MediaContainer.sniff(Data("<html><body>".utf8)), .unknown)
+        XCTAssertEqual(MediaContainer.sniff(Data()), .unknown)
+    }
+
+    func testDeadSourcesSkipTheOtherCore() {
+        XCTAssertTrue(PlaybackCoordinator.sourceIsDead(URLError(.cannotFindHost)))
+        XCTAssertTrue(PlaybackCoordinator.sourceIsDead(NSError(domain: "AVFoundationErrorDomain", code: -11800,
+            userInfo: [NSUnderlyingErrorKey: NSError(domain: "CoreMediaErrorDomain", code: -12938)])))
+        XCTAssertFalse(PlaybackCoordinator.sourceIsDead(NSError(domain: "AVFoundationErrorDomain", code: -11828)))
+        XCTAssertFalse(PlaybackCoordinator.sourceIsDead(nil))
+    }
+
+    func testExternalSubtitleParsing() {
+        let srt = "1\r\n00:00:01,000 --> 00:00:02,500\r\n<i>第一句</i>\r\n第二行\r\n\r\n2\r\n00:01:00,000 --> 00:01:01,000\r\n第二句\r\n"
+        let a = ExternalSubtitles.parse(Data(srt.utf8), format: "application/x-subrip", name: "a.srt")
+        XCTAssertEqual(a.map(\.text), ["第一句\n第二行", "第二句"])
+        XCTAssertEqual(a[0].start, 1, accuracy: 0.001); XCTAssertEqual(a[0].end, 2.5, accuracy: 0.001); XCTAssertEqual(a[1].start, 60, accuracy: 0.001)
+        let vtt = "WEBVTT\n\n00:01.000 --> 00:02.000 align:start\nhello\n"
+        XCTAssertEqual(ExternalSubtitles.parse(Data(vtt.utf8), format: nil, name: "a.vtt"), [.init(start: 1, end: 2, text: "hello")])
+        let ass = "[Script Info]\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:03.00,0:00:04.50,Default,,0,0,0,,{\\an8}一\\N二,三\n"
+        XCTAssertEqual(ExternalSubtitles.parse(Data(ass.utf8), format: nil, name: "a.ass"), [.init(start: 3, end: 4.5, text: "一\n二,三")])
+    }
+
+    func testDanmakuFileParsing() {
+        let xml = "<?xml version=\"1.0\"?><i><d p=\"2.5,1,25,16711680,0,0,0,0\">红</d><d p=\"1,5,25,16777215\">顶 &amp; 部</d><d p=\"x\">坏</d></i>"
+        let a = DanmakuFile.parse(Data(xml.utf8))
+        XCTAssertEqual(a.map(\.text), ["顶 & 部", "红"])
+        XCTAssertEqual(a[0].mode, .top); XCTAssertEqual(a[1].color, "#FF0000")
+        let json = "{\"danmuku\":[[3,\"right\",\"#00FF00\",\"u\",\"绿\"]]}"
+        XCTAssertEqual(DanmakuFile.parse(Data(json.utf8)).first?.color, "#00FF00")
     }
 }

@@ -148,8 +148,8 @@ struct DebugRouteHost: View {
         case .root: RootTabView()
         case .detail(let sid):
             #if DEBUG
-            if sid == "ui-detail-sparse" || sid == "ui-detail-full" {
-                NativeDetailEvidence(sparse: sid.hasSuffix("sparse"))
+            if ["ui-detail-sparse", "ui-detail-full", "ui-detail-lines"].contains(sid) {
+                NativeDetailEvidence(sparse: sid.hasSuffix("sparse"), lines: sid.hasSuffix("lines"))
             } else { NavigationStack { DramaDetailView(series: HGSeries(seriesId: sid, title: "", cover: "")).routes() } }
             #else
             NavigationStack { DramaDetailView(series: HGSeries(seriesId: sid, title: "", cover: "")).routes() }
@@ -219,6 +219,8 @@ struct TGPlayRouteHost: View {
 /// Clearly labelled fixtures for verifying the native sparse-data detail layout, never used in Release.
 private struct NativeDetailEvidence: View {
     let sparse: Bool
+    /// Multi-line, multi-episode long-form title (TVBox / 采集站 shape).
+    var lines = false
     private var seed: HGSeriesDetail {
         var d = HGSeriesDetail(seriesId: "ui-detail", title: "详情排版样例 · 非真实片源", cover: "",
             desc: String(repeating: "本地样例数据，仅验证排版、稀疏统计与滚动吸顶，不代表真实片源服务。", count: 4), author: "界面验证",
@@ -228,10 +230,21 @@ private struct NativeDetailEvidence: View {
         if !sparse { d.rating = 8.6; d.ratingCount = "1.2万"; d.hotText = "512万" }
         d.relatedSeries = (1...3).map { HGSeries(seriesId: $0 == 1 ? "ui-detail" : "sample-\($0)", title: "本地系列样例 \($0)", cover: "", episodeCount: 48) }
         d.cast = (1...5).map { HGCelebrity(id: "sample-\($0)", name: "样例演员 \($0)", role: "饰 样例") }
+        if !sparse { d.cover = "fixture://BC4749/p" }
+        if lines {
+            d.lines = ["主线", "高清", "备用"].enumerated().map { n, name in
+                HGPlayLine(id: "l\(n)", name: name, episodes: (1...(48 - n * 6)).map { HGEpisode(ep: $0, vid: "fixture#\(n)#\($0)", duration: 0, title: n == 2 ? "第 \($0) 期 · 样例" : "第\($0)集") })
+            }
+            d.relatedSeries = []; d.cast = []
+        }
         return d
     }
+    private var series: HGSeries {
+        lines ? HGSeries(source: .telegram, seriesId: "ui-detail", title: seed.title, cover: seed.cover, episodeCount: 48, orientation: "portrait")
+            : HGSeries(seriesId: "ui-detail", title: seed.title, cover: seed.cover, episodeCount: 48)
+    }
     var body: some View {
-        NavigationStack { DramaDetailView(series: HGSeries(seriesId: "ui-detail", title: seed.title, cover: "", episodeCount: 48), seededDetail: seed).routes() }
+        NavigationStack { DramaDetailView(series: series, seededDetail: seed).routes() }
     }
 }
 #endif

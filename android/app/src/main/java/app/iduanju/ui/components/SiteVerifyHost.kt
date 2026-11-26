@@ -8,13 +8,18 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -108,44 +113,39 @@ fun SiteVerifyHostOverlay() {
                 .navigationBarsPadding(),
         ) {
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(c.card)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "取消",
-                    color = c.secondary,
-                    fontSize = 15.sp,
-                    modifier = Modifier.clickable { req.finish(null, null) }.padding(end = 12.dp),
-                )
+                GlassTextButton("取消", color = c.secondary, fontSize = 16.sp) { req.finish(null, null) }
                 Text(
                     "${req.title} · 站点验证",
                     color = c.text,
-                    fontSize = 16.sp,
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).semantics { heading() },
                 )
+                GlassTextButton("完成", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) { completeWithCurrentCookies() }
+            }
+            Hairline()
+            Row(
+                Modifier.fillMaxWidth().background(c.glass).padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(Icons.Outlined.Shield, null, Modifier.size(18.dp), tint = c.accentWarm)
                 Text(
-                    "完成",
-                    color = c.accent,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.clickable { completeWithCurrentCookies() }.padding(start = 12.dp),
+                    if (pageTitle.isNotEmpty()) "请在下方完成人机验证后点击右上角「完成」 · $pageTitle"
+                    else "请在下方页面完成人机验证，验证通过后点击右上角「完成」返回",
+                    color = c.secondary,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            Text(
-                if (pageTitle.isNotEmpty()) "请在下方完成人机验证后点击右上角「完成」 · $pageTitle"
-                else "请在下方页面完成人机验证，验证通过后点击右上角「完成」返回",
-                color = c.secondary,
-                fontSize = 12.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth().background(c.elevated).padding(horizontal = 16.dp, vertical = 8.dp),
-            )
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {

@@ -3,18 +3,19 @@ package app.iduanju.ui.search
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -23,13 +24,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cancel
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.NorthWest
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -41,11 +40,15 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -53,15 +56,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import app.iduanju.IdjApp
 import app.iduanju.core.hongguo.HGRankGenre
 import app.iduanju.core.hongguo.HGRankSub
 import app.iduanju.core.hongguo.HGSeries
-import app.iduanju.ui.components.GlassIconButton
-import app.iduanju.ui.components.LocalLayoutMetrics
-import app.iduanju.ui.components.SizeTier
-import app.iduanju.ui.components.glassPill
-import app.iduanju.ui.components.glassSurface
+import app.iduanju.ui.components.*
 import app.iduanju.ui.home.HomeFmt
 import app.iduanju.ui.home.HomePosterCard
 import app.iduanju.ui.theme.IdjThemeColors
@@ -75,14 +77,30 @@ import kotlinx.coroutines.withContext
 
 private object HotCache { var hot: List<HGSeries> = emptyList() }
 
+/** Kept with the page: opening a drama and coming back shows the same query, source, results and scroll position. */
+class SearchState : ViewModel() {
+    val query = mutableStateOf("")
+    val submitted = mutableStateOf("")
+    val source = mutableStateOf("hongguo")
+    val items = mutableStateListOf<HGSeries>()
+    val cursor = mutableStateOf<String?>(null)
+    val hasMore = mutableStateOf(false)
+    val loading = mutableStateOf(false)
+    val err = mutableStateOf<String?>(null)
+    val verify = mutableStateOf<app.iduanju.core.util.VerificationRequiredException?>(null)
+    val gen = mutableIntStateOf(0)
+    val pageNo = mutableIntStateOf(1)
+    val grid = LazyGridState()
+    var started = false
+}
+
 /**
  * Unified standalone Search screen:
  * - Single top Liquid Glass search bar (`[←] [🔍 input ⊗] [搜索]`) — no duplicate bottom dock search bar.
  * - Multi-source selector strip (`红果` · `黄果` [18+] · `采集站` · `插件`) always visible under the bar when multiple
  *   sources are enabled, dynamically updating on 18+ / plugin / CMS changes.
- * - Clean 3-state body: Landing (history chips, 2-col discovery, Top-3 + ranked hot board), Live Suggestions, Results.
+ * - Clean 3-state body: Landing (历史搜索, 搜索发现, 搜索实时排行 as on iOS), Live Suggestions, Results.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchScreen(
     onOpenDetail: (String) -> Unit,
@@ -93,51 +111,60 @@ fun SearchScreen(
     val metrics = LocalLayoutMetrics.current
     val ia = IdjApp.instance
     val lib = ia.library
-    val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val focusRequester = remember { FocusRequester() }
 
-    var query by remember { mutableStateOf(initialQuery) }
-    var submitted by remember { mutableStateOf("") }
+    val vm: SearchState = viewModel()
+    val scope = vm.viewModelScope
+    var query by vm.query
+    var submitted by vm.submitted
     var hot by remember { mutableStateOf(HotCache.hot) }
     var hotErr by remember { mutableStateOf<String?>(null) }
     var seed by remember { mutableIntStateOf(0) }
     var editing by remember { mutableStateOf(false) }
 
-    val items = remember { mutableStateListOf<HGSeries>() }
-    var cursor by remember { mutableStateOf<String?>(null) }
-    var hasMore by remember { mutableStateOf(false) }
-    var loading by remember { mutableStateOf(false) }
-    var err by remember { mutableStateOf<String?>(null) }
-    var verify by remember { mutableStateOf<app.iduanju.core.util.VerificationRequiredException?>(null) }
-    var searchGen by remember { mutableIntStateOf(0) }
+    val items = vm.items
+    var cursor by vm.cursor
+    var hasMore by vm.hasMore
+    var loading by vm.loading
+    var err by vm.err
+    var verify by vm.verify
+    var searchGen by vm.gen
 
     // Reactive multi-source list: [红果, 黄果 (when adultUnlocked)] + enabled CMS sites + enabled video/shortdrama plugins
-    val adult = ia.cms.adultUnlocked
-    val sources: List<Pair<String, String>> =
+    val sources by remember { derivedStateOf {
+        val adult = ia.cms.adultUnlocked
         listOf("hongguo" to "红果") +
             (if (adult) listOf("huangguo" to "黄果") else emptyList()) +
             ia.cms.visibleSites.map { "cms:" + it.key to it.name } +
             ia.plugins.visible(adult).filter { it.type == "video" || it.type == "shortdrama" }.map { "plugin:" + it.id to it.name }
+    } }
 
-    var source by remember { mutableStateOf("hongguo") }
-    var pageNo by remember { mutableIntStateOf(1) }
+    var source by vm.source
+    var pageNo by vm.pageNo
     val currentSourceLabel = sources.firstOrNull { it.first == source }?.second ?: "红果"
 
+    suspend fun loadHot() {
+        hotErr = null
+        try {
+            hot = withContext(Dispatchers.IO) { ia.hongguo.rank(HGRankSub.hotSearch, HGRankGenre.all).items.take(23) }
+            HotCache.hot = hot
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            hotErr = e.message ?: "加载失败"
+        }
+    }
+    val uiScope = rememberCoroutineScope()
+
     LaunchedEffect(Unit) {
-        if (initialQuery.isBlank()) {
+        if (initialQuery.isBlank() && !vm.started) {
+            vm.started = true
             delay(80)
             runCatching { focusRequester.requestFocus(); keyboard?.show() }
         }
-        if (hot.isEmpty()) {
-            try {
-                hot = withContext(Dispatchers.IO) { ia.hongguo.rank(HGRankSub.hotSearch, HGRankGenre.all).items.take(23) }
-                HotCache.hot = hot
-            } catch (e: Exception) {
-                hotErr = e.message
-            }
-        }
+        if (hot.isEmpty()) loadHot()
     }
 
     fun loadMore(reset: Boolean) {
@@ -170,8 +197,8 @@ fun SearchScreen(
                 if (myGen != searchGen) return@launch
                 pageNo = reqPage + 1
                 if (reset) items.clear()
-                val seen = items.map { it.seriesId }.toSet()
-                items.addAll(p.items.filter { it.seriesId !in seen })
+                val seen = items.mapTo(HashSet()) { it.seriesId }
+                items.addAll(p.items.filter { seen.add(it.seriesId) })
                 cursor = p.nextCursor
                 hasMore = p.hasMore && p.items.isNotEmpty()
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -205,6 +232,7 @@ fun SearchScreen(
         submitted = q
         cursor = null
         items.clear()
+        vm.grid.requestScrollToItem(0)
         loadMore(true)
     }
 
@@ -220,7 +248,7 @@ fun SearchScreen(
     }
 
     LaunchedEffect(initialQuery) {
-        if (initialQuery.isNotBlank()) submit(initialQuery)
+        if (initialQuery.isNotBlank() && !vm.started) { vm.started = true; submit(initialQuery) }
     }
 
     BackHandler(enabled = submitted.isNotEmpty()) {
@@ -234,48 +262,51 @@ fun SearchScreen(
     }
     val density = LocalDensity.current
     var topBarH by remember { mutableStateOf(58.dp) }
-    val bottomInsetDp = with(density) {
-        WindowInsets.navigationBars.union(WindowInsets.ime).getBottom(this).toDp()
+    // The keyboard is handled by imePadding (layout phase); reading its inset here would recompose every frame.
+    val bottomPad = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 24.dp
+    val cols = metrics.posterCols
+    val full: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
+    val openFromList: (String) -> Unit = { sid ->
+        focusManager.clearFocus()
+        keyboard?.hide()
+        onOpenDetail(sid)
     }
-    val bottomPad = bottomInsetDp + 24.dp
 
     Box(Modifier.fillMaxSize().background(c.bg).statusBarsPadding()) {
         // Content layer recorded into backdrop for floating Liquid Glass header
-        Box(Modifier.fillMaxSize().layerBackdrop(searchBackdrop)) {
+        Box(Modifier.fillMaxSize().layerBackdrop(searchBackdrop).imePadding()) {
             when {
                 submitted.isNotEmpty() -> {
-                    val grid = rememberLazyGridState()
+                    val grid = vm.grid
                     LaunchedEffect(grid, items.size) {
                         snapshotFlow { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }.collect { last ->
                             if (hasMore && !loading && last >= items.size - 4) loadMore(false)
                         }
                     }
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(metrics.posterCols),
+                        columns = GridCells.Fixed(cols),
                         modifier = Modifier.fillMaxSize(),
                         state = grid,
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = topBarH + 8.dp, bottom = bottomPad),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        items(items, key = { it.seriesId + "|" + it.title }) { s ->
-                            HomePosterCard(s) { sid ->
-                                focusManager.clearFocus()
-                                onOpenDetail(sid)
+                        items(items, key = { it.seriesId + "|" + it.title }, contentType = { "poster" }) { s -> HomePosterCard(s, openFromList) }
+                        val v = verify
+                        if (items.isEmpty()) when {
+                            loading -> items(cols * 3, key = { "skeleton$it" }, contentType = { "skeleton" }) { PosterSkeleton() }
+                            v != null -> item("state", full, "state") { app.iduanju.huangguo.VerifyRequiredState(v) { loadMore(true) } }
+                            err != null -> item("state", full, "state") { ErrorState("加载失败", note = err) { loadMore(true) } }
+                            else -> item("state", full, "state") {
+                                EmptyState("无搜索结果", icon = Icons.Filled.Search,
+                                    note = "没有找到与“$submitted”相关的内容" + if (sources.size > 1) "，可点击上方片源标签切换其他站源检索" else "")
                             }
-                        }
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Box(Modifier.fillMaxWidth().padding(vertical = 28.dp, horizontal = 16.dp), contentAlignment = Alignment.Center) {
+                        } else item("footer", full, "footer") {
+                            Box(Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
                                 when {
-                                    loading -> CircularProgressIndicator(color = c.secondary, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
-                                    verify != null -> app.iduanju.huangguo.VerifyRequiredState(verify!!) { loadMore(items.isEmpty()) }
-                                    err != null -> Text("$err · 点击重试", color = c.accent, fontSize = 13.sp, modifier = Modifier.clickable { loadMore(items.isEmpty()) })
-                                    items.isEmpty() -> Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Text("在「$currentSourceLabel」未找到「$submitted」", color = c.secondary, fontSize = 14.sp)
-                                        if (sources.size > 1) {
-                                            Text("可点击上方片源标签切换其他站源检索", color = c.tertiary, fontSize = 12.sp)
-                                        }
-                                    }
+                                    loading -> GlassSpinner(size = 24.dp)
+                                    v != null -> app.iduanju.huangguo.VerifyRequiredState(v) { loadMore(false) }
+                                    err != null -> GlassTextButton("$err · 点击重试", fontSize = 13.sp) { loadMore(false) }
                                     !hasMore -> Text("没有更多了", color = c.tertiary, fontSize = 12.sp)
                                 }
                             }
@@ -285,7 +316,7 @@ fun SearchScreen(
 
                 else -> {
                     val typing = query.isNotBlank()
-                    Crossfade(targetState = typing, label = "searchLandingOrSuggest") { isTyping ->
+                    Crossfade(targetState = typing, animationSpec = Motion.fade(), label = "searchLandingOrSuggest") { isTyping ->
                         if (isTyping) {
                             SearchSuggestionsList(
                                 query = query.trim(),
@@ -296,11 +327,7 @@ fun SearchScreen(
                                 bottomPadding = bottomPad,
                                 onSubmit = { submit(it) },
                                 onFill = { query = it },
-                                onOpenDetail = { sid ->
-                                    focusManager.clearFocus()
-                                    keyboard?.hide()
-                                    onOpenDetail(sid)
-                                },
+                                onOpenDetail = openFromList,
                             )
                         } else {
                             SearchLandingContent(
@@ -313,14 +340,11 @@ fun SearchScreen(
                                 hotErr = hotErr,
                                 seed = seed,
                                 onRefreshSeed = { seed++ },
+                                onRetryHot = { uiScope.launch { loadHot() } },
                                 topPadding = topBarH,
                                 bottomPadding = bottomPad,
                                 onPick = { submit(it) },
-                                onOpenDetail = { sid ->
-                                    focusManager.clearFocus()
-                                    keyboard?.hide()
-                                    onOpenDetail(sid)
-                                },
+                                onOpenDetail = openFromList,
                             )
                         }
                     }
@@ -333,19 +357,20 @@ fun SearchScreen(
             Modifier
                 .fillMaxWidth()
                 .height(topBarH + 14.dp)
-                .background(
+                .background(remember(c.bg) {
                     Brush.verticalGradient(
                         0f to c.bg.copy(alpha = 0.96f),
                         0.72f to c.bg.copy(alpha = 0.80f),
                         1f to c.bg.copy(alpha = 0f),
-                    ),
-                ),
+                    )
+                }),
         )
 
         // Unified Top Header: Search Input Capsule + Multi-Source Selector Strip
         Column(
             Modifier
                 .fillMaxWidth()
+                .pointerInput(Unit) {}
                 .onSizeChanged { topBarH = with(density) { it.height.toDp() } },
         ) {
             Row(
@@ -361,7 +386,7 @@ fun SearchScreen(
                         Icons.AutoMirrored.Filled.ArrowBack,
                         "返回",
                         backdrop = searchBackdrop,
-                        size = 42.dp,
+                        size = 44.dp,
                         iconSize = 20.dp,
                         onClick = {
                             focusManager.clearFocus()
@@ -374,9 +399,9 @@ fun SearchScreen(
                 Row(
                     Modifier
                         .weight(1f)
-                        .height(42.dp)
                         .glassSurface(RoundedCornerShape(50), backdrop = searchBackdrop, shadowRadius = 8.dp)
-                        .padding(horizontal = 14.dp),
+                        .heightIn(min = 44.dp)
+                        .padding(start = 14.dp, end = if (query.isEmpty()) 14.dp else 0.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(Icons.Filled.Search, null, tint = c.secondary, modifier = Modifier.size(18.dp))
@@ -402,88 +427,31 @@ fun SearchScreen(
                             cursorBrush = SolidColor(c.accent),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(onSearch = { submit() }),
-                            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester).semantics { contentDescription = "搜索" },
                         )
                     }
-                    if (query.isNotEmpty()) {
-                        Spacer(Modifier.width(6.dp))
-                        Icon(
-                            Icons.Filled.Cancel,
-                            contentDescription = "清除",
-                            tint = c.secondary,
-                            modifier = Modifier.size(17.dp).clickable { clearQuery() },
-                        )
-                    }
+                    if (query.isNotEmpty()) PlainIconButton(Icons.Filled.Cancel, "清除", tint = c.secondary, iconSize = 18.dp) { clearQuery() }
                 }
 
                 val hasDraftChange = query.trim().isNotEmpty() && query.trim() != submitted
-                if (submitted.isNotEmpty() && !hasDraftChange) {
-                    Box(
-                        Modifier
-                            .height(38.dp)
-                            .glassPill(RoundedCornerShape(50), selected = false)
-                            .clickable { clearQuery() }
-                            .padding(horizontal = 14.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("重置", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    }
-                } else {
-                    val canSubmit = query.trim().isNotEmpty()
-                    Box(
-                        Modifier
-                            .height(38.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(if (canSubmit) c.accent else c.text.copy(alpha = 0.08f))
-                            .clickable(enabled = canSubmit) { submit() }
-                            .padding(horizontal = 15.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            "搜索",
-                            color = if (canSubmit) c.onAccent else c.secondary,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                }
+                if (submitted.isNotEmpty() && !hasDraftChange) GlassButton("重置", Modifier.heightIn(min = 40.dp), ButtonTone.Glass, ButtonSize.Small) { clearQuery() }
+                else GlassButton("搜索", Modifier.heightIn(min = 40.dp), size = ButtonSize.Small, enabled = query.trim().isNotEmpty()) { submit() }
             }
 
             if (sources.size > 1) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 14.dp)
-                        .padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    sources.forEach { (id, name) ->
-                        val active = id == source
-                        Box(
-                            Modifier
-                                .height(32.dp)
-                                .glassPill(RoundedCornerShape(50), selected = active)
-                                .clickable {
-                                    if (!active) {
-                                        source = id
-                                        cursor = null
-                                        items.clear()
-                                        if (submitted.isNotEmpty()) loadMore(true)
-                                        else if (query.isNotBlank()) submit(query)
-                                    }
-                                }
-                                .padding(horizontal = 14.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                name,
-                                color = if (active) c.accent else c.secondary,
-                                fontSize = 13.sp,
-                                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
-                                maxLines = 1,
-                            )
+                val strip = rememberLazyListState()
+                val active = sources.indexOfFirst { it.first == source }
+                LaunchedEffect(active) { if (active >= 0) strip.animateScrollToItem((active - 1).coerceAtLeast(0)) }
+                LazyRow(state = strip, contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(sources, key = { it.first }, contentType = { "chip" }) { (id, name) ->
+                        OptionChip(name, id == source, minHeight = 34.dp) {
+                            if (id != source) {
+                                source = id
+                                cursor = null
+                                items.clear()
+                                if (submitted.isNotEmpty()) loadMore(true)
+                                else if (query.isNotBlank()) submit(query)
+                            }
                         }
                     }
                 }
@@ -492,7 +460,14 @@ fun SearchScreen(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SectionTitle(title: String, modifier: Modifier = Modifier, trailing: @Composable RowScope.() -> Unit = {}) {
+    Row(modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, color = IdjThemeColors.text, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).semantics { heading() })
+        trailing()
+    }
+}
+
 @Composable
 private fun SearchLandingContent(
     history: List<String>,
@@ -504,6 +479,7 @@ private fun SearchLandingContent(
     hotErr: String?,
     seed: Int,
     onRefreshSeed: () -> Unit,
+    onRetryHot: () -> Unit,
     topPadding: Dp,
     bottomPadding: Dp,
     onPick: (String) -> Unit,
@@ -521,40 +497,29 @@ private fun SearchLandingContent(
         SizeTier.Expanded -> 5
     }
     val gap = if (metrics.tier == SizeTier.Compact) 8.dp else 12.dp
+    val rest = remember(hot, topCount) { hot.drop(topCount) }
+    val full: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
 
     LazyVerticalGrid(
-        columns = GridCells.Fixed(metrics.listCols),
+        columns = GridCells.Fixed(metrics.wideCardCols),
         modifier = Modifier.fillMaxSize(),
         state = grid,
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = topPadding + 8.dp, bottom = bottomPadding),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = topPadding, bottom = bottomPadding),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (history.isNotEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }, key = "history") {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("历史搜索", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.weight(1f))
+            item("history", full, "chips") {
+                Column {
+                    SectionTitle("历史搜索") {
                         if (editing) {
-                            Text("清空", color = c.accentWarm, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clickable(onClick = onClearHistory))
-                            Spacer(Modifier.width(14.dp))
-                            Text("完成", color = c.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.clickable { onEditToggle(false) })
-                        } else {
-                            Icon(
-                                Icons.Filled.Delete,
-                                contentDescription = "编辑历史",
-                                tint = c.secondary,
-                                modifier = Modifier.size(19.dp).clickable { onEditToggle(true) },
-                            )
-                        }
+                            GlassTextButton("全部删除", onClick = onClearHistory)
+                            GlassTextButton("完成", color = c.text) { onEditToggle(false) }
+                        } else PlainIconButton(Icons.Outlined.Delete, "编辑历史", tint = c.secondary, iconSize = 20.dp) { onEditToggle(true) }
                     }
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        history.forEach { term ->
-                            SearchChip(term, badge = null, removable = editing) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(history, key = { it }, contentType = { "chip" }) { term ->
+                            SearchChip(term, badge = null, removable = editing, Modifier.animateItem()) {
                                 if (editing) onRemoveHistory(term) else onPick(term)
                             }
                         }
@@ -564,86 +529,25 @@ private fun SearchLandingContent(
         }
 
         if (discover.isNotEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }, key = "discover") {
-                Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("猜你想搜", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.weight(1f))
-                        Row(
-                            Modifier
-                                .clip(RoundedCornerShape(50))
-                                .clickable(onClick = onRefreshSeed)
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Icon(Icons.Filled.Refresh, null, tint = c.secondary, modifier = Modifier.size(15.dp))
-                            Text("换一批", color = c.secondary, fontSize = 12.sp)
-                        }
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        discover.chunked(2).forEachIndexed { rowIdx, pair ->
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                pair.forEachIndexed { colIdx, title ->
-                                    val idx = rowIdx * 2 + colIdx
-                                    val badge = when (idx) { 0 -> "热"; 1 -> "荐"; else -> null }
-                                    Row(
-                                        Modifier
-                                            .weight(1f)
-                                            .height(40.dp)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(c.surface)
-                                            .border(0.6.dp, c.hairline, RoundedCornerShape(12.dp))
-                                            .clickable { onPick(title) }
-                                            .padding(horizontal = 12.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            title,
-                                            color = c.text,
-                                            fontSize = 14.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f, fill = false),
-                                        )
-                                        if (badge != null) {
-                                            Spacer(Modifier.width(6.dp))
-                                            Text(
-                                                badge,
-                                                color = c.accentWarm,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(4.dp))
-                                                    .background(c.accentWarm.copy(alpha = 0.14f))
-                                                    .padding(horizontal = 4.dp, vertical = 1.dp),
-                                            )
-                                        }
-                                    }
-                                }
-                                if (pair.size == 1) Spacer(Modifier.weight(1f))
-                            }
+            item("discover", full, "chips") {
+                Column {
+                    SectionTitle("搜索发现") { PlainIconButton(Icons.Rounded.Sync, "换一批", tint = c.secondary, iconSize = 20.dp, onClick = onRefreshSeed) }
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        itemsIndexed(discover, contentType = { _, _ -> "chip" }) { i, title ->
+                            SearchChip(title, badge = when (i) { 0 -> "热"; 1 -> "荐"; else -> null }, removable = false) { onPick(title) }
                         }
                     }
                 }
             }
         }
 
-        item(span = { GridItemSpan(maxLineSpan) }, key = "hotHeader") {
-            Column(Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("热搜实时榜", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        item("hotHeader", full, "hot") {
+            Column {
+                SectionTitle("搜索实时排行")
                 when {
-                    hot.isEmpty() && hotErr != null -> Text(hotErr, color = c.secondary, fontSize = 13.sp)
+                    hot.isEmpty() && hotErr != null -> ErrorState("加载失败", note = hotErr, onRetry = onRetryHot)
                     hot.isEmpty() -> Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                        repeat(topCount) {
-                            Box(
-                                Modifier
-                                    .weight(1f)
-                                    .aspectRatio(0.62f)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(c.elevated.copy(alpha = 0.6f)),
-                            )
-                        }
+                        repeat(topCount) { SkeletonBlock(Modifier.weight(1f).aspectRatio(0.6f), 12.dp) }
                     }
                     else -> Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
                         hot.take(topCount).forEachIndexed { i, s ->
@@ -656,8 +560,8 @@ private fun SearchLandingContent(
             }
         }
 
-        val rest = hot.drop(topCount)
-        items(rest.size, key = { i -> "rank_${rest[i].seriesId}_$i" }) { i ->
+        if (hot.isEmpty() && hotErr == null) items(6, key = { "skeleton$it" }, contentType = { "skeleton" }) { RowSkeleton(thumb = 46.dp) }
+        items(rest.size, key = { i -> "rank_${rest[i].seriesId}_$i" }, contentType = { "rank" }) { i ->
             CompactRankRow(rest[i], i + topCount + 1, onOpenDetail)
         }
     }
@@ -694,17 +598,12 @@ private fun SearchSuggestionsList(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clickable { onSubmit(query) }
+                    .pressClick(0.98f) { onSubmit(query) }
                     .padding(horizontal = 16.dp, vertical = 13.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Box(
-                    Modifier.size(34.dp).clip(CircleShape).background(c.accentSoft),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Filled.Search, null, tint = c.accent, modifier = Modifier.size(18.dp))
-                }
+                IconWell(Icons.Filled.Search, 36.dp)
                 Column(Modifier.weight(1f)) {
                     Text(
                         "搜索「$query」",
@@ -717,26 +616,22 @@ private fun SearchSuggestionsList(
                     Text("当前片源：$sourceLabel", color = c.secondary, fontSize = 12.sp)
                 }
             }
-            HorizontalDivider(Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = c.hairline)
+            Hairline(Modifier.padding(horizontal = 16.dp))
         }
 
-        items(histHits, key = { "h_$it" }) { h ->
+        items(histHits, key = { "h_$it" }, contentType = { "history" }) { h ->
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clickable { onSubmit(h) }
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .pressClick(0.98f) { onSubmit(h) }
+                    .heightIn(min = 48.dp)
+                    .padding(start = 16.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Icon(Icons.Filled.History, null, tint = c.secondary, modifier = Modifier.size(18.dp))
                 Text(h, color = c.text, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Icon(
-                    Icons.Filled.NorthWest,
-                    contentDescription = "填入搜索词",
-                    tint = c.secondary,
-                    modifier = Modifier.size(16.dp).clickable { onFill(h) },
-                )
+                PlainIconButton(Icons.Filled.NorthWest, "填入搜索词", tint = c.secondary, iconSize = 16.dp) { onFill(h) }
             }
         }
 
@@ -750,11 +645,11 @@ private fun SearchSuggestionsList(
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
                 )
             }
-            items(hotHits, key = { "s_${it.seriesId}" }) { s ->
+            items(hotHits, key = { "s_${it.seriesId}" }, contentType = { "hot" }) { s ->
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clickable {
+                        .pressClick(0.98f) {
                             app.iduanju.data.Catalog.rememberPreview(s.seriesId, s.title, s.cover)
                             onOpenDetail(s.seriesId)
                         }
@@ -762,7 +657,7 @@ private fun SearchSuggestionsList(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Box(Modifier.size(42.dp, 56.dp).clip(RoundedCornerShape(6.dp)).background(c.elevated)) {
+                    Box(Modifier.size(42.dp, 56.dp).clip(RoundedCornerShape(6.dp)).background(c.glass)) {
                         AsyncImage(s.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                     }
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -775,25 +670,24 @@ private fun SearchSuggestionsList(
     }
 }
 
+/** iOS ChipFlow cell: quiet capsule, optional ·热 / ·荐 accent, ✕ while editing. */
 @Composable
-private fun SearchChip(text: String, badge: String?, removable: Boolean, onClick: () -> Unit) {
+private fun SearchChip(text: String, badge: String?, removable: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val c = IdjThemeColors
     Row(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(c.surface)
-            .border(0.6.dp, c.hairline, RoundedCornerShape(50))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 13.dp, vertical = 7.dp),
+        modifier
+            .pressClick(0.97f, label = if (removable) "删除 $text" else null, onClick = onClick)
+            .clip(CircleShape)
+            .background(c.glass)
+            .heightIn(min = 36.dp)
+            .padding(horizontal = 14.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text, color = c.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp))
-        if (badge != null) {
-            Text(" · $badge", color = c.accentWarm, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-        }
+        Text(text, color = c.text, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
+        if (badge != null) Text("·$badge", color = c.accentWarm, fontSize = 15.sp, modifier = Modifier.padding(start = 2.dp))
         if (removable) {
-            Spacer(Modifier.width(5.dp))
-            Icon(Icons.Filled.Cancel, null, tint = c.secondary, modifier = Modifier.size(13.dp))
+            Spacer(Modifier.width(6.dp))
+            Icon(Icons.Filled.Cancel, null, tint = c.secondary, modifier = Modifier.size(14.dp))
         }
     }
 }
@@ -816,17 +710,18 @@ private fun TopRankCard(s: HGSeries, rank: Int, onOpen: (String) -> Unit) {
     Box(
         Modifier
             .fillMaxWidth()
-            .aspectRatio(0.62f)
-            .clip(RoundedCornerShape(12.dp))
-            .clickable {
+            .aspectRatio(0.6f)
+            .pressClick(0.97f) {
                 app.iduanju.data.Catalog.rememberPreview(s.seriesId, s.title, s.cover)
                 onOpen(s.seriesId)
-            },
+            }
+            .clip(RoundedCornerShape(12.dp))
+            .background(IdjThemeColors.glass),
         contentAlignment = Alignment.BottomCenter,
     ) {
         AsyncImage(s.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        val g = rankGradient(rank)
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.35f to Color.Transparent, 0.62f to g[0], 1f to g[1])))
+        val scrim = remember(rank) { rankGradient(rank).let { g -> Brush.verticalGradient(0.35f to Color.Transparent, 0.62f to g[0], 1f to g[1]) } }
+        Box(Modifier.fillMaxSize().background(scrim))
         Column(
             Modifier.padding(horizontal = 6.dp).padding(bottom = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -834,7 +729,7 @@ private fun TopRankCard(s: HGSeries, rank: Int, onOpen: (String) -> Unit) {
         ) {
             Text("TOP$rank", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Black)
             Text(s.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(HomeFmt.metaLine(s), color = Color.White.copy(alpha = 0.82f), fontSize = 11.sp, maxLines = 1)
+            Text(HomeFmt.metaLine(s), color = Color.White.copy(alpha = 0.82f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -845,8 +740,7 @@ private fun CompactRankRow(s: HGSeries, rank: Int, onOpen: (String) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable {
+            .pressClick(0.98f) {
                 app.iduanju.data.Catalog.rememberPreview(s.seriesId, s.title, s.cover)
                 onOpen(s.seriesId)
             }
@@ -854,7 +748,7 @@ private fun CompactRankRow(s: HGSeries, rank: Int, onOpen: (String) -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Box(Modifier.size(46.dp, 62.dp).clip(RoundedCornerShape(6.dp)).background(c.elevated)) {
+        Box(Modifier.size(46.dp, 62.dp).clip(RoundedCornerShape(6.dp)).background(c.glass)) {
             AsyncImage(s.cover, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             Text(
                 "$rank",
@@ -871,8 +765,8 @@ private fun CompactRankRow(s: HGSeries, rank: Int, onOpen: (String) -> Unit) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(s.title, color = c.text, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (s.playCount > 0) Text(HomeFmt.count(s.playCount), color = Color(0.95f, 0.3f, 0.3f), fontSize = 12.sp)
-                Text(if (s.episodeCount > 0) "${s.episodeCount}集" else "短剧", color = c.secondary, fontSize = 12.sp)
+                if (s.playCount > 0) Text(HomeFmt.count(s.playCount), color = Color(0.95f, 0.3f, 0.3f), fontSize = 12.sp, maxLines = 1)
+                Text(if (s.episodeCount > 0) "${s.episodeCount}集" else "短剧", color = c.secondary, fontSize = 12.sp, maxLines = 1)
             }
         }
     }

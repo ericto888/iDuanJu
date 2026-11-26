@@ -128,7 +128,25 @@ final class LegadoSourceStore: ObservableObject {
     }
 
     private init() {
-        sources = (try? Data(contentsOf: Self.file)).flatMap { try? JSONDecoder().decode([LegadoSource].self, from: $0) } ?? []
+        sources = Self.warm ?? Self.read()
+        Self.warm = nil
+        Self.prewarmed = true
+    }
+
+    private nonisolated static func read() -> [LegadoSource] {
+        (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([LegadoSource].self, from: $0) } ?? []
+    }
+
+    private static var warm: [LegadoSource]?
+    private static var prewarmed = false
+    /// Source collections are several MB of JSON: decoded in the background shortly after launch instead of on the first tap
+    /// in 小说.
+    static func prewarm() async {
+        guard !prewarmed else { return }
+        prewarmed = true
+        warm = await Task.detached(priority: .utility) { Self.read() }.value
+        _ = shared
+        warm = nil
     }
 
     var enabled: [LegadoSource] { sources.filter { $0.isOn && $0.supported } }

@@ -54,7 +54,31 @@ final class NovelPaginator {
         guard s != style else { return false }
         style = s
         cache = [:]
+        generation += 1
         return true
+    }
+
+    private var generation = 0
+    private var warming: Set<Int> = []
+
+    /// Lays a neighbouring chapter out in the background. Paginating a whole chapter on the main thread was the hitch at every
+    /// chapter boundary.
+    func warm(_ i: Int) {
+        guard let s = style, book.chapters.indices.contains(i), cache[i] == nil, !warming.contains(i) else { return }
+        let title = book.chapters[i].title, raw = store.chapterText(book, i)
+        guard !raw.isEmpty else { return }   // 书源 chapter still to be fetched: the loader announces it
+        let font = NovelFonts.font(s.fontID, size: s.fontSize), bold = NovelFonts.font(s.fontID, size: s.fontSize * 1.3, bold: true)
+        let token = generation
+        warming.insert(i)
+        Task { [weak self] in
+            let out = await Task.detached(priority: .userInitiated) { () -> (NSAttributedString, [NSRange]) in
+                let a = NovelLayout.attributed(raw, title: title, size: s.fontSize, lineSpacing: s.lineSpacing, indent: s.indent, font: font, bold: bold, color: s.text)
+                return (a, NovelLayout.paginate(a, size: s.size))
+            }.value
+            guard let self else { return }
+            self.warming.remove(i)
+            if token == self.generation, self.cache[i] == nil { self.cache[i] = out }
+        }
     }
 
     func chapter(_ i: Int) -> (text: NSAttributedString, pages: [NSRange]) {
@@ -77,7 +101,7 @@ final class NovelPaginator {
     }
 
     /// Drops cached layouts (a 书源 chapter arrived).
-    func invalidate() { cache = [:] }
+    func invalidate() { cache = [:]; generation += 1 }
 
     func pageCount(_ chapter: Int) -> Int { self.chapter(chapter).pages.count }
 
@@ -233,6 +257,7 @@ final class NovelPagerController: UIViewController, UIPageViewControllerDataSour
         pan.delegate = self
         view.addGestureRecognizer(pan)
         build()
+        warmNeighbours()
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
@@ -311,12 +336,19 @@ final class NovelPagerController: UIViewController, UIPageViewControllerDataSour
         case .none, .scroll:
             show(target)
             onPageChange?(target)
+            warmNeighbours()
         }
     }
 
     private func settle(_ r: NovelPageRef) {
         current = r
         onPageChange?(r)
+        warmNeighbours()
+    }
+
+    private func warmNeighbours() {
+        paginator.warm(current.chapter + 1)
+        paginator.warm(current.chapter - 1)
     }
 
     // MARK: Taps

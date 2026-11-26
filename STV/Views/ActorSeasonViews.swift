@@ -35,82 +35,52 @@ struct SeasonPickerSheet: View {
     let onPick: (HGSeries) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("系列全季 · 共\(seasons.count)季").font(.headline).padding(.top, 18).padding(.horizontal, 20)
+        DSSheet("系列全季", subtitle: "共 \(seasons.count) 季") {
             ScrollView {
-                LazyVStack(spacing: 10) {
+                LazyVStack(spacing: 0) {
                     ForEach(seasons) { s in
                         let on = s.seriesId == currentId
                         Button { if !on { onPick(s) } } label: {
                             HStack(spacing: 12) {
-                                CoverView(url: s.cover, corner: 8).frame(width: 54, height: 72)
+                                CoverView(url: s.cover, corner: 10, maxPixelSize: CoverPixels.thumb).frame(width: 54, height: 72)
                                 VStack(alignment: .leading, spacing: 4) {
                                     HStack(spacing: 6) {
-                                        if let l = SeasonStore.label(s, in: seasons) {
-                                            Text(l).font(.caption.weight(.bold))
-                                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                                .background((on ? STVTheme.accent : STVTheme.text).opacity(0.12), in: Capsule())
-                                        }
-                                        if on { Text("正在播放").font(.caption2.weight(.semibold)).foregroundStyle(STVTheme.accent) }
+                                        if let l = SeasonStore.label(s, in: seasons) { DSStatus(text: l, tone: on ? .accent : .muted) }
+                                        if on { DSStatus(text: "正在播放", tone: .accent) }
                                     }
-                                    Text(s.title).font(.subheadline.weight(on ? .semibold : .regular)).lineLimit(2)
-                                        .multilineTextAlignment(.leading)
+                                    Text(s.title).dsFont(15, on ? .semibold : .regular, relativeTo: .subheadline).lineLimit(2)
+                                        .multilineTextAlignment(.leading).foregroundStyle(STVTheme.text)
                                     if s.episodeCount > 0 {
-                                        Text("\(s.episodeCount)集").font(.caption).foregroundStyle(STVTheme.secondary)
+                                        Text("\(s.episodeCount) 集").dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary)
                                     }
                                 }
                                 Spacer(minLength: 0)
                                 Image(systemName: on ? "play.circle.fill" : "chevron.right")
-                                    .foregroundStyle(on ? STVTheme.accent : STVTheme.secondary)
+                                    .foregroundStyle(on ? STVTheme.accent : STVTheme.tertiary)
                             }
-                            .padding(10)
-                            .background(on ? STVTheme.accent.opacity(0.12) : STVTheme.glass, in: RoundedRectangle(cornerRadius: 12))
-                            .foregroundStyle(STVTheme.text)
-                        }.buttonStyle(.plain)
+                            .padding(.horizontal, 20).padding(.vertical, 10)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(DSRowPress())
+                        .accessibilityAddTraits(on ? .isSelected : [])
                     }
-                }.padding(.horizontal, 16).padding(.bottom, 20)
+                }
+                .padding(.bottom, 20)
             }
         }
-        .presentationDetents([.medium, .large])
+        .dsSheetChrome()
     }
 }
 
 // MARK: - Cast (演员)
 
-struct CastShelf: View {
-    let cast: [HGCelebrity]
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "演员")
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 14) {
-                    ForEach(cast) { c in
-                        if c.id.isEmpty { cell(c) }
-                        else { NavigationLink(value: Route.actor(c)) { cell(c) }.buttonStyle(.plain) }
-                    }
-                }.padding(.horizontal, 16)
-            }
-        }.padding(.top, 4)
-    }
-
-    private func cell(_ c: HGCelebrity) -> some View {
-        VStack(spacing: 6) {
-            ActorAvatar(url: c.avatar, size: 64)
-            Text(c.name).font(.caption.weight(.semibold)).foregroundStyle(STVTheme.text).lineLimit(1)
-            if !c.role.isEmpty {
-                Text(c.role).font(.caption2).foregroundStyle(STVTheme.secondary).lineLimit(1)
-            }
-        }.frame(width: 76)
-    }
-}
-
 struct ActorAvatar: View {
     let url: String
     var size: CGFloat = 64
     var body: some View {
-        CoverView(url: url, corner: size / 2)
+        CoverView(url: url, corner: size / 2, maxPixelSize: size > 80 ? CoverPixels.poster : CoverPixels.thumb)
             .frame(width: size, height: size)
-            .overlay { Circle().strokeBorder(STVTheme.text.opacity(0.12), lineWidth: 0.8) }
+            .overlay { Circle().strokeBorder(STVTheme.hairline, lineWidth: 1) }
     }
 }
 
@@ -151,7 +121,7 @@ struct ActorView: View {
                                             ActorAvatar(url: c.avatar, size: 56)
                                             Text(c.name).font(.caption).foregroundStyle(STVTheme.text).lineLimit(1)
                                         }.frame(width: 68)
-                                    }.buttonStyle(.plain)
+                                    }.buttonStyle(PressScale())
                                 }
                             }.padding(.horizontal, 16)
                         }
@@ -171,9 +141,7 @@ struct ActorView: View {
             }
         }
         .compatDefaultScrollAnchor(DebugScroll.anchor)
-        .background(STVTheme.bg.ignoresSafeArea())
-        .navigationTitle(actor.name)
-        .navigationBarTitleDisplayMode(.inline)
+        .dsNavigation(actor.name)
         .task { if profile == nil && works.isEmpty { await load() } }
     }
 

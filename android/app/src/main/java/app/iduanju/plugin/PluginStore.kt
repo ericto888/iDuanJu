@@ -2,7 +2,6 @@ package app.iduanju.plugin
 
 import android.content.Context
 import androidx.compose.runtime.mutableStateListOf
-import app.iduanju.core.cms.TVBoxImport
 import app.iduanju.core.plugin.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -109,22 +108,21 @@ class PluginStore(private val ctx: Context,
     sealed class Pasted {
         data class Plugin(val rec: Installed) : Pasted()
         data class Subscription(val sub: PluginSubscription) : Pasted()
-        data class TVBox(val config: TVBoxImport.Config) : Pasted()
+        /** A TVBox config (its text, or its address so relative paths resolve): the TVBox store imports the whole of it. */
+        data class TVBox(val source: String) : Pasted()
     }
     /** iOS PluginInstaller.interpret: an https manifest / .idjplugin / subscription / M3U URL, or a pasted bundle or M3U. Blocking. */
     fun interpret(text: String, origin: String? = null, name: String? = null): Pasted {
         val t = text.trim()
         if (M3UImport.isChannelList(t)) return Pasted.Plugin(installM3U(t, null, name, origin ?: "paste"))
         if (!t.startsWith("https://") && !t.startsWith("http://")) {
-            val json = runCatching { JSONObject(t) }.getOrNull()
-            if (json != null && (json.has("sites") || json.has("spider") || json.has("lives")))
-                return Pasted.TVBox(TVBoxImport.parse(t))
+            if (isTVBox(t)) return Pasted.TVBox(t)
             return Pasted.Plugin(install(t, origin ?: "paste"))
         }
         val body = download(t)
         if (M3UImport.isChannelList(body)) return Pasted.Plugin(installM3U(body, t, name, origin ?: t))
+        if (isTVBox(body)) return Pasted.TVBox(t)
         val o = runCatching { JSONObject(body) }.getOrNull() ?: throw PluginException("E_INSTALL", "这个链接不是插件 manifest / .idjplugin / 订阅列表 / M3U")
-        if (o.has("sites") || o.has("spider") || o.has("lives")) return Pasted.TVBox(TVBoxImport.parse(body))
         return when {
             PluginSubscription.isSubscription(o) -> Pasted.Subscription(addSubscription(t))
             o.has("manifest") -> Pasted.Plugin(install(body, origin ?: t))
@@ -138,22 +136,13 @@ class PluginStore(private val ctx: Context,
         }
     }
 
-    /** A reviewed M3U channel list becomes a static video plugin, under the same rules as scripts/source-compat/m3u_to_idj.py. */
-    fun installLive(live: TVBoxImport.Live): Installed {
-        val raw = download(live.url)
-        val list = if (M3UImport.isChannelList(raw)) raw else buildString {
-            appendLine("#EXTM3U")
-            for (line in raw.lineSequence()) {
-                val split = line.indexOf(',')
-                if (split <= 0) continue
-                val title = line.take(split).trim()
-                val url = line.substring(split + 1).trim()
-                if (title.isNotEmpty() && url.startsWith("https://")) { appendLine("#EXTINF:-1,$title"); appendLine(url) }
-            }
-        }
-        return installM3U(list, live.url, live.name, "TVBox")
+    /** Comments, trailing commas and bare keys are normal in these configs. */
+    private fun isTVBox(text: String): Boolean {
+        val o = app.iduanju.core.tvbox.LenientJson.objectOrNull(text) ?: return false
+        return o.has("sites") || o.has("spider") || o.has("lives") || o.has("storeHouse")
     }
 
+    /** A reviewed M3U channel list becomes a static video plugin, under the same rules as scripts/source-compat/m3u_to_idj.py. */
     private fun installM3U(text: String, url: String?, name: String?, origin: String): Installed {
         val channels = try { M3UImport.parse(text, url) } catch (e: M3UImport.Rejected) { throw PluginException("E_INSTALL", "M3U 导入失败：${e.message}") }
         val title = name?.trim()?.takeIf { it.isNotEmpty() } ?: url?.let(M3UImport::nameFromUrl) ?: "M3U 频道列表"

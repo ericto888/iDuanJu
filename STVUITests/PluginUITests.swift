@@ -57,7 +57,7 @@ final class PluginUITests: XCTestCase {
         XCTAssertTrue(entry.waitForExistence(timeout: 15))
         shot("01-profile-plugins-entry")
         entry.tap()
-        XCTAssertTrue(app.navigationBars["插件"].waitForExistence(timeout: 10))
+        XCTAssertTrue(el("plugins.root").waitForExistence(timeout: 10))
         XCTAssertTrue(el("plugins.row.com.example.demo.comics").waitForExistence(timeout: 5), "demo plugin listed")
         XCTAssertTrue(text("示例采集站").exists, "fixture 采集站 listed")
         XCTAssertFalse(text("18comic").exists, "adult plugins stay hidden while the adult switch is off")

@@ -19,3 +19,7 @@ xcuserdata/
 /artifacts/source-compat/
 /scripts/source-compat/__pycache__/
 /android/app/src/androidTest/assets/source-compat/filter-sources.json
+
+# CPython runtime unpacked by scripts/fetch-ios-python.sh
+/third_party/python-ios/
+/third_party/python-ios.tmp.*

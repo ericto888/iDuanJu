@@ -1,11 +1,12 @@
 package app.iduanju.ui.profile
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -13,7 +14,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.iduanju.IdjApp
 import app.iduanju.ui.LocalNavigate
+import app.iduanju.ui.components.DS
+import app.iduanju.ui.components.GlassConfirm
+import app.iduanju.ui.components.GlassSlider
+import app.iduanju.ui.components.GlassTextField
+import app.iduanju.ui.components.Motion
 import app.iduanju.ui.theme.IdjThemeColors
+import kotlin.math.roundToInt
 
 /**
  * iOS SourcesView (我的 → 片源管理): 内置 sources, adult gate (with 18+ confirmation), 插件与采集站 link,
@@ -24,7 +31,6 @@ fun SourcesScreen(onBack: () -> Unit) {
     val c = IdjThemeColors
     val ia = IdjApp.instance
     val go = LocalNavigate.current
-    val ctx = androidx.compose.ui.platform.LocalContext.current
     var confirmAdult by remember { mutableStateOf(false) }
     var adStrip by remember { mutableStateOf(app.iduanju.core.hls.HLSAdFilter.enabled) }
     var prefetch by remember { mutableStateOf(ia.settings.prefetchEnabled) }
@@ -44,34 +50,41 @@ fun SourcesScreen(onBack: () -> Unit) {
         Group("插件与采集站") {
             LinkRow("插件管理", ProfileIcons.plugin, sub = "JS 插件、订阅、苹果 CMS 采集站；成人插件在这里解锁后才显示") { go("plugins") }
         }
-        Group("播放") {
+        Group("播放设置") {
             SwitchRow("去广告", ProfileIcons.adblock, "去掉 HLS 片源里插播的广告片段（adjump、异域名短片段、重复片段）", adStrip) {
                 adStrip = it; app.iduanju.core.hls.HLSAdFilter.enabled = it
                 ia.settings.adStripEnabled = it
             }
+            RowDivider()
             SwitchRow("预加载下一集", ProfileIcons.download, "播放时提前缓存下一集，可减少切集等待", prefetch) {
                 prefetch = it; ia.settings.prefetchEnabled = it
             }
-            Text("播放缓存上限：${cacheMB} MB", color = c.text, modifier = Modifier.padding(14.dp))
-            androidx.compose.material3.Slider(value = cacheMB.toFloat(), onValueChange = { cacheMB = (it / 100).toInt() * 100 },
-                onValueChangeFinished = { ia.settings.playbackCacheMB = cacheMB }, valueRange = 100f..2000f, steps = 18, modifier = Modifier.padding(horizontal = 14.dp))
+            RowDivider()
+            Column(Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("播放缓存上限", color = c.text, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                    Text("${cacheMB} MB", color = c.secondary, fontSize = 14.sp)
+                }
+                GlassSlider(cacheMB.toFloat(), { cacheMB = (it / 100f).roundToInt() * 100 }, valueRange = 100f..2000f, steps = 18,
+                    onValueChangeFinished = { ia.settings.playbackCacheMB = cacheMB }, label = "播放缓存上限", valueText = { "${it.roundToInt()} MB" })
+            }
         }
         DeviceOverrideGroup()
         Note(message)
     }
-    if (confirmAdult) AlertDialog(
+    if (confirmAdult) GlassConfirm(
         onDismissRequest = { confirmAdult = false },
-        title = { Text("显示成人片源？") },
-        text = { Text("仅限年满 18 周岁的用户。开启后黄果与标记为成人的片源会出现在首页、搜索、频道与漫画；可随时在这里关闭。") },
-        confirmButton = { TextButton({ ia.cms.adultUnlocked = true; confirmAdult = false; message = "已显示成人片源" }) { Text("我已年满 18 周岁") } },
-        dismissButton = { TextButton({ confirmAdult = false }) { Text("取消") } },
+        title = "显示成人片源？",
+        message = "仅限年满 18 周岁的用户。开启后黄果与标记为成人的片源会出现在首页、搜索、频道与漫画；可随时在这里关闭。",
+        confirmText = "我已年满 18 周岁",
+        onConfirm = { ia.cms.adultUnlocked = true; confirmAdult = false; message = "已显示成人片源" },
     )
 }
 
 @Composable
 private fun BuiltinRow(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, sub: String? = null) {
     val c = IdjThemeColors
-    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 50.dp).padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         androidx.compose.material3.Icon(icon, null, tint = c.text, modifier = Modifier.size(22.dp)); Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(title, color = c.text, fontSize = 16.sp)
@@ -90,17 +103,19 @@ private fun DeviceOverrideGroup() {
     var did by remember { mutableStateOf(settings.playerDeviceOverride()?.first ?: "") }
     var iid by remember { mutableStateOf(settings.playerDeviceOverride()?.second ?: "") }
     var saved by remember { mutableStateOf<String?>(null) }
+    var custom by remember { mutableStateOf(settings.playerDeviceOverride() != null) }
     Group("高级", footer = if (open) "留空时自动注册一台播放设备（只保存在内存里）；填写后所有取流都使用这台设备，不会写进源码。" else null) {
-        LinkRow("红果播放设备", ProfileIcons.device, trailing = if (settings.playerDeviceOverride() != null) "自定义" else "自动") { open = !open }
-        if (open) Column(Modifier.padding(horizontal = 14.dp).padding(bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            val colors = TextFieldDefaults.colors(focusedContainerColor = c.bg, unfocusedContainerColor = c.bg)
-            OutlinedTextField(did, { did = it }, label = { Text("device_id") }, singleLine = true, modifier = Modifier.fillMaxWidth(), colors = colors)
-            OutlinedTextField(iid, { iid = it }, label = { Text("iid") }, singleLine = true, modifier = Modifier.fillMaxWidth(), colors = colors)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextAction("保存", enabled = did.isNotBlank() && iid.isNotBlank()) { settings.setPlayerDeviceOverride(did.trim(), iid.trim()); saved = "已保存，之后取流使用这台设备" }
-                TextAction("恢复自动") { did = ""; iid = ""; settings.setPlayerDeviceOverride(null, null); saved = "已恢复自动注册" }
+        LinkRow("红果播放设备", ProfileIcons.device, trailing = if (custom) "自定义" else "自动") { open = !open }
+        AnimatedVisibility(open, enter = expandVertically(DS.panel()) + fadeIn(Motion.fade()), exit = shrinkVertically(DS.panel()) + fadeOut(Motion.fade(Motion.QUICK))) {
+            Column(Modifier.padding(horizontal = 14.dp).padding(bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                GlassTextField(did, { did = it }, label = "device_id")
+                GlassTextField(iid, { iid = it }, label = "iid")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextAction("保存", enabled = did.isNotBlank() && iid.isNotBlank()) { settings.setPlayerDeviceOverride(did.trim(), iid.trim()); custom = true; saved = "已保存，之后取流使用这台设备" }
+                    TextAction("恢复自动") { did = ""; iid = ""; settings.setPlayerDeviceOverride(null, null); custom = false; saved = "已恢复自动注册" }
+                }
+                saved?.let { Text(it, color = c.accent, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp)) }
             }
-            saved?.let { Text(it, color = c.accent, fontSize = 12.sp) }
         }
     }
 }

@@ -9,11 +9,14 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -44,7 +47,10 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -166,14 +172,38 @@ fun DSPage(cool: Boolean = false, glow: Boolean = true, modifier: Modifier = Mod
 @Composable
 fun Hairline(modifier: Modifier = Modifier) = Box(modifier.fillMaxWidth().height(1.dp).background(IdjThemeColors.hairline))
 
-/** Press feedback (spec "按下"): scale 0.96 and 85 % opacity. */
+/** Press feedback (spec "按下"): scale 0.96 and 85 % opacity. The animated scale is read in the layer block only. */
 fun Modifier.pressClick(scale: Float = 0.96f, enabled: Boolean = true, label: String? = null, onClick: () -> Unit): Modifier = composed {
     val src = remember { MutableInteractionSource() }
-    val pressed by src.collectIsPressedAsState()
-    val s by animateFloatAsState(if (pressed) scale else 1f, DS.press(), label = "press")
-    this.graphicsLayer { scaleX = s; scaleY = s; alpha = if (pressed) 0.85f else 1f }
-        .clickable(src, null, enabled = enabled, onClick = onClick)
+    this.pressScale(src, scale, 0.85f)
+        .clickable(src, null, enabled = enabled, role = Role.Button, onClick = onClick)
         .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)
+}
+
+/** Tap + long-press with the same press feedback. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+fun Modifier.pressLongClick(scale: Float = 0.96f, label: String? = null, longLabel: String? = null, onLongClick: () -> Unit, onClick: () -> Unit): Modifier {
+    val src = remember { MutableInteractionSource() }
+    return this.pressScale(src, scale, 0.85f)
+        .combinedClickable(src, null, role = Role.Button, onLongClickLabel = longLabel, onLongClick = onLongClick, onClick = onClick)
+        .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)
+}
+
+/** Press feedback of a full-width row inside a card: a quiet wash instead of a ripple or a scale. */
+@Composable
+fun Modifier.pressWash(source: InteractionSource): Modifier {
+    val pressed by source.collectIsPressedAsState()
+    val k = animateFloatAsState(if (pressed) 1f else 0f, DS.press(), label = "pressWash")
+    val ink = IdjThemeColors.text
+    return this.drawBehind { if (k.value > 0.01f) drawRect(ink.copy(alpha = 0.07f * k.value.coerceIn(0f, 1f))) }
+}
+
+/** Tappable card row (button role, [pressWash]). */
+@Composable
+fun Modifier.rowClick(enabled: Boolean = true, onClick: () -> Unit): Modifier {
+    val src = remember { MutableInteractionSource() }
+    return this.pressWash(src).clickable(src, null, enabled = enabled, role = Role.Button, onClick = onClick)
 }
 
 // MARK: level 1 — underline tabs (`.ttabs`)
@@ -198,14 +228,18 @@ fun <T> UnderlineTabs(items: List<T>, selected: T, label: (T) -> String, small: 
                     maxLines = 1,
                     modifier = Modifier.onGloballyPositioned { pos[i] = it.positionInParent().x to it.size.width.toFloat() }
                         .padding(bottom = if (small) 0.dp else 6.dp)
-                        .clickable(remember { MutableInteractionSource() }, null) { onSelect(it) }
-                        .semantics { contentDescription = "tabs.${label(it)}" })
+                        .selectable(on, remember { MutableInteractionSource() }, null, role = Role.Tab) { onSelect(it) }
+                        .testTag("tabs.${label(it)}"))
             }
         }
         if (target != null) Box(Modifier.align(Alignment.BottomStart).offset(x = x, y = if (small) 0.dp else 0.dp)
             .size(uw, if (small) 3.dp else 4.dp).clip(CircleShape).background(c.accent))
     }
 }
+
+/** A fixed-height control that still grows with the system font. */
+@Composable
+private fun scaledHeight(base: Dp): Dp = base * LocalDensity.current.fontScale.coerceIn(1f, 1.6f)
 
 // MARK: level 2 — segmented control (`.seg`): 40 dp, radius 14, padding 3, thumb radius 11
 // LIQUID: sheer glass track with a specular rim + glossy refractive thumb; FROSTED: frosted track + solid thumb.
@@ -232,7 +266,7 @@ fun <T> SegmentedTabs(items: List<T>, selected: T, label: (T) -> String, onSelec
     } else {
         Modifier.clip(trackShape).background(c.glass).border(1.dp, c.hairline, trackShape)
     }
-    BoxWithConstraints(modifier.fillMaxWidth().height(40.dp).then(track).padding(3.dp)) {
+    BoxWithConstraints(modifier.fillMaxWidth().height(scaledHeight(40.dp)).then(track).padding(3.dp)) {
         val w = maxWidth / items.size.coerceAtLeast(1)
         val x by animateDpAsState(w * idx, DS.select(), label = "seg")
         Box(Modifier.offset(x = x).width(w).fillMaxHeight()
@@ -250,7 +284,7 @@ fun <T> SegmentedTabs(items: List<T>, selected: T, label: (T) -> String, onSelec
             items.forEachIndexed { i, it ->
                 val on = i == idx
                 val col by animateColorAsState(if (on) c.text else c.secondary, label = "segc")
-                Box(Modifier.weight(1f).fillMaxHeight().clickable(remember { MutableInteractionSource() }, null) { onSelect(it) }
+                Box(Modifier.weight(1f).fillMaxHeight().selectable(on, remember { MutableInteractionSource() }, null, role = Role.Tab) { onSelect(it) }
                     .semantics { contentDescription = "seg.${label(it)}" }, contentAlignment = Alignment.Center) {
                     Text(label(it), color = col, fontSize = 14.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1)
                 }
@@ -272,8 +306,9 @@ fun ToneChip(title: String, on: Boolean, neutral: Boolean = false, small: Boolea
         .clip(CircleShape).background(fill)
         .then(if (on && !neutral) Modifier.border(1.dp, c.accentLine, CircleShape) else Modifier)
         .pressClick(0.97f, enabled, onClick = onClick)
-        .height(if (small) 28.dp else 32.dp).padding(horizontal = if (small) 12.dp else 14.dp)
-        .semantics { contentDescription = "chip.$title" },
+        .semantics { selected = on }
+        .testTag("chip.$title")
+        .heightIn(min = if (small) 28.dp else 32.dp).padding(horizontal = if (small) 12.dp else 14.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         Text(title, color = ink, fontSize = if (small) 13.sp else 14.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
         if (count != null) Text("$count", color = ink.copy(alpha = ink.alpha * 0.72f), fontSize = 12.sp, fontWeight = FontWeight.Medium)
@@ -374,7 +409,7 @@ fun MiniButton(title: String, onClick: () -> Unit) {
 /** `.nav`: 44 dp bar, 96 dp side slots, centred 17 sp title. */
 @Composable
 fun DSNavBar(title: String, modifier: Modifier = Modifier, titleAlpha: Float = 1f, leading: @Composable () -> Unit = {}, trailing: @Composable () -> Unit = {}) {
-    Row(modifier.fillMaxWidth().height(44.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(96.dp), contentAlignment = Alignment.CenterStart) { leading() }
         Text(title, Modifier.weight(1f).graphicsLayer { alpha = titleAlpha }, color = IdjThemeColors.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
             maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
@@ -445,10 +480,12 @@ fun DSStatus(text: String, tone: StatusTone) {
 @Composable
 fun DSProgressBar(value: Float, modifier: Modifier = Modifier) {
     val c = IdjThemeColors
-    val v by animateFloatAsState(value.coerceIn(0f, 1f), label = "bar")
-    Box(modifier.fillMaxWidth().height(3.dp).clip(CircleShape).background(c.glassBorder)) {
-        Box(Modifier.fillMaxHeight().fillMaxWidth(v).clip(CircleShape).background(c.accent))
-    }
+    val v = animateFloatAsState(value.coerceIn(0f, 1f), label = "bar")
+    Box(modifier.fillMaxWidth().height(3.dp).clip(CircleShape).drawBehind {
+        drawRect(c.glassBorder)
+        if (v.value > 0f) drawRoundRect(c.accent, size = androidx.compose.ui.geometry.Size(size.width * v.value, size.height),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f, size.height / 2f))
+    })
 }
 
 /** `.dot` / `.lico`: tinted icon well. */

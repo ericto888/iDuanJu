@@ -67,20 +67,170 @@ enum LegadoSourceState {
         mem = all
         UserDefaults.standard.set(all, forKey: key)
         lock.unlock()
+        if let u = URL(string: s) {
+            LegadoCookies.remove(for: u)
+        }
     }
 }
 
-/// WebKit cookies → URLSession (HTTPCookieStorage.shared), so book-source requests carry the login.
+/// WebKit cookies → URLSession (HTTPCookieStorage.shared) + persisted snapshot, so book-source requests always carry
+/// the web login cookies (including session-only cookies across app restarts).
 enum LegadoCookies {
-    @MainActor static func syncFromWebKit() async {
-        let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
-        for c in cookies { HTTPCookieStorage.shared.setCookie(c) }
+    struct Stored: Codable {
+        let name: String
+        let value: String
+        let domain: String
+        let path: String
+        let secure: Bool
+        let expires: Double?
+    }
+
+    private static let lock = NSLock()
+    private static let key = "stv.legado.cookies.v1"
+    nonisolated(unsafe) private static var mem: [Stored]?
+
+    private static func load() -> [Stored] {
+        if let m = mem { return m }
+        guard let d = UserDefaults.standard.data(forKey: key),
+              let list = try? JSONDecoder().decode([Stored].self, from: d) else {
+            mem = []
+            return []
+        }
+        mem = list
+        return list
+    }
+
+    private static func save(_ list: [Stored]) {
+        mem = list
+        if let d = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(d, forKey: key)
+        }
+    }
+
+    private static func domainMatches(cookieDomain: String, host: String) -> Bool {
+        let cd = cookieDomain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let h = host.lowercased()
+        guard !cd.isEmpty, !h.isEmpty else { return false }
+        return h == cd || h.hasSuffix("." + cd)
+    }
+
+    private static func pathMatches(cookiePath: String, requestPath: String) -> Bool {
+        let cp = cookiePath.isEmpty ? "/" : cookiePath
+        let rp = requestPath.isEmpty ? "/" : requestPath
+        if cp == "/" { return true }
+        return rp == cp || rp.hasPrefix(cp.hasSuffix("/") ? cp : cp + "/")
+    }
+
+    @MainActor static func syncFromWebKit(store: WKHTTPCookieStore = WKWebsiteDataStore.default().httpCookieStore) async {
+        let cookies = await store.allCookies()
+        guard !cookies.isEmpty else { return }
+        let now = Date().timeIntervalSince1970
+        var byKey: [String: Stored] = [:]
+        lock.lock()
+        for existing in load() {
+            if let exp = existing.expires, exp < now { continue }
+            byKey["\(existing.domain.lowercased())|\(existing.path)|\(existing.name)"] = existing
+        }
+        for c in cookies {
+            if let exp = c.expiresDate, exp.timeIntervalSince1970 < now { continue }
+            // Re-materialize without session-only drop so URLSession & HTTPCookieStorage keep it reliably.
+            var props = c.properties ?? [:]
+            if props[.expires] == nil {
+                props[.expires] = Date(timeIntervalSinceNow: 30 * 24 * 3600)
+                props.removeValue(forKey: .discard)
+            }
+            if let normalized = HTTPCookie(properties: props) {
+                HTTPCookieStorage.shared.setCookie(normalized)
+            } else {
+                HTTPCookieStorage.shared.setCookie(c)
+            }
+            let item = Stored(
+                name: c.name,
+                value: c.value,
+                domain: c.domain,
+                path: c.path,
+                secure: c.isSecure,
+                expires: c.expiresDate?.timeIntervalSince1970
+            )
+            byKey["\(item.domain.lowercased())|\(item.path)|\(item.name)"] = item
+        }
+        save(Array(byKey.values))
+        lock.unlock()
     }
 
     static func syncFromWebKitBlocking() {
         let sem = DispatchSemaphore(value: 0)
         Task { @MainActor in await syncFromWebKit(); sem.signal() }
         _ = sem.wait(timeout: .now() + 5)
+    }
+
+    /// Returns merged `Cookie` header value (HTTPCookieStorage + persisted WebKit snapshot) for `url`.
+    static func cookieHeader(for url: URL) -> String? {
+        guard let host = url.host, !host.isEmpty else { return nil }
+        let isHTTPS = url.scheme?.lowercased() == "https"
+        let reqPath = url.path.isEmpty ? "/" : url.path
+        let now = Date().timeIntervalSince1970
+
+        var pairs: [String: String] = [:]
+        var order: [String] = []
+        func put(_ name: String, _ value: String) {
+            if pairs[name] == nil { order.append(name) }
+            pairs[name] = value
+        }
+
+        lock.lock()
+        let stored = load()
+        lock.unlock()
+        for c in stored {
+            if let exp = c.expires, exp < now { continue }
+            if c.secure && !isHTTPS { continue }
+            if domainMatches(cookieDomain: c.domain, host: host) && pathMatches(cookiePath: c.path, requestPath: reqPath) {
+                put(c.name, c.value)
+            }
+        }
+        for c in HTTPCookieStorage.shared.cookies(for: url) ?? [] {
+            put(c.name, c.value)
+        }
+        guard !order.isEmpty else { return nil }
+        return order.compactMap { k in pairs[k].map { "\(k)=\($0)" } }.joined(separator: "; ")
+    }
+
+    static func setManual(_ cookieString: String, for url: URL) {
+        guard let host = url.host, !host.isEmpty else { return }
+        let parts = cookieString.split(separator: ";").compactMap { part -> (String, String)? in
+            let kv = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard kv.count == 2, !kv[0].isEmpty else { return nil }
+            return (kv[0], kv[1])
+        }
+        guard !parts.isEmpty else { return }
+        let exp = Date(timeIntervalSinceNow: 30 * 24 * 3600)
+        let cookies = parts.compactMap { HTTPCookie(properties: [.name: $0.0, .value: $0.1, .domain: host, .path: "/", .expires: exp]) }
+        HTTPCookieStorage.shared.setCookies(cookies, for: url, mainDocumentURL: nil)
+        lock.lock()
+        var byKey: [String: Stored] = [:]
+        for existing in load() { byKey["\(existing.domain.lowercased())|\(existing.path)|\(existing.name)"] = existing }
+        for (k, v) in parts {
+            let item = Stored(name: k, value: v, domain: host, path: "/", secure: false, expires: exp.timeIntervalSince1970)
+            byKey["\(item.domain.lowercased())|\(item.path)|\(item.name)"] = item
+        }
+        save(Array(byKey.values))
+        lock.unlock()
+    }
+
+    static func remove(for url: URL) {
+        guard let host = url.host, !host.isEmpty else { return }
+        (HTTPCookieStorage.shared.cookies(for: url) ?? []).forEach(HTTPCookieStorage.shared.deleteCookie)
+        lock.lock()
+        let remaining = load().filter { !domainMatches(cookieDomain: $0.domain, host: host) }
+        save(remaining)
+        lock.unlock()
+        Task { @MainActor in
+            let store = WKWebsiteDataStore.default().httpCookieStore
+            let all = await store.allCookies()
+            for c in all where domainMatches(cookieDomain: c.domain, host: host) {
+                await store.deleteCookie(c)
+            }
+        }
     }
 }
 
@@ -89,14 +239,11 @@ enum LegadoCookies {
 /// Full-screen browser presented over whatever is on screen. `open` returns when the user taps 完成.
 @MainActor
 final class LegadoBrowser: NSObject, WKNavigationDelegate {
-    static func open(url: URL?, html: String?, title: String, sourceURL: String?) async {
+    static func open(url: URL?, html: String?, title: String, sourceURL: String?, userAgent: String? = nil) async {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            let vc = LegadoBrowserVC(url: url, html: html, title: title) {
-                Task { @MainActor in
-                    await LegadoCookies.syncFromWebKit()
-                    if let s = sourceURL { LegadoSourceState.set(s, "webLogin", "1") }
-                    cont.resume()
-                }
+            let vc = LegadoBrowserVC(url: url, html: html, title: title, userAgent: userAgent) {
+                if let s = sourceURL { LegadoSourceState.set(s, "webLogin", "1") }
+                cont.resume()
             }
             let nav = UINavigationController(rootViewController: vc)
             nav.modalPresentationStyle = .fullScreen
@@ -106,10 +253,10 @@ final class LegadoBrowser: NSObject, WKNavigationDelegate {
     }
 
     /// From a book-source worker thread: shows the browser and blocks until it is closed.
-    nonisolated static func openBlocking(url: URL?, html: String?, title: String, sourceURL: String?) {
+    nonisolated static func openBlocking(url: URL?, html: String?, title: String, sourceURL: String?, userAgent: String? = nil) {
         let sem = DispatchSemaphore(value: 0)
         Task { @MainActor in
-            await open(url: url, html: html, title: title, sourceURL: sourceURL)
+            await open(url: url, html: html, title: title, sourceURL: sourceURL, userAgent: userAgent)
             sem.signal()
         }
         sem.wait()
@@ -132,11 +279,14 @@ final class LegadoBrowserVC: UIViewController {
         }())
     private let url: URL?
     private let html: String?
+    private let customUA: String?
     private let onDone: () -> Void
+    private var finished = false
 
-    init(url: URL?, html: String?, title: String, onDone: @escaping () -> Void) {
+    init(url: URL?, html: String?, title: String, userAgent: String? = nil, onDone: @escaping () -> Void) {
         self.url = url
         self.html = html
+        self.customUA = userAgent
         self.onDone = onDone
         super.init(nibName: nil, bundle: nil)
         self.title = title
@@ -146,7 +296,7 @@ final class LegadoBrowserVC: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        web.customUserAgent = LegadoHTTP.userAgent
+        web.customUserAgent = (customUA?.isEmpty == false ? customUA : nil) ?? LegadoHTTP.userAgent
         web.frame = view.bounds
         web.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(web)
@@ -157,7 +307,13 @@ final class LegadoBrowserVC: UIViewController {
     }
 
     @objc private func done() {
-        dismiss(animated: true) { [onDone] in onDone() }
+        guard !finished else { return }
+        finished = true
+        Task { @MainActor in
+            // Sync cookies while the WKWebView is still alive so session cookies are captured reliably.
+            await LegadoCookies.syncFromWebKit(store: web.configuration.websiteDataStore.httpCookieStore)
+            dismiss(animated: true) { [onDone] in onDone() }
+        }
     }
 }
 

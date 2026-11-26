@@ -7,6 +7,7 @@ import android.text.*
 import android.text.style.*
 import android.view.MotionEvent
 import android.view.View
+import app.iduanju.ui.components.Motion
 import org.json.JSONObject
 import kotlin.math.*
 
@@ -28,9 +29,15 @@ internal data class ReaderPalette(val bg:Int,val panel:Int,val track:Int,val thu
 
 /** Same text metrics as iOS NovelLayout. Body offsets exclude the chapter heading. */
 internal object ReaderText {
+    private val loaded=HashMap<String,Pair<Long,Typeface>>()
+    /** Downloaded fonts are 10–20 MB: parse each file once, again only after a new download replaced it. */
     fun typeface(context:Context,id:String):Typeface {
         val file=java.io.File(context.filesDir,"novel-fonts/$id.font")
-        if(file.isFile)return runCatching{Typeface.createFromFile(file)}.getOrDefault(Typeface.DEFAULT)
+        if(file.isFile){
+            val stamp=file.lastModified()
+            synchronized(loaded){loaded[id]?.takeIf{it.first==stamp}?.let{return it.second}}
+            return runCatching{Typeface.createFromFile(file)}.getOrNull()?.also{synchronized(loaded){loaded[id]=stamp to it}}?:Typeface.DEFAULT
+        }
         return Typeface.create(if(id=="songti")"serif" else if(id=="kaiti")"cursive" else if(id=="yuanti")"sans-serif-rounded" else "sans-serif",Typeface.NORMAL)
     }
     fun content(body:String,title:String,s:ReaderSettings,scale:Float):SpannableString {
@@ -62,12 +69,14 @@ internal class NovelPageView(context:Context):View(context) {
     var enabledTurns=true
     private var settings=ReaderSettings();private var body="";private var chapter="";private var key=""
     private var layout:StaticLayout?=null;private var firstLines=listOf(0);private var page=0;private var pendingOffset=0
-    private val ink=TextPaint(Paint.ANTI_ALIAS_FLAG);private val small=Paint(Paint.ANTI_ALIAS_FLAG);private val fill=Paint(Paint.ANTI_ALIAS_FLAG)
+    private val ink=TextPaint(Paint.ANTI_ALIAS_FLAG);private val small=TextPaint(Paint.ANTI_ALIAS_FLAG);private val fill=Paint(Paint.ANTI_ALIAS_FLAG)
+    private val foldPath=Path();private val bandPath=Path();private var header="";private var headerFor:String?=null;private var headerFit=0f
     private val density=resources.displayMetrics.density;private val scale=resources.displayMetrics.scaledDensity
     private var drag=0f;private var downX=0f;private var downY=0f;private var moved=false;private var animator:ValueAnimator?=null
     private val margin get()=(12+28*settings.margin)*density
     private val bodyHeight get()=(height-62*density).coerceAtLeast(1f)
     private val palette get()=ReaderPalette.of(settings.theme)
+    private val settleCurve=android.view.animation.PathInterpolator(0.05f,0.7f,0.1f,1f) // Motion.Decelerate
     fun update(newKey:String,text:String,title:String,s:ReaderSettings,offset:Int){
         if(key==newKey && body==text && chapter==title && settings==s)return
         val same=key==newKey;val preserve=if(same)currentOffset() else offset
@@ -98,7 +107,8 @@ internal class NovelPageView(context:Context):View(context) {
         if(index !in firstLines.indices)return
         val save=c.save();c.translate(dx,0f);fill.color=palette.bg;c.drawRect(0f,0f,width.toFloat(),height.toFloat(),fill)
         small.textSize=12*scale;small.color=palette.secondary;small.typeface=Typeface.DEFAULT
-        val header=TextUtils.ellipsize(chapter,TextPaint(small),(width-2*margin),TextUtils.TruncateAt.END).toString()
+        val headerWidth=width-2*margin
+        if(headerFor!==chapter||headerFit!=headerWidth){headerFor=chapter;headerFit=headerWidth;header=TextUtils.ellipsize(chapter,small,headerWidth,TextUtils.TruncateAt.END).toString()}
         c.drawText(header,margin,15*density,small)
         val l=layout
         if(l!=null){
@@ -119,10 +129,10 @@ internal class NovelPageView(context:Context):View(context) {
             "curl"->{
                 drawPage(c,target);val progress=(abs(drag)/width).coerceIn(0f,1f);val edge=if(direction>0)width*(1-progress) else width*progress
                 val fold=sin(progress*Math.PI).toFloat()*min(64*density,width*.2f)
-                val path=Path();if(direction>0){path.moveTo(0f,0f);path.lineTo(edge,0f);path.quadTo(edge-fold,height*.5f,edge,height.toFloat());path.lineTo(0f,height.toFloat())}
+                val path=foldPath;path.rewind();if(direction>0){path.moveTo(0f,0f);path.lineTo(edge,0f);path.quadTo(edge-fold,height*.5f,edge,height.toFloat());path.lineTo(0f,height.toFloat())}
                 else{path.moveTo(width.toFloat(),0f);path.lineTo(edge,0f);path.quadTo(edge+fold,height*.5f,edge,height.toFloat());path.lineTo(width.toFloat(),height.toFloat())};path.close()
                 val save=c.save();c.clipPath(path);drawPage(c,page);c.restoreToCount(save)
-                val band=Path().apply{moveTo(edge,0f);quadTo(edge-direction*fold,height*.5f,edge,height.toFloat());quadTo(edge+direction*fold*.65f,height*.5f,edge,0f);close()}
+                val band=bandPath.apply{rewind();moveTo(edge,0f);quadTo(edge-direction*fold,height*.5f,edge,height.toFloat());quadTo(edge+direction*fold*.65f,height*.5f,edge,0f);close()}
                 fill.shader=LinearGradient(edge-fold,0f,edge+fold.coerceAtLeast(1f),0f,intArrayOf(0x33000000,palette.panel,0x66000000),null,Shader.TileMode.CLAMP);c.drawPath(band,fill);fill.shader=null
             }
             else->{drawPage(c,target,drag+direction*width);drawPage(c,page,drag)}
@@ -130,20 +140,25 @@ internal class NovelPageView(context:Context):View(context) {
     }
     private fun animateTurn(direction:Int,from:Float){
         if(settings.turn=="none"){page+=direction;drag=0f;notifyPosition();invalidate();return}
-        animator=ValueAnimator.ofFloat(from,-direction*width.toFloat()).apply{duration=220
+        animator=ValueAnimator.ofFloat(from,-direction*width.toFloat()).apply{duration=Motion.MEDIUM.toLong();interpolator=settleCurve
             addUpdateListener{drag=it.animatedValue as Float;invalidate()}
             addListener(object:android.animation.AnimatorListenerAdapter(){private var cancelled=false;override fun onAnimationCancel(a:android.animation.Animator){cancelled=true};override fun onAnimationEnd(a:android.animation.Animator){if(!cancelled){page=(page+direction).coerceIn(firstLines.indices);drag=0f;notifyPosition();invalidate()}}});start()}
     }
+    /** A drag that turned no page glides back instead of jumping. */
+    private fun settleBack(){
+        if(abs(drag)<1f){drag=0f;invalidate();return}
+        animator=ValueAnimator.ofFloat(drag,0f).apply{duration=Motion.SHORT.toLong();interpolator=settleCurve;addUpdateListener{drag=it.animatedValue as Float;invalidate()};start()}
+    }
     override fun onTouchEvent(e:MotionEvent):Boolean{
-        if(e.actionMasked==MotionEvent.ACTION_DOWN){downX=e.x;downY=e.y;moved=false;animator?.cancel()}
+        if(e.actionMasked==MotionEvent.ACTION_DOWN){downX=e.x;downY=e.y;moved=false;animator?.cancel();if(drag!=0f){drag=0f;invalidate()}}
         if(e.actionMasked==MotionEvent.ACTION_MOVE){val dx=e.x-downX;val dy=e.y-downY;if(abs(dx)>12*density||abs(dy)>12*density)moved=true
             if(moved&&abs(dx)>abs(dy)&&enabledTurns){drag=dx.coerceIn(-width.toFloat(),width.toFloat());invalidate()}}
         if(e.actionMasked==MotionEvent.ACTION_UP && !moved){when{e.x<width/3f->next(-1);e.x>width*2/3f->next(1);else->performClick()}}
         if(e.actionMasked==MotionEvent.ACTION_UP && moved){val dx=e.x-downX;val dy=e.y-downY
             if(abs(dy)>abs(dx)&&dy< -40*density){drag=0f;onMenu();invalidate()}
             else if(abs(dx)>width*.15f && enabledTurns){val dir=if(dx<0)1 else -1;if(page+dir in firstLines.indices)animateTurn(dir,drag) else{drag=0f;onEdge(dir);invalidate()}}
-            else{drag=0f;invalidate()}}
-        if(e.actionMasked==MotionEvent.ACTION_CANCEL){drag=0f;invalidate()};return true
+            else settleBack()}
+        if(e.actionMasked==MotionEvent.ACTION_CANCEL)settleBack();return true
     }
     override fun performClick():Boolean{onMenu();return super.performClick()}
     override fun onDetachedFromWindow(){animator?.cancel();super.onDetachedFromWindow()}

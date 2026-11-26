@@ -5,15 +5,21 @@ import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -22,6 +28,11 @@ import androidx.compose.ui.window.DialogProperties
 import app.iduanju.IdjApp
 import app.iduanju.core.util.CFDetect
 import app.iduanju.core.util.VerificationRequiredException
+import app.iduanju.ui.components.ButtonTone
+import app.iduanju.ui.components.GlassButton
+import app.iduanju.ui.components.GlassTextButton
+import app.iduanju.ui.components.Hairline
+import app.iduanju.ui.components.IconWell
 import app.iduanju.ui.theme.IdjThemeColors
 import okhttp3.Cookie
 import okhttp3.CookieJar
@@ -48,24 +59,16 @@ object WebViewCookieJar : CookieJar {
 fun VerifyRequiredState(e: VerificationRequiredException, onRetry: () -> Unit) {
     val c = IdjThemeColors
     var show by remember { mutableStateOf(false) }
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("需要验证", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-        Text("${e.host} 开启了人机验证，请在页面中完成一次验证", color = c.secondary, fontSize = 13.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Pill("去验证", filled = true) { show = true }
-            Pill("重试", filled = false, onRetry)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        IconWell(Icons.Outlined.Shield, 52.dp)
+        Text("需要验证", color = c.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Text("${e.host} 开启了人机验证，请在页面中完成一次验证", color = c.secondary, fontSize = 13.sp, lineHeight = 19.sp, textAlign = TextAlign.Center)
+        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            GlassButton("去验证") { show = true }
+            GlassButton("重试", tone = ButtonTone.Glass, onClick = onRetry)
         }
     }
     if (show) CFVerifyDialog(e.url, onDismiss = { show = false }, onPassed = { show = false; onRetry() })
-}
-
-@Composable
-private fun Pill(label: String, filled: Boolean, onClick: () -> Unit) {
-    val c = IdjThemeColors
-    Box(Modifier.height(34.dp).clip(RoundedCornerShape(50)).background(if (filled) c.text else c.text.copy(0.08f))
-        .clickable(onClick = onClick).padding(horizontal = 18.dp), contentAlignment = Alignment.Center) {
-        Text(label, color = if (filled) c.bg else c.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-    }
 }
 
 /**
@@ -91,15 +94,20 @@ fun CFVerifyDialog(url: String, onDismiss: () -> Unit, onPassed: () -> Unit) {
     fun passed(w: WebView) = pageCleared(w) && hasClearance()
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(c.bg).systemBarsPadding()) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("关闭", color = c.secondary, fontSize = 15.sp, modifier = Modifier.clickable(onClick = onDismiss))
-                Text("站点验证", color = c.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                Text("完成", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.clickable {
-                    val w = web ?: return@clickable
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                GlassTextButton("关闭", color = c.secondary, fontSize = 16.sp, onClick = onDismiss)
+                Text("站点验证", color = c.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).semantics { heading() }, textAlign = TextAlign.Center)
+                GlassTextButton("完成", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) {
+                    val w = web ?: return@GlassTextButton
                     if (pageCleared(w)) finish(w) else status = "还未通过验证，请按页面提示完成后再点「完成」"
-                })
+                }
             }
-            Text(status, color = c.secondary, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            Hairline()
+            Row(Modifier.fillMaxWidth().background(c.glass).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Outlined.Shield, null, Modifier.size(18.dp), tint = c.accentWarm)
+                Text(status, color = c.secondary, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            }
             AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
                 WebView(ctx).apply {
                     settings.javaScriptEnabled = true

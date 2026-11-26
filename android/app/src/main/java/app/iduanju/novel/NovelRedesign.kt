@@ -1,16 +1,18 @@
 package app.iduanju.novel
 
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.*
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.*
-import androidx.compose.material3.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.*
@@ -22,10 +24,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
@@ -40,6 +44,7 @@ import app.iduanju.ui.components.*
 import app.iduanju.ui.theme.IdjThemeColors
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import kotlin.math.roundToInt
 
 internal data class ShelfEntry(
     val sourceId: String,
@@ -48,7 +53,9 @@ internal data class ShelfEntry(
     val currentChapter: Int = -1,
     val currentChapterTitle: String = "",
     val isLocal: Boolean = false,
+    val addedAt: Long = 0,
 ) {
+    val key: String get() = "$sourceId|${book.url}"
     val fraction: Float?
         get() = if (currentChapter >= 0 && totalChapters > 0) ((currentChapter + 1).toFloat() / totalChapters).coerceIn(0.01f, 1f) else null
     val remaining: Int
@@ -70,13 +77,15 @@ internal fun NovelShelf(
     onRank: () -> Unit,
     onSources: () -> Unit,
     embedded: Boolean = false,
+    loading: Boolean = false,
 ) {
     val c = IdjThemeColors
     var filter by remember { mutableStateOf(ShelfFilter.All) }
     var managing by remember { mutableStateOf(false) }
     var selectedKeys by remember { mutableStateOf(setOf<String>()) }
     var confirmTargets by remember { mutableStateOf<List<ShelfEntry>>(emptyList()) }
-    fun entryKey(e: ShelfEntry) = "${e.sourceId}|${e.book.url}"
+    fun entryKey(e: ShelfEntry) = e.key
+    val cols = LocalLayoutMetrics.current.posterCols
     val hero = remember(entries) { entries.firstOrNull { it.currentChapter >= 0 } ?: entries.firstOrNull() }
     val filtered = remember(entries, filter) {
         when (filter) {
@@ -85,6 +94,7 @@ internal fun NovelShelf(
             ShelfFilter.Local -> entries.filter { it.isLocal }
         }
     }
+    val rows = remember(filtered, cols) { filtered.chunked(cols) }
     LaunchedEffect(entries.size) {
         if (entries.isEmpty()) { managing = false; selectedKeys = emptySet() }
     }
@@ -95,7 +105,7 @@ internal fun NovelShelf(
         verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
         if (!embedded) {
-            item {
+            item(key = "title") {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -143,38 +153,24 @@ internal fun NovelShelf(
                 }
                 Spacer(Modifier.weight(1f))
                 if (entries.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()).padding(start = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         if (!managing) {
-                            ShelfFilter.entries.forEach { f ->
-                                val on = f == filter
-                                Box(
-                                    Modifier
-                                        .height(24.dp)
-                                        .clip(CircleShape)
-                                        .background(if (on) c.accentSoft else Color.Transparent)
-                                        .pressClick(0.95f) { filter = f }
-                                        .padding(horizontal = 9.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text(
-                                        f.label,
-                                        color = if (on) c.accent else c.secondary,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                                    )
-                                }
-                            }
+                            ShelfFilter.entries.forEach { f -> ShelfFilterChip(f.label, f == filter) { filter = f } }
                         }
                         Box(
                             Modifier
-                                .height(24.dp)
+                                .heightIn(min = 30.dp)
                                 .clip(CircleShape)
                                 .background(if (managing) c.accentSoft else c.glass)
                                 .pressClick(0.95f) {
                                     managing = !managing
                                     if (!managing) selectedKeys = emptySet()
                                 }
-                                .padding(horizontal = 10.dp),
+                                .padding(horizontal = 11.dp, vertical = 4.dp),
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
@@ -182,6 +178,7 @@ internal fun NovelShelf(
                                 color = if (managing) c.accent else c.text,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
                             )
                         }
                     }
@@ -192,40 +189,38 @@ internal fun NovelShelf(
         }
         if (managing && filtered.isNotEmpty()) {
             item(key = "manage-bar") {
-                val allSelected = filtered.all { entryKey(it) in selectedKeys }
-                val picked = entries.filter { entryKey(it) in selectedKeys }
+                val allSelected = remember(filtered, selectedKeys) { filtered.all { entryKey(it) in selectedKeys } }
+                val picked = remember(entries, selectedKeys) { entries.filter { entryKey(it) in selectedKeys } }
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
                         .padding(bottom = 12.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(c.surface)
-                        .border(0.7.dp, c.hairline, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .dsCard(14.dp)
+                        .padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        if (allSelected) "取消全选" else "全选 (${filtered.size})",
-                        color = c.accent,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clickable {
-                            selectedKeys = if (allSelected) emptySet() else filtered.map(::entryKey).toSet()
-                        },
-                    )
+                    GlassTextButton(if (allSelected) "取消全选" else "全选 (${filtered.size})", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) {
+                        selectedKeys = if (allSelected) emptySet() else filtered.map(::entryKey).toSet()
+                    }
                     Spacer(Modifier.weight(1f))
-                    Text(
+                    GlassTextButton(
                         if (picked.isEmpty()) "点击书籍勾选" else "删除所选 (${picked.size})",
-                        color = if (picked.isEmpty()) c.secondary else c.accentWarm,
+                        color = c.danger,
+                        enabled = picked.isNotEmpty(),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clickable(enabled = picked.isNotEmpty()) { confirmTargets = picked },
-                    )
+                    ) { confirmTargets = picked }
                 }
             }
         }
-        if (entries.isEmpty()) {
+        if (entries.isEmpty() && loading) {
+            items(2, key = { "skeleton$it" }, contentType = { "skeleton" }) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    repeat(cols) { PosterSkeleton(Modifier.weight(1f), aspect = 0.71f) }
+                }
+            }
+        } else if (entries.isEmpty()) {
             item(key = "empty") {
                 EmptyNovel("书架空空的", "导入本地 TXT，或添加书源后搜索并缓存喜欢的小说。")
             }
@@ -237,7 +232,7 @@ internal fun NovelShelf(
                 )
             }
         } else {
-            items(filtered.chunked(3)) { row ->
+            items(rows, key = { "row|" + entryKey(it.first()) }, contentType = { "row" }) { row ->
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -260,27 +255,50 @@ internal fun NovelShelf(
                             onLongClick = { confirmTargets = listOf(entry) },
                         )
                     }
-                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                    repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }
     }
     if (confirmTargets.isNotEmpty()) {
         val label = if (confirmTargets.size == 1) "「${confirmTargets.first().book.name}」" else "所选的 ${confirmTargets.size} 本书"
-        AlertDialog(
+        GlassConfirm(
             onDismissRequest = { confirmTargets = emptyList() },
-            title = { Text("从书架删除$label？") },
-            text = { Text("会同时清除本机缓存与阅读记录。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    val toRemove = confirmTargets
-                    confirmTargets = emptyList()
-                    onDelete(toRemove)
-                    selectedKeys = selectedKeys - toRemove.map(::entryKey).toSet()
-                    if (managing && selectedKeys.isEmpty()) managing = false
-                }) { Text("删除", color = c.accentWarm) }
+            title = "从书架删除$label？",
+            message = "会同时清除本机缓存与阅读记录。",
+            confirmText = "删除",
+            destructive = true,
+            onConfirm = {
+                val toRemove = confirmTargets
+                confirmTargets = emptyList()
+                onDelete(toRemove)
+                selectedKeys = selectedKeys - toRemove.map(::entryKey).toSet()
+                if (managing && selectedKeys.isEmpty()) managing = false
             },
-            dismissButton = { TextButton(onClick = { confirmTargets = emptyList() }) { Text("取消") } },
+        )
+    }
+}
+
+@Composable
+private fun ShelfFilterChip(label: String, on: Boolean, onClick: () -> Unit) {
+    val c = IdjThemeColors
+    val src = remember { MutableInteractionSource() }
+    Box(
+        Modifier
+            .pressScale(src, 0.95f)
+            .heightIn(min = 30.dp)
+            .clip(CircleShape)
+            .background(if (on) c.accentSoft else Color.Transparent)
+            .selectable(on, src, null, true, Role.Tab, onClick)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = if (on) c.accent else c.secondary,
+            fontSize = 12.sp,
+            fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
         )
     }
 }
@@ -324,7 +342,7 @@ private fun ContinueHeroBanner(
             horizontalArrangement = Arrangement.spacedBy(15.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            NovelPoster(entry.book, Modifier.width(82.dp).aspectRatio(0.71f))
+            NovelPoster(entry.book, Modifier.width(82.dp).aspectRatio(0.71f), thumb = 82.dp)
             Column(Modifier.weight(1f)) {
                 Text(
                     if (pct != null) "最近在读 · $pct" else if (entry.isLocal) "本地书籍 · 离线可读" else "继续阅读",
@@ -415,7 +433,12 @@ private fun ShelfBookCell(
 ) {
     val c = IdjThemeColors
     val frac = entry.fraction
-    Column(modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
+    val src = remember { MutableInteractionSource() }
+    Column(
+        modifier.pressScale(src)
+            .combinedClickable(src, null, onLongClickLabel = "删除", onLongClick = onLongClick, onClick = onClick)
+            .semantics { if (managing) this.selected = selected },
+    ) {
         Box(Modifier.fillMaxWidth().aspectRatio(0.71f)) {
             NovelPoster(
                 book = entry.book,
@@ -465,20 +488,24 @@ private fun ShelfBookCell(
     }
 }
 
-/** Shared blurred cover backdrop matching HomeScreen / DetailScreen (API 31+ blur, older API tiny thumbnail upscale). */
+/** Shared blurred cover backdrop (HomeScreen's BlurBackdrop): a 48×64 decode, so the blur itself can stay ≤ 12 dp; older APIs upscale a tiny one. */
 @Composable
 internal fun NovelBlurredBackdrop(url: String?, modifier: Modifier = Modifier, radius: Dp = 28.dp, alpha: Float = 1f) {
     if (url.isNullOrBlank()) return
+    val ctx = LocalContext.current
     if (android.os.Build.VERSION.SDK_INT >= 31) {
-        AsyncImage(url, null, modifier.scale(1.25f).blur(radius), contentScale = ContentScale.Crop, alpha = alpha)
+        val req = remember(url) { ImageRequest.Builder(ctx).data(url).size(48, 64).memoryCacheKey("novel-blur:$url").build() }
+        AsyncImage(req, null, modifier.scale(1.25f).blur((radius / 2).coerceAtMost(12.dp)), contentScale = ContentScale.Crop, alpha = alpha)
     } else {
-        val ctx = LocalContext.current
-        val req = remember(url) { ImageRequest.Builder(ctx).data(url).size(16, 22).memoryCacheKey("novel-blur:$url").build() }
+        val req = remember(url) { ImageRequest.Builder(ctx).data(url).size(16, 22).memoryCacheKey("novel-blur16:$url").build() }
         AsyncImage(req, null, modifier, contentScale = ContentScale.Crop, alpha = alpha, filterQuality = FilterQuality.High)
     }
 }
 
-/** Book cover with physical spine crease, subtle top-edge sheen, optional corner badge / bottom progress bar / rank numeral. */
+/**
+ * Book cover with physical spine crease, subtle top-edge sheen, optional corner badge / bottom progress bar / rank numeral.
+ * [thumb] = the fixed width of small covers: they decode at exactly that size and use the compact generated cover.
+ */
 @Composable
 internal fun NovelPoster(
     book: NovelHit,
@@ -487,6 +514,7 @@ internal fun NovelPoster(
     badge: String? = null,
     progress: Float? = null,
     rank: Int? = null,
+    thumb: Dp? = null,
 ) {
     val c = IdjThemeColors
     val shape = RoundedCornerShape(corner)
@@ -498,9 +526,14 @@ internal fun NovelPoster(
         contentAlignment = Alignment.Center,
     ) {
         if (book.cover.isNotBlank()) {
-            AsyncImage(book.cover, null, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+            val ctx = LocalContext.current
+            val px = if (thumb == null) 0 else with(LocalDensity.current) { thumb.roundToPx() }
+            val req = remember(book.cover, px) {
+                ImageRequest.Builder(ctx).data(book.cover).apply { if (px > 0) size(px, (px / 0.71f).roundToInt()) }.build()
+            }
+            AsyncImage(req, null, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
         } else {
-            GeneratedBookCover(book)
+            GeneratedBookCover(book, small = thumb != null && thumb < 74.dp)
         }
         // Tactile left spine highlight + crease shadow + subtle inner rim
         Box(
@@ -573,10 +606,9 @@ internal fun bookCoverBaseColor(title: String): Pair<Color, Color> =
 
 /** Clothbound fallback book cover (GeneratedBookCover v2): muted cloth gradient, delicate inset frame, serif typography. */
 @Composable
-private fun BoxScope.GeneratedBookCover(book: NovelHit) {
-    val (c1, c2) = bookCoverBaseColor(book.name)
-    BoxWithConstraints(Modifier.matchParentSize()) {
-        val small = maxWidth < 74.dp
+private fun BoxScope.GeneratedBookCover(book: NovelHit, small: Boolean) {
+    val (c1, c2) = remember(book.name) { bookCoverBaseColor(book.name) }
+    Box(Modifier.matchParentSize()) {
         val inset = if (small) 5.dp else 7.dp
         val leftInset = if (small) 8.dp else 11.dp
         Canvas(Modifier.fillMaxSize()) {
@@ -603,7 +635,7 @@ private fun BoxScope.GeneratedBookCover(book: NovelHit) {
             book.name,
             Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = maxHeight * 0.24f)
+                .topAt(0.24f)
                 .padding(start = leftInset + 3.dp, end = inset + 3.dp),
             color = Color(0xFFEEF2F8),
             fontSize = if (small) 9.5.sp else 14.sp,
@@ -628,6 +660,13 @@ private fun BoxScope.GeneratedBookCover(book: NovelHit) {
     }
 }
 
+/** Starts the content at [fraction] of the available height (BoxWithConstraints would subcompose every cover in a list). */
+private fun Modifier.topAt(fraction: Float): Modifier = layout { measurable, constraints ->
+    val top = if (constraints.hasBoundedHeight) (constraints.maxHeight * fraction).roundToInt() else 0
+    val placeable = measurable.measure(constraints.offset(vertical = -top).copy(minHeight = 0))
+    layout(placeable.width, placeable.height + top) { placeable.place(0, top) }
+}
+
 /** The design's `books` glyph: two upright volumes and a leaning one. */
 internal val BooksIcon: ImageVector by lazy {
     ImageVector.Builder("books", 24.dp, 24.dp, 24f, 24f).addPath(
@@ -641,20 +680,10 @@ internal val BooksIcon: ImageVector by lazy {
 }
 
 @Composable
-internal fun EmptyNovel(title: String, note: String) {
-    val c = IdjThemeColors
-    Column(
-        Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 40.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Icon(Icons.AutoMirrored.Rounded.MenuBook, null, tint = c.tertiary, modifier = Modifier.size(36.dp))
-        Text(title, color = c.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        Text(note, color = c.secondary, fontSize = 13.sp, lineHeight = 20.sp, textAlign = TextAlign.Center)
-    }
-}
+internal fun EmptyNovel(title: String, note: String) =
+    EmptyState(title, Modifier.padding(vertical = 12.dp), note = note, icon = Icons.AutoMirrored.Rounded.MenuBook)
 
-/** Integrated compact search header: Back + 40dp glass input (with inline clear & 搜索 action) + 书源 count capsule. */
+/** Integrated compact search header: Back + glass input (with inline clear & 搜索 action) + 书源 count capsule. */
 @Composable
 internal fun NovelSearchTopBar(
     value: String,
@@ -671,58 +700,26 @@ internal fun NovelSearchTopBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         BackButton(onClick = onBack)
+        GlassTextField(
+            value = value,
+            onValueChange = onValue,
+            modifier = Modifier.weight(1f),
+            placeholder = "书名或作者",
+            icon = Icons.Rounded.Search,
+            capsule = true,
+            minHeight = 44.dp,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
+            trailing = if (value.isEmpty()) null else ({ MiniButton("搜索", onSubmit) }),
+        )
         Row(
             Modifier
-                .weight(1f)
-                .height(40.dp)
-                .clip(CircleShape)
-                .background(c.glass)
-                .border(1.dp, c.glassBorder, CircleShape)
-                .padding(start = 13.dp, end = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
-        ) {
-            Icon(Icons.Rounded.Search, null, tint = c.secondary, modifier = Modifier.size(17.dp))
-            BasicTextField(
-                value = value,
-                onValueChange = onValue,
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                textStyle = TextStyle(color = c.text, fontSize = 15.sp, fontWeight = FontWeight.Medium),
-                cursorBrush = SolidColor(c.accent),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
-                decorationBox = { inner ->
-                    Box {
-                        if (value.isEmpty()) Text("书名或作者", color = c.tertiary, fontSize = 15.sp)
-                        inner()
-                    }
-                },
-            )
-            if (value.isNotEmpty()) {
-                Icon(
-                    Icons.Rounded.Cancel,
-                    "清除",
-                    tint = c.tertiary,
-                    modifier = Modifier.size(17.dp).clickable { onValue("") },
-                )
-                Text(
-                    "搜索",
-                    color = c.accent,
-                    fontSize = 13.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.pressClick(0.94f, onClick = onSubmit).padding(start = 2.dp, end = 2.dp),
-                )
-            }
-        }
-        Row(
-            Modifier
-                .height(36.dp)
+                .heightIn(min = 36.dp)
                 .clip(CircleShape)
                 .background(c.glass)
                 .border(1.dp, c.hairline, CircleShape)
                 .pressClick(label = "书源", onClick = onSources)
-                .padding(horizontal = 11.dp),
+                .padding(horizontal = 11.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -757,7 +754,10 @@ internal fun NovelSearchRow(
     onClick: () -> Unit,
 ) {
     val c = IdjThemeColors
-    val exact = query.trim().isNotEmpty() && book.name.equals(query.trim(), ignoreCase = true)
+    val exact = remember(book.name, query) { query.trim().isNotEmpty() && book.name.equals(query.trim(), ignoreCase = true) }
+    val title = remember(book.name, query, c.accent) { highlightTerm(book.name, query, c.accent) }
+    val meta = remember(book.author, book.kind) { listOf(book.author, book.kind).filter { it.isNotBlank() }.joinToString(" · ") }
+    val thumb = if (lead) 64.dp else 58.dp
     Row(
         Modifier
             .fillMaxWidth()
@@ -768,14 +768,15 @@ internal fun NovelSearchRow(
     ) {
         NovelPoster(
             book = book,
-            modifier = Modifier.width(if (lead) 64.dp else 58.dp).aspectRatio(0.71f),
+            modifier = Modifier.width(thumb).aspectRatio(0.71f),
             corner = if (lead) 8.dp else 7.dp,
+            thumb = thumb,
         )
         Column(Modifier.weight(1f)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        highlightTerm(book.name, query, c.accent),
+                        title,
                         color = c.text,
                         fontSize = if (lead) 17.sp else 16.sp,
                         fontWeight = FontWeight.Bold,
@@ -787,7 +788,6 @@ internal fun NovelSearchRow(
                 }
                 DSStatus("$sourceCount 个书源", if (sourceCount > 1) StatusTone.Accent else StatusTone.Muted)
             }
-            val meta = listOf(book.author, book.kind).filter { it.isNotBlank() }.joinToString(" · ")
             if (meta.isNotBlank()) {
                 Text(
                     meta,
@@ -846,8 +846,10 @@ internal fun NovelRankPodium(books: List<NovelHit>, onOpen: (NovelHit) -> Unit) 
         horizontalArrangement = Arrangement.spacedBy(11.dp),
     ) {
         books.take(3).forEachIndexed { idx, book ->
-            val firstTag = book.kind.split('·', '/', ',', '，', '|').map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
-            val sub = listOf(book.author, firstTag).filter { it.isNotBlank() }.joinToString(" · ")
+            val sub = remember(book.author, book.kind) {
+                val firstTag = book.kind.split('·', '/', ',', '，', '|').map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
+                listOf(book.author, firstTag).filter { it.isNotBlank() }.joinToString(" · ")
+            }
             Column(Modifier.weight(1f).pressClick(0.97f) { onOpen(book) }) {
                 NovelPoster(
                     book = book,
@@ -883,8 +885,8 @@ internal fun NovelRankPodium(books: List<NovelHit>, onOpen: (NovelHit) -> Unit) 
 @Composable
 internal fun NovelRankRow(book: NovelHit, rank: Int, onClick: () -> Unit) {
     val c = IdjThemeColors
-    val tags = book.kind.split('·', '/', ',', '，', '|').map { it.trim() }.filter { it.isNotEmpty() }.take(2)
-    val meta = listOf(book.author, book.latest).filter { it.isNotBlank() }.joinToString(" · ")
+    val tags = remember(book.kind) { book.kind.split('·', '/', ',', '，', '|').map { it.trim() }.filter { it.isNotEmpty() }.take(2) }
+    val meta = remember(book.author, book.latest) { listOf(book.author, book.latest).filter { it.isNotBlank() }.joinToString(" · ") }
     Row(
         Modifier
             .fillMaxWidth()
@@ -894,7 +896,7 @@ internal fun NovelRankRow(book: NovelHit, rank: Int, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RankNumeral(rank, 19, Modifier.width(24.dp))
-        NovelPoster(book, Modifier.width(56.dp).aspectRatio(0.71f), corner = 7.dp)
+        NovelPoster(book, Modifier.width(56.dp).aspectRatio(0.71f), corner = 7.dp, thumb = 56.dp)
         Column(Modifier.weight(1f)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -943,12 +945,22 @@ internal fun NovelSourcesPage(
     onAdd: () -> Unit,
     onToggle: (NovelSource, Boolean) -> Unit,
     onDelete: (NovelSource) -> Unit,
+    loading: Boolean = false,
 ) {
     val c = IdjThemeColors
     var filter by remember { mutableStateOf("全部") }
+    val enabledCount = remember(sources) { sources.count { it.enabled } }
+    val needsLogin = remember(sources) { sources.filter { it.json.optString("loginUrl").isNotBlank() }.mapTo(HashSet()) { it.id } }
+    val shown = remember(sources, filter) {
+        when (filter) {
+            "已启用" -> sources.filter { it.enabled }
+            "需登录" -> sources.filter { it.id in needsLogin }
+            else -> sources
+        }
+    }
     Column(Modifier.fillMaxSize().dsAmbient(cool = true).statusBarsPadding()) {
         DSNavBar("书源", leading = { BackButton(onClick = onBack) }, trailing = { RoundIconButton(Icons.Rounded.Add, "导入书源", Tone.Accent, onClick = onAdd) })
-        Text("共 ${sources.size} 个书源 · 已启用 ${sources.count { it.enabled }} 个", color = c.secondary, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp))
+        Text("共 ${sources.size} 个书源 · 已启用 $enabledCount 个", color = c.secondary, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp))
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("全部", "已启用", "需登录").forEach { f ->
                 ToneChip(
@@ -956,44 +968,56 @@ internal fun NovelSourcesPage(
                     f == filter,
                     neutral = f == "全部",
                     count = when (f) {
-                        "已启用" -> sources.count { it.enabled }
-                        "需登录" -> sources.count { it.json.optString("loginUrl").isNotBlank() }
+                        "已启用" -> enabledCount
+                        "需登录" -> needsLogin.size
                         else -> sources.size
                     },
                 ) { filter = f }
             }
         }
-        LazyColumn(Modifier.padding(top = 16.dp).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
-            if (sources.isEmpty()) item { EmptyNovel("还没有书源", "添加 Legado 文本书源，即可搜索与浏览榜单。") }
-            val shown = sources.filter {
-                when (filter) {
-                    "已启用" -> it.enabled
-                    "需登录" -> it.json.optString("loginUrl").isNotBlank()
-                    else -> true
-                }
+        // A collection can hold more than a thousand sources: every row is its own lazy item drawing one slice of the card.
+        LazyColumn(
+            Modifier.padding(top = 16.dp).fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()),
+        ) {
+            if (loading) items(6, key = { "skeleton$it" }, contentType = { "skeleton" }) { SkeletonBlock(Modifier.padding(vertical = 5.dp).fillMaxWidth().height(58.dp), 18.dp) }
+            else if (sources.isEmpty()) item(key = "empty") { EmptyNovel("还没有书源", "添加 Legado 文本书源，即可搜索与浏览榜单。") }
+            itemsIndexed(shown, key = { _, s -> s.id }, contentType = { _, _ -> "source" }) { i, s ->
+                SourceRow(s, s.id in needsLogin, first = i == 0, last = i == shown.lastIndex, onToggle, onDelete)
             }
-            if (shown.isNotEmpty()) {
-                item {
-                    Column(Modifier.fillMaxWidth().dsCard(18.dp).padding(horizontal = 14.dp)) {
-                        shown.forEachIndexed { i, s ->
-                            key(s.id) {
-                                var menu by remember { mutableStateOf(false) }
-                                if (i > 0) Hairline()
-                                Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Text(s.name, color = c.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                                        Text(runCatching { java.net.URI(s.id).host }.getOrNull().orEmpty(), color = c.tertiary, fontSize = 11.sp, maxLines = 1)
-                                        if (s.json.optString("loginUrl").isNotBlank()) DSStatus("需登录", StatusTone.Warn)
-                                    }
-                                    Switch(s.enabled, { onToggle(s, it) }, colors = SwitchDefaults.colors(checkedThumbColor = c.onAccent, checkedTrackColor = c.accent))
-                                    Box {
-                                        Icon(Icons.Rounded.MoreVert, "更多", Modifier.size(24.dp).clickable { menu = true }, tint = c.secondary)
-                                        DropdownMenu(menu, { menu = false }) { DropdownMenuItem(text = { Text("删除书源") }, onClick = { menu = false; onDelete(s) }) }
-                                    }
-                                }
-                            }
-                        }
-                    }
+        }
+    }
+}
+
+@Composable
+private fun SourceRow(
+    s: NovelSource,
+    needsLogin: Boolean,
+    first: Boolean,
+    last: Boolean,
+    onToggle: (NovelSource, Boolean) -> Unit,
+    onDelete: (NovelSource) -> Unit,
+) {
+    val c = IdjThemeColors
+    var menu by remember { mutableStateOf(false) }
+    val host = remember(s.id) { runCatching { java.net.URI(s.id).host }.getOrNull().orEmpty() }
+    val top = if (first) 18.dp else 0.dp
+    val bottom = if (last) 18.dp else 0.dp
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(top, top, bottom, bottom)).background(c.card).padding(start = 14.dp, end = 6.dp)) {
+        if (!first) Hairline(Modifier.padding(end = 8.dp))
+        Row(Modifier.fillMaxWidth().heightIn(min = 66.dp).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text(s.name, color = c.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (needsLogin) DSStatus("需登录", StatusTone.Warn)
+                }
+                Text(host, color = c.secondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            GlassSwitch(s.enabled, { onToggle(s, it) }, label = s.name)
+            Box {
+                PlainIconButton(Icons.Rounded.MoreVert, "更多", tint = c.secondary) { menu = true }
+                GlassMenu(menu, { menu = false }) {
+                    GlassMenuItem("删除书源", icon = Icons.Rounded.DeleteOutline, destructive = true) { menu = false; onDelete(s) }
                 }
             }
         }

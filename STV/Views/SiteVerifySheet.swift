@@ -25,28 +25,37 @@ struct SiteVerifySheet: View {
     private var host: String { URL(string: target.url)?.host ?? "" }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    Image(systemName: passed ? "checkmark.seal.fill" : "shield.lefthalf.filled")
-                        .foregroundStyle(passed ? STVTheme.accent : STVTheme.accentWarm)
-                    Text(status).font(.footnote).foregroundStyle(STVTheme.secondary)
-                    Spacer()
+        DSSheet("\(target.source.label) 站点验证") {
+            VStack(spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
+                    Group {
+                        if busy { DSSpinner(size: 16, tint: STVTheme.accent) }
+                        else {
+                            Image(systemName: passed ? "checkmark.seal.fill" : "shield.lefthalf.filled")
+                                .foregroundStyle(passed ? STVTheme.ok : STVTheme.accentWarm)
+                        }
+                    }
+                    .frame(width: 18, height: 18)
+                    Text(status).dsFont(13, relativeTo: .footnote).foregroundStyle(STVTheme.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 16).padding(.vertical, 10)
-                .background(STVTheme.surface)
+                .padding(.horizontal, 20)
+                .accessibilityElement(children: .combine)
                 VerifyWebView(url: URL(string: target.url)) { snap in handle(snap) }
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .overlay { RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(STVTheme.hairline, lineWidth: 1) }
+                    .padding(.horizontal, 12)
             }
-            .navigationTitle("\(target.source.label) 站点验证")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { Task { await finish(last, force: true) } }.disabled(busy)
-                }
+        } footer: {
+            DSSheetFooter {
+                Button { dismiss() } label: { PillButtonPlain(title: "取消") }
+                Button { Task { await finish(last, force: true) } } label: { PillButtonLabel(title: "完成", expand: true) }
+                    .disabled(busy).opacity(busy ? 0.4 : 1)
             }
+            .buttonStyle(PressScale(scale: 0.98))
         }
-        .compatPresentationBackground(STVTheme.bg)
+        // Full height: a web page needs an opaque, stable ground.
+        .dsSheetChrome([.large])
         .onAppear { SiteLog.add("[\(target.source.label)] 打开验证页 \(target.url)") }
     }
 

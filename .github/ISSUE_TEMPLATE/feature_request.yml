@@ -1,0 +1,16 @@
+name: 功能建议
+description: 提出新功能或改进建议。功能建议不必填写 Bug 必填项。
+title: "[功能建议] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        这里用于功能建议。如果是软件缺陷，请改用 **Bug 反馈** 模板，并填写系统版本、软件版本和 Bug 描述。
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: 建议内容
+      description: 请说明希望增加或改进的功能。
+    validations:
+      required: true

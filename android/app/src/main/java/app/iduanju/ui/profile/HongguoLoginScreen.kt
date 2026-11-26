@@ -21,7 +21,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,33 +29,23 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Download
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -71,10 +60,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -82,6 +75,15 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import app.iduanju.IdjApp
 import app.iduanju.data.HongguoWebAccount
+import app.iduanju.ui.components.BackButton
+import app.iduanju.ui.components.ButtonSize
+import app.iduanju.ui.components.ButtonTone
+import app.iduanju.ui.components.DSNavBar
+import app.iduanju.ui.components.GlassButton
+import app.iduanju.ui.components.GlassSpinner
+import app.iduanju.ui.components.GlassToast
+import app.iduanju.ui.components.Hairline
+import app.iduanju.ui.components.dsCard
 import app.iduanju.ui.theme.IdjThemeColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -442,12 +444,12 @@ fun HongguoLoginScreen(onBack: () -> Unit) {
                 val msg = "已保存到相册，可在红果 App 扫一扫中选择相册图片"
                 saveNotice = msg
                 saveError = false
-                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                GlassToast.show(msg, long = true)
             } else {
                 val msg = "保存失败，请检查相册权限后重试"
                 saveNotice = msg
                 saveError = true
-                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                GlassToast.show(msg)
             }
         }
     }
@@ -460,25 +462,15 @@ fun HongguoLoginScreen(onBack: () -> Unit) {
             .navigationBarsPadding(),
     ) {
         // Native Top Bar
-        Box(Modifier.fillMaxWidth().height(48.dp)) {
-            IconButton(onClick = onBack, modifier = Modifier.align(Alignment.CenterStart)) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = c.text)
-            }
-            Text(
-                "登录红果账号",
-                color = c.text,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.align(Alignment.Center),
-            )
-        }
-        HorizontalDivider(thickness = 0.5.dp, color = c.hairline)
+        DSNavBar("登录红果账号", leading = { BackButton(onClick = onBack) })
+        Hairline()
 
         if (loggedInName != null) {
             Box(
                 Modifier
                     .fillMaxWidth()
                     .background(c.okSoft)
+                    .semantics { liveRegion = LiveRegionMode.Polite }
                     .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
                 Text(
@@ -488,7 +480,7 @@ fun HongguoLoginScreen(onBack: () -> Unit) {
                     fontWeight = FontWeight.Medium,
                 )
             }
-            HorizontalDivider(thickness = 0.5.dp, color = c.hairline)
+            Hairline()
         }
 
         Box(Modifier.fillMaxWidth().weight(1f)) {
@@ -642,10 +634,8 @@ private fun QrLoginCard(
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(c.surface)
-            .border(0.5.dp, c.hairline, RoundedCornerShape(16.dp))
-            .padding(horizontal = 22.dp, vertical = 26.dp),
+            .dsCard(24.dp)
+            .padding(horizontal = 22.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -658,6 +648,8 @@ private fun QrLoginCard(
                 color = c.text,
                 fontSize = 17.sp,
                 fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() },
             )
             Text(
                 "打开红果短剧 App →「我的」右上角 ≡ → 扫一扫",
@@ -671,10 +663,10 @@ private fun QrLoginCard(
         Box(
             Modifier
                 .padding(vertical = 4.dp)
-                .size(220.dp)
-                .clip(RoundedCornerShape(14.dp))
+                .size(224.dp)
+                .clip(RoundedCornerShape(18.dp))
                 .background(Color.White)
-                .border(1.dp, c.hairline, RoundedCornerShape(14.dp)),
+                .border(1.dp, c.hairline, RoundedCornerShape(18.dp)),
             contentAlignment = Alignment.Center,
         ) {
             if (qrBitmap != null) {
@@ -692,7 +684,7 @@ private fun QrLoginCard(
                         Modifier
                             .fillMaxSize()
                             .background(Color.Black.copy(alpha = 0.72f))
-                            .clickable(onClick = onRefresh),
+                            .clickable(remember { MutableInteractionSource() }, null, role = Role.Button, onClick = onRefresh),
                         contentAlignment = Alignment.Center,
                     ) {
                         Column(
@@ -705,17 +697,7 @@ private fun QrLoginCard(
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold,
                             )
-                            Button(
-                                onClick = onRefresh,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = c.accent,
-                                    contentColor = c.onAccent,
-                                ),
-                                shape = RoundedCornerShape(20.dp),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                            ) {
-                                Text("点击刷新", fontSize = 13.sp)
-                            }
+                            GlassButton("点击刷新", size = ButtonSize.Small, onClick = onRefresh)
                         }
                     }
                 } else if (qrStatus == "scanned") {
@@ -751,11 +733,7 @@ private fun QrLoginCard(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(28.dp),
-                        color = Color(0xFF286DEF),
-                        strokeWidth = 2.5.dp,
-                    )
+                    GlassSpinner(size = 28.dp, color = Color(0xFF286DEF), stroke = 2.5.dp)
                     Text(
                         "正在获取二维码…",
                         color = Color(0xFF5F6672),
@@ -781,54 +759,16 @@ private fun QrLoginCard(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            OutlinedButton(
-                onClick = onRefresh,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(42.dp),
-                shape = RoundedCornerShape(10.dp),
-                border = ButtonDefaults.outlinedButtonBorder(enabled = true).copy(
-                    brush = SolidColor(c.hairline),
-                ),
-                contentPadding = PaddingValues(horizontal = 8.dp),
-            ) {
-                Icon(
-                    Icons.Filled.Refresh,
-                    contentDescription = null,
-                    tint = c.text,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text("刷新二维码", color = c.text, fontSize = 13.sp, maxLines = 1)
-            }
-
-            Button(
+            GlassButton("刷新二维码", Modifier.weight(1f).heightIn(min = 44.dp), ButtonTone.Glass, ButtonSize.Small, icon = Icons.Filled.Refresh, onClick = onRefresh)
+            GlassButton(
+                if (savingQr) "保存中…" else "保存二维码",
+                Modifier.weight(1f).heightIn(min = 44.dp),
+                size = ButtonSize.Small,
+                icon = Icons.Outlined.Download,
+                enabled = qrBitmap != null,
+                loading = savingQr,
                 onClick = onSave,
-                enabled = qrBitmap != null && !savingQr,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(42.dp),
-                shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = c.accent,
-                    contentColor = c.onAccent,
-                    disabledContainerColor = c.accent.copy(alpha = 0.35f),
-                    disabledContentColor = c.onAccent.copy(alpha = 0.6f),
-                ),
-                contentPadding = PaddingValues(horizontal = 8.dp),
-            ) {
-                Icon(
-                    Icons.Outlined.Download,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    if (savingQr) "保存中…" else "保存二维码",
-                    fontSize = 13.sp,
-                    maxLines = 1,
-                )
-            }
+            )
         }
 
         if (!saveNotice.isNullOrBlank()) {

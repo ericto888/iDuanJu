@@ -47,7 +47,7 @@ final class ChannelMangaUITests: XCTestCase {
         tap(el("tg.add.button"))
         XCTAssertTrue(app.staticTexts["已订阅 @durov"].waitForExistence(timeout: 5))
         XCTAssertTrue(el("tg.channel.durov").waitForExistence(timeout: 5))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap(el("nav.back"))
 
         // Refresh → durov posts merged into the feed; chip filters to one channel.
         tap(el("tg.refresh"))

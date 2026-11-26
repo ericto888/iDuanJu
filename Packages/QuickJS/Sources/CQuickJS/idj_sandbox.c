@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdatomic.h>
+#include <pthread.h>
 #include "quickjs.h"
 #include "include/idj_sandbox.h"
 
@@ -344,3 +346,232 @@ void idj_free(IDJBox *b) {
 }
 
 void idj_str_free(char *s) { free(s); }
+
+// MARK: TVBox scripts
+
+struct IDJTv {
+    JSRuntime *rt;
+    JSContext *ctx;
+    idj_tv_call_fn call;
+    idj_tv_normalize_fn normalize;
+    idj_tv_load_fn load;
+    void *opaque;
+    size_t stack_limit;
+    double started;
+    atomic_int stop;
+};
+
+/// Script time (host calls excluded) after which an evaluation is stopped no matter what: nobody can wait for it any more.
+#define TV_MAX_SCRIPT_SECONDS 60
+
+static int tv_interrupt_cb(JSRuntime *rt, void *opaque) {
+    IDJTv *t = opaque;
+    if (t->started > 0 && now_s() - t->started > TV_MAX_SCRIPT_SECONDS) atomic_store(&t->stop, 1);
+    return atomic_load_explicit(&t->stop, memory_order_relaxed) != 0;
+}
+
+/// Stack budget of the calling thread: never more than it really has (host calls need room as well).
+static void tv_enter(IDJTv *t) {
+    size_t limit = t->stack_limit;
+    t->started = now_s();
+#ifdef __APPLE__
+    const size_t margin = 512 * 1024;
+    char here;
+    pthread_t self = pthread_self();
+    char *top = pthread_get_stackaddr_np(self);
+    size_t size = pthread_get_stacksize_np(self), used = top > &here ? (size_t)(top - &here) : 0;
+    size_t room = size > used + margin + 128 * 1024 ? size - used - margin : 128 * 1024;
+    if (room < limit) limit = room;
+#endif
+    JS_UpdateStackTop(t->rt);
+    JS_SetMaxStackSize(t->rt, limit);
+}
+
+/// Throws an Error whose message may be longer than the formatting helpers of quickjs allow.
+static JSValue tv_throw(JSContext *ctx, const char *message) {
+    JSValue e = JS_NewError(ctx);
+    if (JS_IsException(e)) return e;
+    JS_DefinePropertyValueStr(ctx, e, "message", JS_NewString(ctx, message), JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+    return JS_Throw(ctx, e);
+}
+
+static JSValue tv_host(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    IDJTv *t = JS_GetContextOpaque(ctx);
+    if (argc < 1) return JS_ThrowTypeError(ctx, "__tv: missing name");
+    const char *name = JS_ToCString(ctx, argv[0]);
+    if (!name) return JS_EXCEPTION;
+    const char *args = NULL;
+    if (argc > 1 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+        args = JS_ToCString(ctx, argv[1]);
+        if (!args) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
+    }
+    double from = now_s();
+    char *res = t->call(t->opaque, name, args ? args : "{}");
+    t->started += now_s() - from;
+    JS_FreeCString(ctx, name);
+    if (args) JS_FreeCString(ctx, args);
+    if (atomic_load(&t->stop)) {   // stopped while the host was working: unwind now, past every catch
+        free(res);
+        JSValue e = JS_NewError(ctx);
+        if (JS_IsObject(e)) JS_SetUncatchableError(ctx, e);
+        return JS_Throw(ctx, e);
+    }
+    if (!res) return JS_UNDEFINED;
+    JSValue v = JS_NewString(ctx, res);
+    free(res);
+    return v;
+}
+
+static char *tv_normalize(JSContext *ctx, const char *base, const char *name, void *opaque) {
+    IDJTv *t = opaque;
+    char *err = NULL, *full = t->normalize(t->opaque, base ? base : "", name, &err);
+    if (!full) { tv_throw(ctx, err ? err : "cannot resolve module"); free(err); return NULL; }
+    char *out = js_strdup(ctx, full);
+    free(full);
+    return out;
+}
+
+static JSModuleDef *tv_load(JSContext *ctx, const char *name, void *opaque) {
+    IDJTv *t = opaque;
+    char *err = NULL, *src = t->load(t->opaque, name, &err);
+    if (!src) { tv_throw(ctx, err ? err : "cannot load module"); free(err); return NULL; }
+    JSValue f = JS_Eval(ctx, src, strlen(src), name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    free(src);
+    if (JS_IsException(f)) return NULL;
+    JSModuleDef *m = JS_VALUE_GET_PTR(f);
+    JSValue meta = JS_GetImportMeta(ctx, m);
+    if (JS_IsObject(meta)) JS_DefinePropertyValueStr(ctx, meta, "url", JS_NewString(ctx, name), JS_PROP_C_W_E);
+    JS_FreeValue(ctx, meta);
+    JS_FreeValue(ctx, f);   // the context keeps the module
+    return m;
+}
+
+static void tv_drop_exception(JSContext *ctx) { JS_FreeValue(ctx, JS_GetException(ctx)); }
+
+/// "message\x01stack" of the pending exception; -2 when the script was stopped.
+static int tv_error(IDJTv *t, char **err) {
+    JSContext *ctx = t->ctx;
+    JSValue e = JS_GetException(ctx);
+    if (atomic_load(&t->stop)) { JS_FreeValue(ctx, e); *err = dupstr("interrupted"); return -2; }
+    const char *msg = NULL, *stack = NULL;
+    if (JS_IsObject(e)) {
+        JSValue m = JS_GetPropertyStr(ctx, e, "message");
+        if (JS_IsException(m)) tv_drop_exception(ctx);
+        else if (JS_IsString(m)) msg = JS_ToCString(ctx, m);
+        JS_FreeValue(ctx, m);
+        if (msg && !*msg) { JS_FreeCString(ctx, msg); msg = NULL; }
+        JSValue s = JS_GetPropertyStr(ctx, e, "stack");
+        if (JS_IsException(s)) tv_drop_exception(ctx);
+        else if (JS_IsString(s)) stack = JS_ToCString(ctx, s);
+        JS_FreeValue(ctx, s);
+    }
+    if (!msg) msg = JS_ToCString(ctx, e);
+    if (!msg) tv_drop_exception(ctx);
+    const char *a = msg ? msg : "unknown error", *b = stack ? stack : "";
+    char *out = malloc(strlen(a) + strlen(b) + 2);
+    if (out) { strcpy(out, a); strcat(out, "\x01"); strcat(out, b); }
+    if (msg) JS_FreeCString(ctx, msg);
+    if (stack) JS_FreeCString(ctx, stack);
+    JS_FreeValue(ctx, e);
+    *err = out;
+    return -1;
+}
+
+/// With the stop flag still set, runs out the jobs a stopped script left behind: each chain dies at its next interrupt check.
+static void tv_abandon(IDJTv *t) {
+    double until = now_s() + 1;
+    JSContext *c = NULL;
+    for (int n = 0; ; n++) {
+        int k = JS_ExecutePendingJob(t->rt, &c);
+        if (k == 0) return;
+        if (k < 0) tv_drop_exception(t->ctx);
+        if ((n & 255) == 255 && now_s() > until) return;
+    }
+}
+
+static int tv_drain(IDJTv *t, char **err) {
+    for (;;) {
+        JSContext *c = NULL;
+        int k = JS_ExecutePendingJob(t->rt, &c);
+        if (k == 0) return 0;
+        // Ordinary errors have become rejections; what arrives here is a stop or an exhausted heap.
+        if (k < 0) {
+            int rc = tv_error(t, err);
+            if (rc == -2) tv_abandon(t);
+            return rc;
+        }
+        if (atomic_load_explicit(&t->stop, memory_order_relaxed)) { *err = dupstr("interrupted"); tv_abandon(t); return -2; }
+    }
+}
+
+IDJTv *idj_tv_new(size_t mem_limit, size_t stack_limit, idj_tv_call_fn call, idj_tv_normalize_fn normalize, idj_tv_load_fn load, void *opaque) {
+    IDJTv *t = calloc(1, sizeof(IDJTv));
+    if (!t) return NULL;
+    t->call = call;
+    t->normalize = normalize;
+    t->load = load;
+    t->opaque = opaque;
+    t->stack_limit = stack_limit;
+    atomic_init(&t->stop, 0);
+    t->rt = JS_NewRuntime();
+    if (!t->rt) { free(t); return NULL; }
+    JS_SetMemoryLimit(t->rt, mem_limit);
+    JS_SetInterruptHandler(t->rt, tv_interrupt_cb, t);
+    JS_SetModuleLoaderFunc(t->rt, tv_normalize, tv_load, t);
+    tv_enter(t);
+    t->ctx = JS_NewContext(t->rt);
+    if (!t->ctx) { JS_FreeRuntime(t->rt); free(t); return NULL; }
+    JS_SetContextOpaque(t->ctx, t);
+    JSValue global = JS_GetGlobalObject(t->ctx);
+    JS_DefinePropertyValueStr(t->ctx, global, "__tv", JS_NewCFunction(t->ctx, tv_host, "__tv", 2), JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+    JS_FreeValue(t->ctx, global);
+    return t;
+}
+
+int idj_tv_script(IDJTv *t, const char *src, size_t len, const char *filename, char **out, char **err) {
+    JSContext *ctx = t->ctx;
+    *out = NULL;
+    *err = NULL;
+    tv_enter(t);
+    JSValue v = JS_Eval(ctx, src, len, filename, JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(v)) {
+        int rc = tv_error(t, err);
+        char *ignored = NULL;
+        if (rc == -1) tv_drain(t, &ignored); else tv_abandon(t);
+        free(ignored);
+        return rc;
+    }
+    int rc = tv_drain(t, err);
+    if (rc == 0 && !JS_IsUndefined(v) && !JS_IsNull(v)) {
+        const char *s = JS_ToCString(ctx, v);
+        if (s) { *out = dupstr(s); JS_FreeCString(ctx, s); } else rc = tv_error(t, err);
+    }
+    JS_FreeValue(ctx, v);
+    return rc;
+}
+
+int idj_tv_module(IDJTv *t, const char *src, size_t len, const char *filename, char **err) {
+    JSContext *ctx = t->ctx;
+    *err = NULL;
+    tv_enter(t);
+    JSValue v = JS_Eval(ctx, src, len, filename, JS_EVAL_TYPE_MODULE);
+    if (JS_IsException(v)) return tv_error(t, err);
+    int rc = tv_drain(t, err);
+    if (rc == 0 && JS_PromiseState(ctx, v) == JS_PROMISE_REJECTED) {
+        JS_Throw(ctx, JS_PromiseResult(ctx, v));
+        rc = tv_error(t, err);
+    }
+    JS_FreeValue(ctx, v);
+    return rc;
+}
+
+void idj_tv_interrupt(IDJTv *t) { atomic_store(&t->stop, 1); }
+void idj_tv_resume(IDJTv *t) { atomic_store(&t->stop, 0); }
+
+void idj_tv_free(IDJTv *t) {
+    if (!t) return;
+    JS_UpdateStackTop(t->rt);
+    JS_FreeContext(t->ctx);
+    JS_FreeRuntime(t->rt);
+    free(t);
+}

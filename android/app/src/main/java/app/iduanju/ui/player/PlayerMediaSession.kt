@@ -65,6 +65,7 @@ class PlayerMediaSession(
     }
 
     init {
+        owner = this
         session.setCallback(object : MediaSession.Callback() {
             override fun onPlay() { if (!released && !isPlaying) onPlayPause() }
             override fun onPause() { if (!released && isPlaying) onPlayPause() }
@@ -131,7 +132,7 @@ class PlayerMediaSession(
     }
 
     private fun updateNotification() = runCatching {
-        if (actions == 0L) return@runCatching
+        if (actions == 0L || owner !== this) return@runCatching
         val builder = Notification.Builder(appContext, CHANNEL).setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle(metadata.getString(MediaMetadata.METADATA_KEY_TITLE))
             .setContentText(metadata.getString(MediaMetadata.METADATA_KEY_ARTIST))
@@ -156,9 +157,12 @@ class PlayerMediaSession(
         if (released) return
         released = true
         scope.cancel()
-        runCatching { notifications.cancel(NOTIFICATION_ID) }
+        // the next player may be showing its own by now
+        if (owner === this) { owner = null; runCatching { notifications.cancel(NOTIFICATION_ID) } }
         runCatching { appContext.unregisterReceiver(receiver) }
         session.isActive = false
         session.release()
     }
+
+    private companion object { var owner: PlayerMediaSession? = null }
 }

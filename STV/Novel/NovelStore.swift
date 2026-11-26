@@ -38,8 +38,27 @@ final class NovelStore: ObservableObject {
     private let d = UserDefaults.standard
 
     private init() {
-        books = load("stv.novel.books") ?? []
-        progress = load("stv.novel.progress") ?? [:]
+        if let w = Self.warm {
+            (books, progress) = (w.books, w.progress)
+            Self.warm = nil
+        } else {
+            books = Self.decode("stv.novel.books") ?? []
+            progress = Self.decode("stv.novel.progress") ?? [:]
+        }
+        Self.prewarmed = true
+    }
+
+    private static var warm: (books: [NovelBook], progress: [String: NovelProgress])?
+    private static var prewarmed = false
+    /// Books carry their chapter lists (thousands of entries). Decoded in the background shortly after launch, so the first
+    /// frame of the 小说 page does not wait for it.
+    static func prewarm() async {
+        guard !prewarmed else { return }
+        prewarmed = true
+        let w = await Task.detached(priority: .utility) { (books: Self.decode("stv.novel.books") ?? [NovelBook](), progress: Self.decode("stv.novel.progress") ?? [String: NovelProgress]()) }.value
+        warm = w
+        _ = shared
+        warm = nil
     }
 
     nonisolated static var root: URL {
@@ -236,7 +255,7 @@ final class NovelStore: ObservableObject {
         return min(1, Double(b.chapters[p.chapter].start + p.offset) / Double(last.end))
     }
 
-    private func load<T: Decodable>(_ key: String) -> T? { d.data(forKey: key).flatMap { try? JSONDecoder().decode(T.self, from: $0) } }
+    private nonisolated static func decode<T: Decodable>(_ key: String) -> T? { UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(T.self, from: $0) } }
     private func save<T: Encodable>(_ v: T, _ key: String) { d.set(try? JSONEncoder().encode(v), forKey: key) }
 }
 

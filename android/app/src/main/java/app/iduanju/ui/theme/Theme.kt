@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.Color
  * Pixel-matched to iOS STVTheme (Theme.swift). The second block are the ui-redesign tokens
  * (ui-redesign/styles.css); screens use these instead of ad-hoc colours.
  */
+@androidx.compose.runtime.Immutable
 data class IdjColors(
     val dark: Boolean,
     val bg: Color,
@@ -48,6 +49,9 @@ data class IdjColors(
     val barShadow: Color,
     val ambientWarm: List<Color>,
     val ambientCool: List<Color>,
+    /** Destructive actions, failures and the LIVE dot. */
+    val danger: Color,
+    val dangerSoft: Color,
 ) {
     fun rankColor(r: Int): Color = when (r) { 1 -> gold; 2 -> silver; 3 -> bronze; else -> tertiary }
 }
@@ -87,6 +91,8 @@ private val Dark = IdjColors(
     barShadow = Color(0x4C000000),
     ambientWarm = listOf(Color(0x94965C3E), Color(0x4C603C32)),
     ambientCool = listOf(Color(0x574868A8), Color(0x2928385C)),
+    danger = Color(0xFFFF6B6B),
+    dangerSoft = Color(0x29FF6B6B),
 )
 
 private val Light = IdjColors(
@@ -124,6 +130,8 @@ private val Light = IdjColors(
     barShadow = Color(0x1F121418),
     ambientWarm = listOf(Color(0x2BD58514), Color(0x0FD58514)),
     ambientCool = listOf(Color(0x26286DEF), Color(0x0D286DEF)),
+    danger = Color(0xFFE5484D),
+    dangerSoft = Color(0x1AE5484D),
 )
 
 val LocalIdjColors = staticCompositionLocalOf { Dark }
@@ -135,11 +143,13 @@ fun IdjTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> U
     val scheme = if (dark) darkColorScheme(
         primary = colors.accent, onPrimary = colors.onAccent, background = colors.bg,
         surface = colors.surface, onBackground = colors.text, onSurface = colors.text,
-        secondary = colors.secondary,
+        secondary = colors.secondary, error = colors.danger, surfaceContainer = colors.sheet, surfaceContainerLow = colors.sheet,
+        surfaceContainerHigh = colors.sheet, outline = colors.glassBorder, outlineVariant = colors.hairline,
     ) else lightColorScheme(
         primary = colors.accent, onPrimary = colors.onAccent, background = colors.bg,
         surface = colors.surface, onBackground = colors.text, onSurface = colors.text,
-        secondary = colors.secondary,
+        secondary = colors.secondary, error = colors.danger, surfaceContainer = colors.sheet, surfaceContainerLow = colors.sheet,
+        surfaceContainerHigh = colors.sheet, outline = colors.glassBorder, outlineVariant = colors.hairline,
     )
     CompositionLocalProvider(LocalIdjColors provides colors) {
         MaterialTheme(colorScheme = scheme, content = content)

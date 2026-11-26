@@ -29,10 +29,13 @@ class IdjApp : Application(), coil.ImageLoaderFactory {
     lateinit var updater: app.iduanju.update.AppUpdater
         private set
 
-    /** Covers: 黄果 CDNs obfuscate images (AES / XOR) — decoded in an OkHttp interceptor. */
+    /** Covers: 黄果 CDNs obfuscate images (AES / XOR) — decoded in an OkHttp interceptor; TVBox covers carry request headers. */
     override fun newImageLoader(): coil.ImageLoader = coil.ImageLoader.Builder(this)
-        .okHttpClient { okhttp3.OkHttpClient.Builder().addInterceptor(app.iduanju.huangguo.CoverDecryptInterceptor).build() }
-        .components { add(app.iduanju.plugin.PluginImageFetcher.Factory()) }
+        .okHttpClient {
+            okhttp3.OkHttpClient.Builder().addInterceptor(app.iduanju.huangguo.CoverDecryptInterceptor)
+                .dns(app.iduanju.tvbox.TVBoxPictureGuard).addNetworkInterceptor(app.iduanju.tvbox.TVBoxPictureGuard).build()
+        }
+        .components { add(app.iduanju.tvbox.TVBoxPictureInterceptor); add(app.iduanju.plugin.PluginImageFetcher.Factory()) }
         .crossfade(true).build()
 
     override fun onCreate() {
@@ -50,7 +53,7 @@ class IdjApp : Application(), coil.ImageLoaderFactory {
         app.iduanju.core.hls.HLSAdFilter.enabled = getSharedPreferences("idj", MODE_PRIVATE).getBoolean("stv.hls.adstrip", true)
         library = LibraryStore(this)
         cms = app.iduanju.data.CMSStore(this)
-        tvbox = app.iduanju.tvbox.TVBoxStore(this).also { it.migrateLegacySitesIfNeeded(cms.sites) }
+        tvbox = app.iduanju.tvbox.TVBoxStore(this)
         plugins = app.iduanju.plugin.PluginStore(this)
         tg = app.iduanju.tg.TGStore(this)
         manga = app.iduanju.manga.MangaStore(this)

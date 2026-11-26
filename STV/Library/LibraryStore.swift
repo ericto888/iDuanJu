@@ -19,7 +19,14 @@ struct WatchProgress: Codable, Hashable, Identifiable {
 final class LibraryStore: ObservableObject {
     static let shared = LibraryStore()
 
+    /// Watch records as of the last structural change (new title, other episode, player closed). Samples taken while
+    /// something plays stay in `live`: publishing them every few seconds redrew every page that shows history or
+    /// favorites, and re-encoded the whole history on the main thread.
     @Published private(set) var progress: [String: WatchProgress] = [:]
+    private var live: [String: WatchProgress] = [:]
+    private var persistTask: Task<Void, Never>?
+    /// Bumped by every direct write, so a background encode that started earlier never overwrites it.
+    private var writes = 0
     /// Every favorite incl. hidden sources; UI reads `favorites`, which hides locked/disabled sites.
     @Published private(set) var allFavorites: [HGSeries] = []
     var favorites: [HGSeries] { allFavorites.filter { SourceGate.shared.isVisible($0) } }
@@ -33,23 +40,67 @@ final class LibraryStore: ObservableObject {
     }
 
     var continueWatching: [WatchProgress] {
-        progress.values.filter { SourceGate.shared.isVisible($0.series) }.sorted { $0.updatedAt > $1.updatedAt }
+        progress.merging(live) { $1 }.values.filter { SourceGate.shared.isVisible($0.series) }.sorted { $0.updatedAt > $1.updatedAt }
     }
 
-    func progress(for s: HGSeries) -> WatchProgress? { progress[s.id] }
+    func progress(for s: HGSeries) -> WatchProgress? { live[s.id] ?? progress[s.id] }
 
     func record(_ s: HGSeries, index: Int, ep: Int, seconds: Double, duration: Double) {
         guard seconds.isFinite, seconds >= 0 else { return }
-        progress[s.id] = WatchProgress(series: s, episodeIndex: index, episodeNumber: ep, seconds: seconds,
-                                       duration: duration.isFinite ? duration : 0, updatedAt: Date())
+        let old = progress(for: s)
+        live[s.id] = WatchProgress(series: s, episodeIndex: index, episodeNumber: ep, seconds: seconds,
+                                   duration: duration.isFinite ? duration : 0, updatedAt: Date())
+        if old == nil || old?.episodeIndex != index { publish() }
+        persistSoon()
+    }
+
+    /// The player closed or the app went to the background: make the latest samples visible and durable.
+    func flush() {
+        guard !live.isEmpty || persistTask != nil else { return }
+        publish()
+        saveProgress()
+    }
+
+    private func saveProgress() {
+        writes += 1
+        persistTask?.cancel(); persistTask = nil
         save(progress, "stv.progress")
     }
 
-    func removeProgress(_ s: HGSeries) { progress[s.id] = nil; save(progress, "stv.progress") }
+    private func publish() {
+        guard !live.isEmpty else { return }
+        progress.merge(live) { $1 }
+        live.removeAll()
+    }
+
+    private func persistSoon() {
+        guard persistTask == nil else { return }
+        persistTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.persistTask = nil
+            let snapshot = self.progress.merging(self.live) { $1 }
+            let stamp = self.writes
+            let data = await Task.detached(priority: .utility) { try? JSONEncoder().encode(snapshot) }.value
+            if let data, stamp == self.writes { self.d.set(data, forKey: "stv.progress") }
+        }
+    }
+
+    /// Records from another store (TVBox v1 history): never replaces what is already known.
+    func merge(_ list: [WatchProgress]) {
+        let new = list.filter { progress(for: $0.series) == nil }
+        guard !new.isEmpty else { return }
+        publish()
+        for p in new { progress[p.id] = p }
+        saveProgress()
+    }
+
+    func removeProgress(_ s: HGSeries) { live[s.id] = nil; progress[s.id] = nil; saveProgress() }
     /// Clears the visible history (hidden / locked sources keep theirs, like continueWatching).
     func clearHistory() {
+        publish()
         for p in continueWatching { progress[p.series.id] = nil }
-        save(progress, "stv.progress")
+        saveProgress()
     }
 
     func isFavorite(_ s: HGSeries) -> Bool { allFavorites.contains { $0.id == s.id } }
