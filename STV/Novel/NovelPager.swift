@@ -200,9 +200,10 @@ final class NovelPageView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let w = bounds.width - insets.left - insets.right
+        let w = max(1, bounds.width - insets.left - insets.right)
+        let h = max(1, bounds.height - insets.top - insets.bottom - 62)
         header.frame = CGRect(x: insets.left, y: insets.top, width: w, height: 22)
-        textView.frame = CGRect(x: insets.left, y: insets.top + 32, width: w, height: bounds.height - insets.top - insets.bottom - 62)
+        textView.frame = CGRect(x: insets.left, y: insets.top + 32, width: w, height: h)
         footer.frame = CGRect(x: insets.left, y: bounds.height - insets.bottom - 30, width: w, height: 30)
     }
 }
@@ -258,6 +259,28 @@ final class NovelPagerController: UIViewController, UIPageViewControllerDataSour
         view.addGestureRecognizer(pan)
         build()
         warmNeighbours()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard view.bounds.width > 20, view.bounds.height > 80, let s = paginator.style else { return }
+        // Keep pagination locked to the exact textView frame size so safe-area or container differences can never clip bottom lines.
+        let actualW = max(1, view.bounds.width - insets.left - insets.right)
+        let actualH = max(1, view.bounds.height - insets.top - insets.bottom - 62)
+        if abs(actualW - s.size.width) > 1 || abs(actualH - s.size.height) > 1 {
+            let off = paginator.range(current).location
+            let updated = NovelPageStyle(size: CGSize(width: actualW, height: actualH),
+                fontSize: s.fontSize, lineSpacing: s.lineSpacing, indent: s.indent, fontID: s.fontID,
+                text: s.text, secondary: s.secondary, background: s.background, highlight: s.highlight)
+            if paginator.configure(updated) {
+                current = paginator.ref(chapter: current.chapter, offset: off)
+                build()
+                let settled = current
+                DispatchQueue.main.async { [weak self] in self?.onPageChange?(settled) }
+            }
+        } else if dragging == nil, let t = top, t.frame != view.bounds {
+            t.frame = view.bounds
+        }
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
