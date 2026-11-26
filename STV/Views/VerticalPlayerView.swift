@@ -83,12 +83,14 @@ struct PlayerScreen: View {
     private var landscape: Bool { vClass == .compact || (layoutMetrics.isPad && layoutMetrics.isLandscape) }
     /// Landscape-format clips shown in the upright player keep their full chrome visible.
     private var portraitLandscapeClip: Bool { !landscape && aspect > 1.0 }
-    /// A display-only lift for wide clips on an upright iPhone. It is independent of PiP state.
-    private var videoLift: CGFloat {
-        guard !layoutMetrics.isPad, aspect > 1.0 else { return 0 }
-        let upright = displayOrientation.isPortrait
+    /// A display-only lift for wide clips on an upright iPhone. Unknown orientation
+    /// falls back to the current presentation layout so the first frame never starts at 0pt.
+    private func videoLift(for videoAspect: CGFloat) -> CGFloat {
+        guard !layoutMetrics.isPad, videoAspect > 1.0 else { return 0 }
+        let upright = displayOrientation.isPortrait || (!displayOrientation.isLandscape && !landscape)
         return upright ? 44 : 0
     }
+    private var videoLift: CGFloat { videoLift(for: aspect) }
     private var keepsChromeVisible: Bool { portraitLandscapeClip }
     private var canShowPadSplit: Bool {
         layoutMetrics.isPad && layoutMetrics.isLandscape && layoutMetrics.width >= 840 && aspect < 1.0 && !co.pipActive && !co.episodes.isEmpty
@@ -102,14 +104,27 @@ struct PlayerScreen: View {
 
     // MARK: Geometry
 
-    /// Video aspect (w/h): the item's presentation size once known, else a guess from the series.
+    /// Series-level fallback used until this episode has a decoded frame or a ready renderer.
+    private var fallbackAspect: CGFloat {
+        series.orientation == "portrait" || (!series.source.isLongVideo && series.orientation != "landscape") ? 9.0 / 16 : 16.0 / 9
+    }
+
+    /// Prefer this episode's decoded frame over videoSize: videoSize can still describe
+    /// the previous episode while a swipe is in progress and the new renderer is opening.
     private var aspect: CGFloat {
-        if co.videoSize.width > 0, co.videoSize.height > 0 { return co.videoSize.width / co.videoSize.height }
         if let current = co.current, let frame = co.firstFrames[current],
            frame.size.width > 0, frame.size.height > 0 {
             return frame.size.width / frame.size.height
         }
-        return series.orientation == "portrait" || (!series.source.isLongVideo && series.orientation != "landscape") ? 9.0 / 16 : 16.0 / 9
+        if co.readyIndex == co.current, co.videoSize.width > 0, co.videoSize.height > 0 {
+            return co.videoSize.width / co.videoSize.height
+        }
+        return fallbackAspect
+    }
+
+    private func aspect(of image: UIImage) -> CGFloat {
+        guard image.size.width > 0, image.size.height > 0 else { return fallbackAspect }
+        return image.size.width / image.size.height
     }
     /// True for native portrait-format video, independent of the device's current orientation.
     private var isPortraitVideo: Bool { aspect < 1.0 }
@@ -148,7 +163,8 @@ struct PlayerScreen: View {
                         // Previous episode's last frame, riding with the swipe until the next one is on screen.
                         FeedDrift(feed: feed, index: held.index, page: full.height) {
                             Image(uiImage: held.image).resizable()
-                                .frame(width: area.width, height: area.height).offset(x: area.minX, y: area.minY - videoLift)
+                                .frame(width: area.width, height: area.height)
+                                .offset(x: area.minX, y: area.minY - videoLift(for: aspect(of: held.image)))
                                 .allowsHitTesting(false).accessibilityHidden(true)
                         }
                     }
@@ -622,7 +638,7 @@ struct PlayerScreen: View {
                         .resizable()
                         .aspectRatio(contentMode: fillScreen ? .fill : .fit)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .offset(y: -videoLift)
+                        .offset(y: -videoLift(for: aspect(of: frame)))
                         .clipped()
                         .allowsHitTesting(false)
                 } else if (i == co.heldFrame?.index || i == co.current) && co.errors[i] == nil {
