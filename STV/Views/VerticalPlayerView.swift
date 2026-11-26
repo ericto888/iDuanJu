@@ -237,6 +237,25 @@ struct PlayerScreen: View {
                     } else {
                         if locked {
                             if controlsVisible { lockOnly(full, ins: ins).transition(.opacity) }
+                        } else if co.paused, co.current != nil, co.readyIndex == co.current, !centerSuppressed, !scrubbing, panel == nil {
+                            // A single glass play target stays at the rendered video's true center,
+                            // including the intentional 44 pt upright-wide-video lift.
+                            Button {
+                                co.togglePause()
+                                flashChrome()
+                            } label: {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 27, weight: .regular))
+                                    .offset(x: 2)
+                                    .frame(width: 72, height: 72)
+                                    .liquidGlass(Circle(), tone: .clear, interactive: true, onMedia: true)
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(PressScale(scale: 0.92))
+                            .accessibilityLabel("播放")
+                            .accessibilityIdentifier("player.centerPlay")
+                            .position(x: rect.midX, y: rect.midY - videoLift)
+                            .transition(.opacity.combined(with: .scale(scale: 0.92)))
                         } else if co.isLive, controlsVisible, !centerSuppressed, co.current != nil, co.readyIndex == co.current, !scrubbing, panel == nil {
                             PlayerCenterControls(co: co, onInteract: flashChrome, spacing: landscape ? 72 : 44)
                                 .position(x: landscape ? full.width / 2 : rect.midX, y: landscape ? full.height / 2 : rect.midY)
