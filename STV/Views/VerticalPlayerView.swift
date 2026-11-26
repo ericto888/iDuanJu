@@ -109,6 +109,10 @@ struct PlayerScreen: View {
     /// Video aspect (w/h): the item's presentation size once known, else a guess from the series.
     private var aspect: CGFloat {
         if co.videoSize.width > 0, co.videoSize.height > 0 { return co.videoSize.width / co.videoSize.height }
+        if let current = co.current, let frame = co.firstFrames[current],
+           frame.size.width > 0, frame.size.height > 0 {
+            return frame.size.width / frame.size.height
+        }
         return series.orientation == "portrait" || (!series.source.isLongVideo && series.orientation != "landscape") ? 9.0 / 16 : 16.0 / 9
     }
     /// True for native portrait-format video, independent of the device's current orientation.
@@ -120,7 +124,7 @@ struct PlayerScreen: View {
     }
 
     private func videoRect(_ area: CGRect) -> CGRect {
-        if fillScreen { return area }
+        if fillScreen { return area.offsetBy(dx: 0, dy: -videoLift) }
         let a = aspect
         var w = area.width, h = w / a
         if h > area.height { h = area.height; w = h * a }
@@ -622,7 +626,7 @@ struct PlayerScreen: View {
                         .resizable()
                         .aspectRatio(contentMode: fillScreen ? .fill : .fit)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .offset(y: (!landscape && frame.size.width > frame.size.height) ? -44 : 0)
+                        .offset(y: -videoLift)
                         .clipped()
                         .allowsHitTesting(false)
                 } else if (i == co.heldFrame?.index || i == co.current) && co.errors[i] == nil {
