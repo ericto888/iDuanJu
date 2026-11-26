@@ -71,11 +71,6 @@ struct PlayerScreen: View {
     @State private var feed = FeedOffset()
     /// Physical device orientation drives the video-only display offset; PiP layout changes do not.
     @State private var displayOrientation = UIDevice.current.orientation
-    /// Hold the display offset constant while AVKit restores the app from PiP.
-    @State private var pipRestoreLift: CGFloat?
-    @State private var pipRestoreEpisode: Int?
-    /// Invalidates a delayed release if PiP starts again before the restore transition settles.
-    @State private var pipRestoreReleaseToken = UUID()
     /// Running double-tap seek (+10/+20/… s) and which side it is on; drives the side bubble.
     @State private var seekRun: (total: Int, at: Date)?
     @State private var horizontalSeekStart: Double?
@@ -91,16 +86,9 @@ struct PlayerScreen: View {
     /// A display-only lift for wide clips on an upright iPhone. Unknown orientation
     /// falls back to the current presentation layout so the first frame never starts at 0pt.
     private func videoLift(for videoAspect: CGFloat) -> CGFloat {
-        if let pipRestoreLift { return pipRestoreLift }
         guard !layoutMetrics.isPad, videoAspect > 1.0 else { return 0 }
         let upright = displayOrientation.isPortrait || (!displayOrientation.isLandscape && !landscape)
         return upright ? 44 : 0
-    }
-
-    private func clearPiPRestoreLift() {
-        pipRestoreReleaseToken = UUID()
-        pipRestoreLift = nil
-        pipRestoreEpisode = nil
     }
     private var videoLift: CGFloat { videoLift(for: aspect) }
     private var keepsChromeVisible: Bool { portraitLandscapeClip }
@@ -384,31 +372,9 @@ struct PlayerScreen: View {
             co.didBecomeActive()
             flashChrome()
         }
-        .compatOnChange(of: co.pipActive) { active in
-            if active {
-                // Freeze the pre-PiP offset before AVKit changes the app's size class/layout.
-                pipRestoreReleaseToken = UUID()
-                pipRestoreLift = videoLift(for: aspect)
-                pipRestoreEpisode = co.current
-            } else if pipRestoreLift != nil {
-                // Keep the frozen offset throughout AVKit's return animation. Device-orientation
-                // notifications can arrive mid-transition, so release only after the layout settles.
-                let token = UUID()
-                pipRestoreReleaseToken = token
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(700))
-                    guard pipRestoreReleaseToken == token, !co.pipActive else { return }
-                    clearPiPRestoreLift()
-                }
-            }
-        }
-        .compatOnChange(of: co.current) { current in
-            if current != pipRestoreEpisode { clearPiPRestoreLift() }
-        }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             let orientation = UIDevice.current.orientation
-            // Track the real device orientation, but never release the PiP offset lock here:
-            // iOS may emit transient orientation changes while the player UI is being restored.
+            // Track physical orientation only; ignore transient face-up / face-down readings.
             if orientation.isPortrait || orientation.isLandscape {
                 displayOrientation = orientation
             }
@@ -1654,49 +1620,26 @@ struct PlayerLayerView: UIViewRepresentable {
         let view = PlayerRenderHost()
         view.backgroundColor = .black
         view.isUserInteractionEnabled = false
-        #if DEBUG
-        view.recordLifecycle("makeUIView")
-        #endif
         mount(in: view)
         return view
     }
 
-    func updateUIView(_ view: PlayerRenderHost, context: Context) {
-        #if DEBUG
-        view.recordLifecycle("updateUIView")
-        #endif
-        mount(in: view)
-    }
+    func updateUIView(_ view: PlayerRenderHost, context: Context) { mount(in: view) }
 
     static func dismantleUIView(_ view: PlayerRenderHost, coordinator: ()) {
-        #if DEBUG
-        view.recordLifecycle("dismantleUIView")
-        #endif
         view.renderSurface = nil
         view.subviews.forEach { $0.removeFromSuperview() }
     }
 
     private func mount(in container: PlayerRenderHost) {
-        #if DEBUG
-        guard Thread.isMainThread else {
-            NSLog("[PiPTrace] THREAD VIOLATION mount(in:) uptime=%.3f stack=%@", ProcessInfo.processInfo.systemUptime, Thread.callStackSymbols.prefix(12).joined(separator: " <- "))
-            return
-        }
-        #endif
         coordinator.fill = fill
         let surface = coordinator.engine.surface
-        #if DEBUG
-        container.recordMount(surface: surface)
-        #endif
         container.renderSurface = surface
         guard surface.superview !== container else { container.setNeedsLayout(); return }
         container.subviews.forEach { $0.removeFromSuperview() }
         surface.frame = container.bounds
         surface.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         container.addSubview(surface)
-        #if DEBUG
-        container.recordLifecycle("surface-attached")
-        #endif
     }
 }
 
@@ -1704,49 +1647,6 @@ struct PlayerLayerView: UIViewRepresentable {
 /// The Debug-only accessibility probe reads that render surface and its hosted video layers, not a SwiftUI wrapper.
 final class PlayerRenderHost: UIView {
     weak var renderSurface: UIView?
-    #if DEBUG
-    private var layoutPassCount = 0
-    private var mountPassCount = 0
-    private var lifecyclePassCount = 0
-    private var lastGeometrySignature: String?
-
-    func recordLifecycle(_ event: String) {
-        lifecyclePassCount += 1
-        NSLog("[PiPTrace] host=%@ event=%@ count=%d uptime=%.3f main=%@",
-              String(describing: ObjectIdentifier(self)), event, lifecyclePassCount,
-              ProcessInfo.processInfo.systemUptime, String(Thread.isMainThread))
-    }
-
-    func recordMount(surface: UIView) {
-        mountPassCount += 1
-        NSLog("[PiPTrace] host=%@ event=mount count=%d surface=%@ surfaceID=%@ sameSuperview=%@ uptime=%.3f",
-              String(describing: ObjectIdentifier(self)), mountPassCount,
-              String(describing: type(of: surface)), String(describing: ObjectIdentifier(surface)),
-              String(surface.superview === self), ProcessInfo.processInfo.systemUptime)
-    }
-
-    private func traceGeometry(_ surface: UIView) {
-        var layerValues: [String] = []
-        func visit(_ layer: CALayer, _ path: String) {
-            if let av = layer as? AVPlayerLayer {
-                layerValues.append("\(path):frame=\(av.frame),bounds=\(av.bounds),videoRect=\(av.videoRect)")
-            } else if layer is AVSampleBufferDisplayLayer {
-                layerValues.append("\(path):frame=\(layer.frame),bounds=\(layer.bounds)")
-            }
-            for (index, child) in (layer.sublayers ?? []).enumerated() {
-                visit(child, path + ".\(index)")
-            }
-        }
-        visit(surface.layer, "layer")
-        let signature = "hostFrame=\(frame),hostBounds=\(bounds),surfaceFrame=\(surface.frame),surfaceBounds=\(surface.bounds),surfaceSuperview=\(String(describing: surface.superview.map { ObjectIdentifier($0) })),videoLayers=\(layerValues)"
-        guard signature != lastGeometrySignature else { return }
-        lastGeometrySignature = signature
-        NSLog("[PiPTrace] host=%@ layout=%d geometry=%@ uptime=%.3f",
-              String(describing: ObjectIdentifier(self)), layoutPassCount, signature,
-              ProcessInfo.processInfo.systemUptime)
-    }
-    #endif
-
     override init(frame: CGRect) {
         super.init(frame: frame)
         #if DEBUG
@@ -1756,29 +1656,8 @@ final class PlayerRenderHost: UIView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func layoutSubviews() {
-        #if DEBUG
-        guard Thread.isMainThread else {
-            NSLog("[PiPTrace] THREAD VIOLATION layoutSubviews uptime=%.3f stack=%@",
-                  ProcessInfo.processInfo.systemUptime, Thread.callStackSymbols.prefix(12).joined(separator: " <- "))
-            return
-        }
-        layoutPassCount += 1
-        #endif
         super.layoutSubviews()
-        guard let surface = renderSurface else {
-            #if DEBUG
-            if lastGeometrySignature != "unmounted" {
-                lastGeometrySignature = "unmounted"
-                NSLog("[PiPTrace] host=%@ layout=%d surface=UNMOUNTED frame=%@ bounds=%@ uptime=%.3f",
-                      String(describing: ObjectIdentifier(self)), layoutPassCount,
-                      String(describing: frame), String(describing: bounds), ProcessInfo.processInfo.systemUptime)
-            }
-            #endif
-            return
-        }
-        #if DEBUG
-        traceGeometry(surface)
-        #endif
+        guard let surface = renderSurface else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         UIView.performWithoutAnimation { surface.frame = bounds; surface.layoutIfNeeded() }
