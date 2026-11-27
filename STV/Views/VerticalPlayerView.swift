@@ -1833,6 +1833,7 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         var onSeekCancelled: () -> Void = {}
         var landscape = false
         var speedMode = false
+        var locked = false
         var onAdjustBegan: (AdjustSide) -> Void = { _ in }
         var onAdjustChanged: (AdjustSide, Double) -> Void = { _, _ in }
         var onAdjustEnded: () -> Void = {}
