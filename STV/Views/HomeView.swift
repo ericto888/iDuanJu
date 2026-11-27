@@ -301,7 +301,6 @@ struct HomeView: View {
     /// Cached source list; refreshed when any source/plugin store changes.
     @State private var sources: [HomeSource] = HomeSource.all
     @State private var subs: [HomeSource: HomeTab]
-    @State private var heroCovers: [HomeSource: String] = [:]
     /// ui-redesign 10/11: the header always sits on the page colour (ambient glow on top); once the current page
     /// scrolls it pins with a blurred 80 % page-colour ground and a hairline.
     private var headerInk: Color { STVTheme.text }
@@ -447,7 +446,6 @@ struct HomeView: View {
                 HomeFeedPage(source: s,
                              bottomBarHidden: homeBottomBarHidden,
                              tab: Binding(get: { subs[s] ?? s.subs[0] }, set: { subs[s] = $0 }),
-                             onHero: { heroCovers[s] = $0 },
                              onScrollOffset: { offset in handleFeedOffset(offset, for: s) })
             }
         }
@@ -527,26 +525,6 @@ struct HomeView: View {
         .background { SpanReader(span: $headerSpan) }
     }
 
-    /// 当前来源页 hero 海报模糊铺在页面顶部，向页面底色淡出。
-    @ViewBuilder private var atmosphere: some View {
-        let url = heroCovers[source]
-        ZStack {
-            // Dark ground under the blurred poster keeps the white header legible; without a poster (漫画 / 频道)
-            // it would be a dark band in light mode, so use a soft tint of the page colour instead.
-            if url != nil { Color(red: 0.08, green: 0.10, blue: 0.15) } else { STVTheme.elevated }
-            if let url {
-                CoverBackdrop(url: url).opacity(0.75).id(url)
-                    .transition(.opacity)
-            }
-        }
-        .frame(height: 420)
-        .clipped()
-        .mask(LinearGradient(colors: [.black, .black.opacity(0.85), .clear], startPoint: .top, endPoint: .bottom))
-        .animation(.easeInOut(duration: 0.45), value: url)
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-    }
-
     private var channelPanel: some View {
         NavigationStack {
             ScrollView {
@@ -585,7 +563,6 @@ private struct HomeFeedPage: View {
     let source: HomeSource
     let bottomBarHidden: Bool
     @Binding var tab: HomeTab
-    var onHero: (String) -> Void
     var onScrollOffset: (CGFloat) -> Void = { _ in }
     @State private var legacyChannels: [HuangguoChannel] = []
     @State private var legacyError: Error?
@@ -602,7 +579,7 @@ private struct HomeFeedPage: View {
 
     var body: some View {
         if case .site(let source) = tab, source.cmsKey != nil || source.pluginID != nil {
-            DynamicSiteFeed(source: source, bottomBarHidden: bottomBarHidden, onHero: onHero, onScrollOffset: onScrollOffset)
+            DynamicSiteFeed(source: source, bottomBarHidden: bottomBarHidden, onScrollOffset: onScrollOffset)
         } else {
             rankFeed
         }
@@ -653,17 +630,13 @@ private struct HomeFeedPage: View {
             heroIndex = 0
             if case .huangguo(.legacy) = tab, legacyChannels.isEmpty { await loadLegacy() }
         }
-        .onAppear { loadHomeBoards(); reportHero() }
+        .onAppear { loadHomeBoards() }
         .compatOnChange(of: tab) { loadHomeBoards() }
         .compatOnChange(of: boards.map(\.id)) { _ in loadHomeBoards() }
-        .compatOnChange(of: heroKey) { reportHero() }
         .compatOnChange(of: heroPicks.count) { count in
             if heroIndex >= count { heroIndex = 0 }
         }
     }
-
-    private var heroKey: String { (heroPicks.indices.contains(heroIndex) ? heroPicks[heroIndex].cover : "") + "\(heroIndex)" }
-    private func reportHero() { if heroPicks.indices.contains(heroIndex) { onHero(heroPicks[heroIndex].cover) } }
 
     /// ui-redesign 10: secondary boards are the same glass segmented control as 找剧.
     private var subChips: some View {
@@ -968,12 +941,10 @@ private struct DynamicSiteFeed: View {
                 heroCover = cached.heroCover
                 pager.setFetcher(selectedFetcher(for: cached.selected))
                 pager.restore(cached.selectedPager)
-                if let cover = cached.heroCover, !cover.isEmpty { onHero(cover) }
                 return
             }
             await refresh()
         }
-        .compatOnChange(of: heroCover) { cover in if let cover { onHero(cover) } }
         .compatOnChange(of: selected) { _ in saveMemory() }
     }
 
@@ -1114,7 +1085,6 @@ private struct DynamicSiteFeed: View {
 
         if let cover = featuredItems.first?.cover, !cover.isEmpty {
             heroCover = cover
-            onHero(cover)
         }
 
         let id = categories.contains { $0.id == previousSelectedID }
