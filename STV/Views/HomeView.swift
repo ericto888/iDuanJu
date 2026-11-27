@@ -263,6 +263,8 @@ struct HomeView: View {
     /// scrolls it pins with a blurred 80 % page-colour ground and a hairline.
     private var headerInk: Color { STVTheme.text }
     @State private var scrolled: [HomeSource: Bool] = [:]
+    @State private var headerScrollBehavior = HomeChromeScrollBehavior()
+    @State private var headerHidden = false
     @State private var bottomBarBehavior = HomeChromeScrollBehavior()
     @State private var homeBottomBarHidden = false
     @State private var headerSpan: VSpan?
@@ -314,20 +316,36 @@ struct HomeView: View {
             .onReceive(Self.sourceChanges) { _ in refreshSources() }
             .onAppear {
                 refreshSources()
+                headerScrollBehavior.reset()
+                setHeaderHidden(false)
                 bottomBarBehavior.reset()
                 setBottomBarHidden(false)
             }
             .onReceive(NotificationCenter.default.publisher(for: .homeChromeResetRequested)) { _ in
+                headerScrollBehavior.reset()
+                setHeaderHidden(false)
                 bottomBarBehavior.reset()
                 setBottomBarHidden(false)
             }
             .onDisappear {
+                headerScrollBehavior.reset()
+                setHeaderHidden(false)
+                bottomBarBehavior.reset()
                 NotificationCenter.default.post(name: .homeBottomBarVisibilityChanged, object: false)
             }
             .compatOnChange(of: source) { _ in
+                headerScrollBehavior.reset()
+                setHeaderHidden(false)
                 bottomBarBehavior.reset()
                 setBottomBarHidden(false)
             }
+    }
+
+    private func setHeaderHidden(_ hidden: Bool) {
+        guard headerHidden != hidden else { return }
+        withAnimation(.easeInOut(duration: 0.22)) {
+            headerHidden = hidden
+        }
     }
 
     private func setBottomBarHidden(_ hidden: Bool) {
@@ -342,18 +360,30 @@ struct HomeView: View {
     /// a fast downward flick reveals it, and returning to the top always restores it.
     private func handleFeedInteraction(_ active: Bool, for feedSource: HomeSource) {
         guard feedSource == source else { return }
+        headerScrollBehavior.setInteracting(active)
         bottomBarBehavior.setInteracting(active)
     }
 
     private func handleFeedMetrics(_ metrics: CompatScrollMetrics, for feedSource: HomeSource) {
         guard feedSource == source else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if let hidden = headerScrollBehavior.update(
+            offset: -metrics.offsetY,
+            contentHeight: metrics.contentHeight,
+            viewportHeight: metrics.containerHeight,
+            viewportWidth: metrics.containerWidth,
+            isWithinScrollRange: metrics.isWithinScrollRange,
+            at: now
+        ) {
+            setHeaderHidden(hidden)
+        }
         if let hidden = bottomBarBehavior.update(
             offset: -metrics.offsetY,
             contentHeight: metrics.contentHeight,
             viewportHeight: metrics.containerHeight,
             viewportWidth: metrics.containerWidth,
             isWithinScrollRange: metrics.isWithinScrollRange,
-            at: ProcessInfo.processInfo.systemUptime
+            at: now
         ) {
             setBottomBarHidden(hidden)
         }
@@ -474,9 +504,9 @@ struct HomeView: View {
 
     private var header: some View {
         VStack(spacing: 0) {
-            // Keep the upstream floating channel bar, but collapse only the search/filter row
-            // after the active page scrolls. The measured header span then updates the page inset.
-            if !pinned {
+            // Search/filter visibility follows genuine scroll direction independently of channel pinning.
+            // The row leaves the layout when hidden; geometry changes are ignored by its scroll state machine.
+            if !headerHidden {
                 LiquidGlassGroup(spacing: 10) {
                     HStack(spacing: 10) {
                         NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
