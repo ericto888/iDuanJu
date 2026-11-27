@@ -302,8 +302,8 @@ struct JSVideoProvider: SiteProvider {
     static let homeID = "__home"
 
     var categories: [SiteCategory] {
-        [SiteCategory(id: Self.homeID, title: "推荐", path: Self.homeID)]
-            + (PluginStore.snapshot(pluginID)?.cachedCategories ?? []).map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }
+        let cached = (PluginStore.snapshot(pluginID)?.cachedCategories ?? []).map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }
+        return cached.isEmpty ? [SiteCategory(id: Self.homeID, title: "推荐", path: Self.homeID)] : cached
     }
 
     private func series(_ o: [String: Any]) -> HGSeries? {
@@ -320,6 +320,19 @@ struct JSVideoProvider: SiteProvider {
         let o = v as? [String: Any] ?? [:]
         let items = PluginOut.unique(((o["items"] as? [[String: Any]]) ?? []).prefix(500).compactMap(series)) { $0.id }
         return HGPage(items: items, hasMore: (o["hasMore"] as? Bool ?? false) && !items.isEmpty, nextOffset: p + 1)
+    }
+
+    /// Load homepage data for the shared native HomeFeedPage / HomeShelf presentation.
+    /// Featured items are opt-in; category items remain in their own shelves.
+    func homeData() async throws -> (categories: [SiteCategory], featured: [HGSeries]) {
+        let response = try await PluginRuntime.call(pluginID, "home", [:]) as? [String: Any] ?? [:]
+        let pluginCategories = PluginOut.categories(response["categories"])
+        await MainActor.run { PluginStore.shared.cacheCategories(pluginID, pluginCategories) }
+        let features = PluginStore.snapshot(pluginID)?.manifest.homeFeatures ?? []
+        let featured = features.contains("featured")
+            ? PluginOut.unique(((response["items"] as? [[String: Any]]) ?? []).prefix(100).compactMap(series)) { $0.id }
+            : []
+        return (pluginCategories.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }, featured)
     }
 
     func list(_ c: SiteCategory, page p: Int) async throws -> HGPage {
