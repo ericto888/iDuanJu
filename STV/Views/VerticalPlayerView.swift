@@ -351,7 +351,7 @@ struct PlayerScreen: View {
         .task { await screenshotHooks() }
         .task(id: lastInteraction) {
             do { try await Task.sleep(for: .seconds(3)) } catch { return }
-            guard !noAutoHide, !co.paused || locked else { return }
+            guard !portraitLandscapeClip, !noAutoHide, !co.paused || locked else { return }
             withAnimation(.easeOut(duration: 0.2)) { showChrome = false }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
@@ -692,8 +692,13 @@ struct PlayerScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Keep the compact playback chrome visible for a landscape clip viewed upright.
+    private var portraitLandscapeClip: Bool {
+        !landscape && aspect > 1.0
+    }
+
     private var controlsVisible: Bool {
-        !speedMode && (showChrome || scrubbing || panel != nil || voiceOver)
+        !speedMode && (portraitLandscapeClip || showChrome || scrubbing || panel != nil || voiceOver)
     }
 
     // MARK: Chrome
