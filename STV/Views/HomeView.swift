@@ -1,58 +1,12 @@
 import SwiftUI
 
-/// Pure scroll-state reducer for the home floating tab bar.
-/// Hide on upward movement, reveal on a fast downward flick, and always restore at the top.
-struct HomeBottomBarScrollBehavior {
-    private(set) var isHidden = false
-    private var previousOffset: CGFloat?
-    private var previousTime: TimeInterval?
-    let revealVelocity: CGFloat
-
-    init(revealVelocity: CGFloat = 400) {
-        self.revealVelocity = revealVelocity
-    }
-
-    mutating func update(offset: CGFloat, at time: TimeInterval) -> Bool? {
-        let previous = previousOffset
-        let previousSampleTime = previousTime
-        previousOffset = offset
-        previousTime = time
-
-        if offset > -8 { return setHidden(false) }
-        guard let previous, let previousSampleTime else { return nil }
-        let delta = offset - previous
-        guard abs(delta) > 1.5 else { return nil }
-        if delta < 0 { return setHidden(true) }
-
-        let elapsed = max(time - previousSampleTime, 0.001)
-        guard delta / elapsed >= revealVelocity else { return nil }
-        return setHidden(false)
-    }
-
-    mutating func reset() {
-        isHidden = false
-        previousOffset = nil
-        previousTime = nil
-    }
-
-    private mutating func setHidden(_ hidden: Bool) -> Bool? {
-        guard isHidden != hidden else { return nil }
-        isHidden = hidden
-        // The bar transition changes the feed's bottom inset. Discard the old sample so
-        // that this layout adjustment cannot be mistaken for the user's next scroll gesture.
-        previousOffset = nil
-        previousTime = nil
-        return hidden
-    }
-}
-
 private struct HomeFeedScrollOffsetKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
-/// One interaction-gated state machine drives both the home search header and root tab bar.
-/// Geometry changes caused by loading or viewport resizing reset the sample instead of changing chrome.
+/// Interaction-gated state machine for the home floating tab bar.
+/// Geometry changes caused by loading, bouncing, or viewport resizing are not treated as user intent.
 struct HomeChromeScrollBehavior {
     private(set) var isHidden = false
     private var isInteracting = false
@@ -952,7 +906,7 @@ private struct DynamicSiteFeed: View {
                     if #unavailable(iOS 18.0) { onScrollOffset(offset) }
                 }
                 .compatOnScrollInteraction { onScrollInteraction($0) }
-        .compatOnScrollMetrics { onScrollMetrics($0) }
+                .compatOnScrollMetrics { onScrollMetrics($0) }
                 .accessibilityIdentifier("home.page.\(source.label)")
                 .homePageInset()
                 .refreshable { await refresh() }
