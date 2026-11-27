@@ -485,7 +485,7 @@ struct HomeView: View {
         }
         .padding(.top, 8)
         .padding(.bottom, 8)
-        .background { LiquidEdgeFade(visible: pinned) }
+        .background { LiquidEdgeFade(visible: pinned, overhang: 84) }
         .animation(.easeOut(duration: 0.22), value: pinned)
         .zIndex(1)
     }
