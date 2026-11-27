@@ -776,6 +776,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         seekHold = nil
         if let r = readyIndex, heldFrame == nil, let img = Self.snapshot(engine.surface) { heldFrame = (img, r) }
         readyIndex = nil
+        videoSize = .zero
         finaleEnded = false
         if pipActive { continuePiP = true }
         // A source/renderer reload can deactivate the shared session independently of this flag.
