@@ -186,7 +186,10 @@ struct DebugRouteHost: View {
             }
         case .board(let s, let c):
             NavigationStack {
-                if let cat = Sites.provider(s)?.categories.first(where: { $0.id == c }) { BoardListView(board: BoardSpec(kind: .site(s, cat))).routes() }
+                if let cat = Sites.provider(s)?.categories.first(where: { $0.id == c }) {
+                    let numbered = s.pluginID.map { PluginStore.snapshot($0)?.manifest.homeFeatures?.contains("numbered") ?? false } ?? true
+                    BoardListView(board: BoardSpec(kind: .site(s, cat), numbered: numbered)).routes()
+                }
             }
         }
     }
