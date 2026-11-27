@@ -15,6 +15,21 @@ enum PluginType: String, Codable, CaseIterable, Hashable {
     }
 }
 
+enum PluginHomeFeatures {
+    static func has(_ feature: String, in features: [String]?) -> Bool {
+        features?.contains(feature) ?? false
+    }
+    static func usesCategoryShelves(_ features: [String]?) -> Bool {
+        has("categoryShelves", in: features)
+    }
+    static func showsFeaturedCarousel(_ features: [String]?, itemCount: Int) -> Bool {
+        has("featured", in: features) && itemCount > 0
+    }
+    static func usesNumbering(_ features: [String]?) -> Bool {
+        has("numbered", in: features)
+    }
+}
+
 struct PluginManifest: Codable, Hashable {
     struct Author: Codable, Hashable { var name: String; var contact: String? }
     struct Permissions: Codable, Hashable {
