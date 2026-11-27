@@ -30,7 +30,9 @@ enum PluginHomeFeatures {
     }
     /// Sequentially inspect categories so the fallback hero is deterministic in site order.
     static func firstPopulated<T>(_ values: [T], hasItems: (T) async -> Bool) async -> T? {
-        for value in values where await hasItems(value) { return value }
+        for value in values {
+            if await hasItems(value) { return value }
+        }
         return nil
     }
 }
