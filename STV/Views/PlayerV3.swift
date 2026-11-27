@@ -24,14 +24,7 @@ struct PlayerCompactTimeControls: View {
     }
 
     var body: some View {
-        HStack(spacing: 7) {
-            if !co.isLive {
-                Button { co.seek(by: -10); onInteract() } label: {
-                    Image(systemName: "gobackward.10").font(.system(size: 13, weight: .medium))
-                        .frame(width: 26, height: 34).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).accessibilityLabel("快退10秒").accessibilityIdentifier("player.back10")
-            }
+        HStack(spacing: 12) {
             Button { co.togglePause(); onInteract() } label: {
                 Image(systemName: co.paused ? "play.fill" : "pause.fill")
                     .font(.system(size: 15, weight: .semibold))
@@ -45,17 +38,12 @@ struct PlayerCompactTimeControls: View {
             let time = clock.scrubPreview ?? clock.sample.time
             Text(Fmt.clock(Int(time)))
                 .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .fixedSize(horizontal: true, vertical: false)
                 .accessibilityIdentifier("player.time")
             Text("−" + Fmt.clock(Int(max(0, clock.sample.duration - time))))
                 .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .fixedSize(horizontal: true, vertical: false)
                 .accessibilityIdentifier("player.remaining")
-            if !co.isLive {
-                Button { co.seek(by: 10); onInteract() } label: {
-                    Image(systemName: "goforward.10").font(.system(size: 13, weight: .medium))
-                        .frame(width: 26, height: 34).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).accessibilityLabel("快进10秒").accessibilityIdentifier("player.fwd10")
-            }
         }
         .foregroundStyle(.white.opacity(0.85))
     }
