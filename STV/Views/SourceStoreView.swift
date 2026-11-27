@@ -136,6 +136,7 @@ struct SourceStoreView: View {
                     // 继续让“更新”按钮显示，直到用户重新进入商店或刷新目录。
                     updateAvailableIDs.remove(item.manifest.id)
                     checkingUpdateIDs.remove(item.manifest.id)
+                    updateCheckFailedIDs.remove(item.manifest.id)
                     message = "已安装 \(item.manifest.name) \(item.manifest.version)"
                 } catch {
                     message = error.localizedDescription
@@ -263,7 +264,8 @@ struct SourceStoreView: View {
         }
     }
 
-    /// Check installed plugins against their live manifests so only real updates show an Update button.
+    /// Prefer a fully validated live manifest; retain catalog-version discovery
+    /// as a fallback when remote validation cannot complete.
     @MainActor private func checkInstalledUpdates(_ entries: [Catalog.Entry]) async {
         let installedEntries = entries.filter { store.plugin($0.id) != nil }
         checkingUpdateIDs = Set(installedEntries.map(\.id))
