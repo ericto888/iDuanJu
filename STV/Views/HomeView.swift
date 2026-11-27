@@ -263,10 +263,18 @@ struct HomeView: View {
     /// scrolls it pins with a blurred 80 % page-colour ground and a hairline.
     private var headerInk: Color { STVTheme.text }
     @State private var scrolled: [HomeSource: Bool] = [:]
-    @State private var headerHidden = false
-    @State private var chromeScrollBehavior = HomeChromeScrollBehavior()
-    private var pinned: Bool { scrolled[source] ?? false }
+    @State private var headerSpan: VSpan?
+    @State private var safeSpan: VSpan?
     @State private var showChannels = false
+    private var rest: VSpan? {
+        guard let header = headerSpan, let safe = safeSpan else { return nil }
+        return VSpan(top: header.bottom, bottom: safe.bottom)
+    }
+    private var bottomInset: CGFloat { safeSpan?.inset ?? GlassTabBar.clearance + 34 }
+    private var indicator: CGFloat {
+        bottomInset >= GlassTabBar.clearance ? bottomInset - GlassTabBar.clearance : bottomInset
+    }
+    private var pinned: Bool { scrolled[source] ?? false }
 
     init() {
         let e = ProcessInfo.processInfo.environment["STV_HOME_TAB"] ?? ""
@@ -285,36 +293,25 @@ struct HomeView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            sourcePager
-        }
-        // The feed must run to the physical bottom edge like 找剧: this VStack is the layer whose
-        // parent owns the real bottom safe area, so opt out here first.
-        .ignoresSafeArea(.container, edges: .bottom)
-        .background(STVTheme.bg.ignoresSafeArea())
-        .dsAmbient(visible: !pinned)
-        .animation(.easeInOut(duration: 0.22), value: headerHidden)
-        .compatOnChange(of: source) { _ in
-            chromeScrollBehavior.reset()
-            setChromeHidden(false)
-        }
-        .onAppear {
-            chromeScrollBehavior.reset()
-            setChromeHidden(false)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .homeChromeResetRequested)) { _ in
-            chromeScrollBehavior.reset()
-            setChromeHidden(false)
-        }
-        .onDisappear {
-            chromeScrollBehavior.reset()
-            setChromeHidden(false)
-        }
-        .toolbar(.hidden, for: .navigationBar)
-        .sheet(isPresented: $showChannels) { channelPanel }
-        .onReceive(Self.sourceChanges) { _ in refreshSources() }
-        .onAppear { refreshSources() }
+        sourcePager
+            .overlay(alignment: .bottom) {
+                if bottomInset > indicator {
+                    LinearGradient(colors: [STVTheme.bg.opacity(0), STVTheme.bg],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 36)
+                        .allowsHitTesting(false)
+                }
+            }
+            .padding(.bottom, indicator)
+            .ignoresSafeArea(.container, edges: .bottom)
+            .background { SpanReader(span: $safeSpan).ignoresSafeArea(.keyboard) }
+            .overlay(alignment: .top) { header }
+            .background(STVTheme.bg.ignoresSafeArea())
+            .dsAmbient(visible: !pinned)
+            .toolbar(.hidden, for: .navigationBar)
+            .sheet(isPresented: $showChannels) { channelPanel }
+            .onReceive(Self.sourceChanges) { _ in refreshSources() }
+            .onAppear { refreshSources() }
     }
 
     /// Any of these stores can change the set of pages shown in the home source bar.
@@ -363,22 +360,28 @@ struct HomeView: View {
     }
 
     @MainActor @ViewBuilder private func sourcePage(_ s: HomeSource) -> some View {
-        if s == .channels {
-            ChannelFeedView(embedded: true)
-        } else if s == .manga {
-            MangaHomeView(embedded: true)
-        } else if s == .novel {
-            NovelHomeView(embedded: true)
-        } else {
-            HomeFeedPage(source: s,
-                         bottomBarHidden: headerHidden,
-                         tab: Binding(get: { subs[s] ?? s.subs[0] }, set: { subs[s] = $0 }),
-                         onHero: { heroCovers[s] = $0 },
-                         onScrolled: { v in if scrolled[s] != v { scrolled[s] = v } },
-                         onScrollOffset: { offset in handleFeedOffset(offset, for: s) },
-                         onScrollInteraction: { active in handleFeedInteraction(active, for: s) },
-                         onScrollMetrics: { metrics in handleFeedMetrics(metrics, for: s) })
+        Group {
+            if s == .channels {
+                ChannelFeedView(embedded: true)
+            } else if s == .manga {
+                MangaHomeView(embedded: true)
+            } else if s == .novel {
+                NovelHomeView(embedded: true)
+            } else {
+                HomeFeedPage(source: s,
+                             bottomBarHidden: false,
+                             tab: Binding(get: { subs[s] ?? s.subs[0] }, set: { subs[s] = $0 }),
+                             onHero: { heroCovers[s] = $0 },
+                             onScrolled: { v in if scrolled[s] != v { scrolled[s] = v } })
+            }
         }
+        .environment(\.homeHeader, HomeHeader(
+            active: true,
+            rest: rest,
+            pagerTop: safeSpan?.top ?? 0,
+            tabBar: bottomInset - indicator,
+            onScrolled: { v in if scrolled[s] != v { scrolled[s] = v } }
+        ))
     }
 
     /// `scrollPosition(id:)` tracks the pager's item ids (`HomeSource.id`, a String).
@@ -390,47 +393,6 @@ struct HomeView: View {
                       let picked = sources.first(where: { $0.id == id }) else { return }
                 source = picked
             }
-        )
-    }
-
-    private func setChromeHidden(_ hidden: Bool) {
-        if headerHidden != hidden {
-            withAnimation(.easeInOut(duration: 0.22)) { headerHidden = hidden }
-        }
-        NotificationCenter.default.post(name: .homeChromeVisibilityChanged, object: hidden)
-        NotificationCenter.default.post(name: .homeBottomBarVisibilityChanged, object: hidden)
-    }
-
-    private func handleFeedInteraction(_ active: Bool, for feedSource: HomeSource) {
-        guard feedSource == source else { return }
-        chromeScrollBehavior.setInteracting(active)
-    }
-
-    private func handleFeedMetrics(_ metrics: CompatScrollMetrics, for feedSource: HomeSource) {
-        guard feedSource == source else { return }
-        if let hidden = chromeScrollBehavior.update(
-            offset: -metrics.offsetY,
-            contentHeight: metrics.contentHeight,
-            viewportHeight: metrics.containerHeight,
-            viewportWidth: metrics.containerWidth,
-            isWithinScrollRange: metrics.isWithinScrollRange,
-            at: ProcessInfo.processInfo.systemUptime
-        ) {
-            setChromeHidden(hidden)
-        }
-    }
-
-    /// iOS 16-17 preference-key fallback; only accepted while a vertical user drag is active.
-    private func handleFeedOffset(_ offset: CGFloat, for feedSource: HomeSource) {
-        handleFeedMetrics(
-            CompatScrollMetrics(
-                offsetY: -offset,
-                contentHeight: nil,
-                containerHeight: nil,
-                containerWidth: nil,
-                isWithinScrollRange: nil
-            ),
-            for: feedSource
         )
     }
 
@@ -452,42 +414,35 @@ struct HomeView: View {
 
     private var header: some View {
         VStack(spacing: 0) {
-            if !headerHidden {
-                LiquidGlassGroup(spacing: 10) {
-                    HStack(spacing: 10) {
-                        NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
-                            DSSearchBarLabel()
-                                .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
-                                .liquidGlassCapsule(interactive: true)
-                        }
-                        .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
-                        Button { showChannels = true } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
-                                Text("筛选").font(.system(size: 14, weight: .medium))
-                            }
-                            .foregroundStyle(STVTheme.text)
+            LiquidGlassGroup(spacing: 10) {
+                HStack(spacing: 10) {
+                    NavigationLink(value: activeSearchSource) {
+                        DSSearchBarLabel()
                             .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
                             .liquidGlassCapsule(interactive: true)
-                        }
-                        .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
                     }
+                    .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
+                    Button { showChannels = true } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
+                            Text("筛选").font(.system(size: 14, weight: .medium))
+                        }
+                        .foregroundStyle(STVTheme.text)
+                        .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
+                        .liquidGlassCapsule(interactive: true)
+                    }
+                    .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
                 }
-                .padding(.horizontal, 16)
-                .transition(.asymmetric(
-                    insertion: .move(edge: .top).combined(with: .opacity),
-                    removal: .move(edge: .top).combined(with: .opacity)
-                ))
             }
+            .padding(.horizontal, 16)
             HomeChannelBar(items: sources, selection: $source, label: \.label, ink: STVTheme.text) { showChannels = true }
                 .padding(.leading, 20)
                 .padding(.top, 12)
         }
         .padding(.top, 8)
         .padding(.bottom, 8)
-        .background { LiquidEdgeFade(visible: pinned, overhang: 84) }
-        .animation(.easeOut(duration: 0.22), value: pinned)
-        .zIndex(1)
+        .background { LiquidEdgeFade(visible: pinned) }
+        .background { SpanReader(span: $headerSpan) }
     }
 
     /// 当前来源页 hero 海报模糊铺在页面顶部，向页面底色淡出。
@@ -617,6 +572,7 @@ private struct HomeFeedPage: View {
         .compatDefaultScrollAnchor(Self.debugAnchor)
         .compatOnScrolled(threshold: 4) { onScrolled($0) }
         .accessibilityIdentifier("home.page.\(source.label)")
+        .homePageInset()
         .refreshable { if tab == .actorRank { await ActorRankStore.shared.reload() } else { boards.forEach { BoardCache.shared.feed($0).load(force: true) } } }
         .task(id: tab) {
             heroIndex = 0
@@ -930,6 +886,7 @@ private struct DynamicSiteFeed: View {
                 .compatOnScrollInteraction { onScrollInteraction($0) }
                 .compatOnScrollMetrics { onScrollMetrics($0) }
                 .accessibilityIdentifier("home.page.\(source.label)")
+                .homePageInset()
                 .refreshable { await refresh() }
 
             }
