@@ -11,10 +11,8 @@ struct VerticalPlayerView: View {
 
     var body: some View {
         let s = switched ?? series
-        ZStack {
-            PlayerScreen(series: s, startIndex: switched == nil ? startIndex : nil) { next in switched = next }
-                .id(s.id)
-        }
+        PlayerScreen(series: s, startIndex: switched == nil ? startIndex : nil) { next in switched = next }
+            .id(s.id)
     }
 }
 
