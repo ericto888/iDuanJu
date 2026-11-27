@@ -33,7 +33,7 @@ attempt=1
 max_attempts=3
 while true; do
   echo "Resolving Swift packages (attempt $attempt/$max_attempts)..." | tee -a "$LOG_DIR/package-resolution.log"
-  if xcodebuild -resolvePackageDependencies -project STV.xcodeproj -scheme STV 2>&1 | tee -a "$LOG_DIR/package-resolution.log"; then
+  if xcodebuild -resolvePackageDependencies -project STV.xcodeproj -scheme STV -derivedDataPath DerivedDataValidation 2>&1 | tee -a "$LOG_DIR/package-resolution.log"; then
     break
   fi
   if (( attempt >= max_attempts )); then

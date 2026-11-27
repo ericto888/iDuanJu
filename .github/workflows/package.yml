@@ -35,6 +35,7 @@ jobs:
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm
+            ~/Library/Caches/idj-python
             DerivedDataRelease/SourcePackages
             DerivedDataRelease/Build
           key: ${{ runner.os }}-xcode-26.3-ios-release-${{ hashFiles('project.yml', 'Packages/**/Package.swift', 'Package.resolved') }}-${{ github.sha }}
@@ -96,6 +97,7 @@ jobs:
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm
+            ~/Library/Caches/idj-python
             DerivedDataValidation/SourcePackages
             DerivedDataValidation/Build
           key: ${{ runner.os }}-xcode-26.3-ios-validation-${{ hashFiles('project.yml', 'Packages/**/Package.swift', 'Package.resolved') }}-${{ github.sha }}

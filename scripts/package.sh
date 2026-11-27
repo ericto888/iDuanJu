@@ -22,7 +22,7 @@ resolve_packages() {
   local max_attempts=3
   while true; do
     echo "Resolving Swift packages (attempt $attempt/$max_attempts)..."
-    if xcodebuild -resolvePackageDependencies -project STV.xcodeproj -scheme STV 2>&1 | tee -a "$LOG_DIR/package-resolution.log"; then
+    if xcodebuild -resolvePackageDependencies -project STV.xcodeproj -scheme STV -derivedDataPath DerivedDataRelease 2>&1 | tee -a "$LOG_DIR/package-resolution.log"; then
       return 0
     fi
     if (( attempt >= max_attempts )); then
