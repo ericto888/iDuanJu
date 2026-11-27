@@ -66,6 +66,9 @@ struct PlayerScreen: View {
     @ObservedObject private var library = LibraryStore.shared
 
     private var landscape: Bool { vClass == .compact || (layoutMetrics.isPad && layoutMetrics.isLandscape) }
+    /// Native portrait clips stay upright; wide clips in the upright player are lifted for better framing.
+    private var isPortraitVideo: Bool { aspect < 1.0 }
+    private var videoLift: CGFloat { !layoutMetrics.isPad && !landscape && aspect > 1.0 ? 46 : 0 }
     private var canShowPadSplit: Bool {
         layoutMetrics.isPad && layoutMetrics.isLandscape && layoutMetrics.width >= 840 && aspect < 1.0 && !co.pipActive && !co.episodes.isEmpty
     }
@@ -111,14 +114,14 @@ struct PlayerScreen: View {
                     FeedDrift(feed: feed, index: co.current ?? 0, page: full.height) {
                         videoLayer.frame(width: area.width, height: area.height)
                     }
-                    .offset(x: area.minX, y: area.minY)
+                    .offset(x: area.minX, y: area.minY - videoLift)
                     .allowsHitTesting(false)
                     if let held = co.heldFrame {
                         // Previous episode's last frame, riding with the swipe until the next one is on screen.
                         FeedDrift(feed: feed, index: held.index, page: full.height) {
                             Image(uiImage: held.image).resizable().frame(width: area.width, height: area.height)
                         }
-                        .offset(x: area.minX, y: area.minY)
+                        .offset(x: area.minX, y: area.minY - videoLift)
                         .allowsHitTesting(false).accessibilityHidden(true)
                     }
                     Group {
@@ -181,6 +184,23 @@ struct PlayerScreen: View {
                     } else {
                         if locked {
                             if controlsVisible { lockOnly(full, ins: ins).transition(.opacity) }
+                        } else if co.paused, co.current != nil, co.readyIndex == co.current, !centerSuppressed, !scrubbing, panel == nil, !speedMode {
+                            Button {
+                                co.togglePause()
+                                flashChrome()
+                            } label: {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 27, weight: .regular))
+                                    .offset(x: 2)
+                                    .frame(width: 72, height: 72)
+                                    .liquidGlass(Circle(), tone: .clear, interactive: true, onMedia: true)
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(PressScale(scale: 0.92))
+                            .accessibilityLabel("播放")
+                            .accessibilityIdentifier("player.centerPlay")
+                            .position(x: rect.midX, y: rect.midY - videoLift)
+                            .transition(.opacity)
                         } else if co.isLive, controlsVisible, !centerSuppressed, co.current != nil, co.readyIndex == co.current, !scrubbing, panel == nil {
                             PlayerCenterControls(co: co, onInteract: flashChrome, spacing: landscape ? 72 : 44)
                                 .position(x: landscape ? full.width / 2 : rect.midX, y: landscape ? full.height / 2 : rect.midY)
@@ -262,11 +282,12 @@ struct PlayerScreen: View {
             nextDramaPick = await NextDramaRecommender.shared.pickNextDrama(current: d, seasons: seasons, watched: watched)
         }
         .task {
-            // Portrait by default for everything (landscape videos play centred). Rotating the phone (when
-            // the system rotation lock is off) or the 横屏 button switches to landscape.
-            OrientationGate.unlock()
             co.start()
             if co.current == nil { await load() }
+        }
+        .task(id: isPortraitVideo) {
+            if isPortraitVideo { OrientationGate.lockPortrait() }
+            else { OrientationGate.unlock() }
         }
         .task { await screenshotHooks() }
         .task(id: lastInteraction) {
