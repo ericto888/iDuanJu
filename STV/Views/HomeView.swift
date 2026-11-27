@@ -255,6 +255,8 @@ private struct HomeFeedScrollOffsetKey: PreferenceKey {
 /// 横滑冲突：hero 轮播区域内的横滑归轮播；其它区域横滑翻来源页；首页是根页面，没有系统侧滑返回。
 struct HomeView: View {
     @State private var source: HomeSource
+    /// Cached source list; refreshed when any source/plugin store changes.
+    @State private var sources: [HomeSource] = HomeSource.all
     @State private var subs: [HomeSource: HomeTab]
     @State private var heroCovers: [HomeSource: String] = [:]
     /// ui-redesign 10/11: the header always sits on the page colour (ambient glow on top); once the current page
@@ -311,7 +313,23 @@ struct HomeView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showChannels) { channelPanel }
-        .compatOnChange(of: SourceGate.shared.visibleSites) { if !HomeSource.all.contains(source) { source = .hongguo } }
+        .onReceive(Self.sourceChanges) { _ in refreshSources() }
+        .onAppear { refreshSources() }
+    }
+
+    /// Any of these stores can change the set of pages shown in the home source bar.
+    /// Debouncing coalesces notifications emitted by one install/import operation.
+    @MainActor private static let sourceChanges = SourceGate.shared.objectWillChange
+        .merge(with: CMSStore.shared.objectWillChange, PluginStore.shared.objectWillChange)
+        .merge(with: TGStore.shared.objectWillChange, NovelStore.shared.objectWillChange, LegadoSourceStore.shared.objectWillChange)
+        .debounce(for: .milliseconds(60), scheduler: DispatchQueue.main)
+
+    @MainActor private func refreshSources() {
+        let latest = HomeSource.all
+        if latest != sources { sources = latest }
+        if !latest.contains(source), let first = latest.first {
+            source = first
+        }
     }
 
     /// Horizontal source pager. iOS 17+ uses a paging `ScrollView` instead of a page-style
@@ -322,7 +340,7 @@ struct HomeView: View {
         if #available(iOS 17.0, *) {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 0) {
-                    ForEach(HomeSource.all) { s in
+                    ForEach(sources) { s in
                         sourcePage(s)
                             .containerRelativeFrame(.horizontal)
                     }
@@ -336,7 +354,7 @@ struct HomeView: View {
             .ignoresSafeArea(.container, edges: .bottom)
         } else {
             TabView(selection: $source) {
-                ForEach(HomeSource.all) { s in
+                ForEach(sources) { s in
                     sourcePage(s).tag(s)
                 }
             }
@@ -369,7 +387,7 @@ struct HomeView: View {
             get: { source.id },
             set: { id in
                 guard let id, id != source.id,
-                      let picked = HomeSource.all.first(where: { $0.id == id }) else { return }
+                      let picked = sources.first(where: { $0.id == id }) else { return }
                 source = picked
             }
         )
@@ -461,7 +479,7 @@ struct HomeView: View {
                     removal: .move(edge: .top).combined(with: .opacity)
                 ))
             }
-            HomeChannelBar(items: HomeSource.all, selection: $source, label: \.label, ink: STVTheme.text) { showChannels = true }
+            HomeChannelBar(items: sources, selection: $source, label: \.label, ink: STVTheme.text) { showChannels = true }
                 .padding(.leading, 20)
                 .padding(.top, 12)
         }
@@ -496,7 +514,7 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    ForEach(HomeSource.all.filter { !$0.subs.isEmpty }) { s in
+                    ForEach(sources.filter { !$0.subs.isEmpty }) { s in
                         VStack(alignment: .leading, spacing: 10) {
                             Text(s.label).font(.subheadline.weight(.semibold)).foregroundStyle(STVTheme.secondary)
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], spacing: 10) {
