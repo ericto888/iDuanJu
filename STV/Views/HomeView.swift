@@ -309,7 +309,7 @@ struct HomeView: View {
     /// scrolls it pins with a blurred 80 % page-colour ground and a hairline.
     private var headerInk: Color { STVTheme.text }
     @State private var scrolled: [HomeSource: Bool] = [:]
-    @State private var bottomBarBehavior = HomeBottomBarScrollBehavior()
+    @State private var bottomBarBehavior = HomeChromeScrollBehavior()
     @State private var homeBottomBarHidden = false
     @State private var headerSpan: VSpan?
     @State private var safeSpan: VSpan?
@@ -386,11 +386,37 @@ struct HomeView: View {
 
     /// The selected source alone drives the root floating bar. A deliberate upward scroll hides it;
     /// a fast downward flick reveals it, and returning to the top always restores it.
-    private func handleFeedOffset(_ offset: CGFloat, for feedSource: HomeSource) {
+    private func handleFeedInteraction(_ active: Bool, for feedSource: HomeSource) {
         guard feedSource == source else { return }
-        if let hidden = bottomBarBehavior.update(offset: offset, at: ProcessInfo.processInfo.systemUptime) {
+        bottomBarBehavior.setInteracting(active)
+    }
+
+    private func handleFeedMetrics(_ metrics: CompatScrollMetrics, for feedSource: HomeSource) {
+        guard feedSource == source else { return }
+        if let hidden = bottomBarBehavior.update(
+            offset: -metrics.offsetY,
+            contentHeight: metrics.contentHeight,
+            viewportHeight: metrics.containerHeight,
+            viewportWidth: metrics.containerWidth,
+            isWithinScrollRange: metrics.isWithinScrollRange,
+            at: ProcessInfo.processInfo.systemUptime
+        ) {
             setBottomBarHidden(hidden)
         }
+    }
+
+    /// iOS 16–17 fallback: only the active vertical drag may drive the bottom bar.
+    private func handleFeedOffset(_ offset: CGFloat, for feedSource: HomeSource) {
+        handleFeedMetrics(
+            CompatScrollMetrics(
+                offsetY: -offset,
+                contentHeight: nil,
+                containerHeight: nil,
+                containerWidth: nil,
+                isWithinScrollRange: nil
+            ),
+            for: feedSource
+        )
     }
 
     /// Any of these stores can change the set of pages shown in the home source bar.
@@ -450,7 +476,9 @@ struct HomeView: View {
                 HomeFeedPage(source: s,
                              bottomBarHidden: homeBottomBarHidden,
                              tab: Binding(get: { subs[s] ?? s.subs[0] }, set: { subs[s] = $0 }),
-                             onScrollOffset: { offset in handleFeedOffset(offset, for: s) })
+                             onScrollOffset: { offset in handleFeedOffset(offset, for: s) },
+                             onScrollInteraction: { active in handleFeedInteraction(active, for: s) },
+                             onScrollMetrics: { metrics in handleFeedMetrics(metrics, for: s) })
             }
         }
         .environment(\.homeHeader, HomeHeader(
@@ -568,6 +596,8 @@ private struct HomeFeedPage: View {
     let bottomBarHidden: Bool
     @Binding var tab: HomeTab
     var onScrollOffset: (CGFloat) -> Void = { _ in }
+    var onScrollInteraction: (Bool) -> Void = { _ in }
+    var onScrollMetrics: (CompatScrollMetrics) -> Void = { _ in }
     @State private var legacyChannels: [HuangguoChannel] = []
     @State private var legacyError: Error?
     @State private var heroIndex = 0
@@ -583,7 +613,9 @@ private struct HomeFeedPage: View {
 
     var body: some View {
         if case .site(let source) = tab, source.cmsKey != nil || source.pluginID != nil {
-            DynamicSiteFeed(source: source, bottomBarHidden: bottomBarHidden, onScrollOffset: onScrollOffset)
+            DynamicSiteFeed(source: source, bottomBarHidden: bottomBarHidden,
+                            onScrollOffset: onScrollOffset, onScrollInteraction: onScrollInteraction,
+                            onScrollMetrics: onScrollMetrics)
         } else {
             rankFeed
         }
@@ -625,7 +657,8 @@ private struct HomeFeedPage: View {
         .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
             if #unavailable(iOS 18.0) { onScrollOffset(offset) }
         }
-        .compatOnScrollY { onScrollOffset(-$0) }
+        .compatOnScrollInteraction { onScrollInteraction($0) }
+        .compatOnScrollMetrics { onScrollMetrics($0) }
         .compatDefaultScrollAnchor(Self.debugAnchor)
         .accessibilityIdentifier("home.page.\(source.label)")
         .homePageInset()
@@ -857,6 +890,8 @@ private struct DynamicSiteFeed: View {
     let source: DramaSource
     let bottomBarHidden: Bool
     var onScrollOffset: (CGFloat) -> Void = { _ in }
+    var onScrollInteraction: (Bool) -> Void = { _ in }
+    var onScrollMetrics: (CompatScrollMetrics) -> Void = { _ in }
 
     @State private var categories: [SiteCategory] = []
     @State private var selected = ""
@@ -916,7 +951,8 @@ private struct DynamicSiteFeed: View {
                 .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
                     if #unavailable(iOS 18.0) { onScrollOffset(offset) }
                 }
-                .compatOnScrollY { onScrollOffset(-$0) }
+                .compatOnScrollInteraction { onScrollInteraction($0) }
+        .compatOnScrollMetrics { onScrollMetrics($0) }
                 .accessibilityIdentifier("home.page.\(source.label)")
                 .homePageInset()
                 .refreshable { await refresh() }
