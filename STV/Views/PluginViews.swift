@@ -716,7 +716,7 @@ struct PluginLogView: View {
             Button("清空日志", role: .destructive) { PluginLog.clear(id); lines = [] }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("只删除「\\(PluginStore.shared.plugin(id)?.manifest.name ?? id)」的日志，不会清除 Cookie、存储或插件设置。")
+            Text("只删除「\(PluginStore.shared.plugin(id)?.manifest.name ?? id)」的日志，不会清除 Cookie、存储或插件设置。")
         }
         .dsToast($message, icon: "checkmark.circle.fill")
         .task { lines = PluginLog.lines(id) }
