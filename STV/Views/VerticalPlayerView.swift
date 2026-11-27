@@ -338,7 +338,7 @@ struct PlayerScreen: View {
         }
         .task {
             // Match upstream: portrait is the default; the user or system may rotate the device.
-            OrientationGate.unlock()
+            OrientationGate.allowDeviceRotation()
             co.start()
             if co.current == nil { await load() }
         }
@@ -802,6 +802,9 @@ struct PlayerScreen: View {
                         liveChannelsTitle: "频道",
                         liveGuideActive: panel == .guide,
                         onPlayPause: { co.togglePause(); flashChrome() },
+                        onSeekBackward: {},
+                        onSeekForward: {},
+                        showSeekControls: false,
                         onEpisodes: { toggle(.episodes) },
                         onRateOrGuide: {
                             if co.isLive { toggle(.guide) }
@@ -1798,6 +1801,7 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         c.onSeekCancelled = onSeekCancelled
         c.landscape = landscape
         c.speedMode = speedMode
+        c.locked = locked
         c.onAdjustBegan = onAdjustBegan
         c.onAdjustChanged = onAdjustChanged
         c.onAdjustEnded = onAdjustEnded
