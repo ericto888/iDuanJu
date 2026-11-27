@@ -568,21 +568,27 @@ private struct HomeFeedPage: View {
     }
 
     var body: some View {
-        // CMS is unchanged in this pass. JS video plugins use the shared native homepage UI.
-        if case .site(let site) = tab, site.cmsKey != nil {
+        // Only plugins opting into categoryShelves use the multi-shelf native homepage.
+        // CMS and legacy JS plugins keep their existing DynamicSiteFeed behavior.
+        if case .site(let site) = tab,
+           site.cmsKey != nil || (site.pluginID != nil && !usesCategoryShelves(site)) {
             DynamicSiteFeed(source: site)
         } else {
             rankFeed
         }
     }
 
+    private func usesCategoryShelves(_ site: DramaSource) -> Bool {
+        guard let id = site.pluginID else { return false }
+        return PluginHomeFeatures.usesCategoryShelves(PluginStore.snapshot(id)?.manifest.homeFeatures)
+    }
+
     private var rankFeed: some View {
         let allBoards = self.boards
         let pluginID = sourcePluginID
-        let features = pluginID.flatMap { PluginStore.snapshot($0)?.manifest.homeFeatures } ?? []
-        let categoryShelves = features.contains("categoryShelves")
-        let boards = pluginID != nil && !categoryShelves ? Array(allBoards.prefix(1)) : allBoards
-        let hasFeatured = !pluginFeatured.isEmpty
+        let features = pluginID.flatMap { PluginStore.snapshot($0)?.manifest.homeFeatures }
+        let boards = allBoards
+        let hasFeatured = PluginHomeFeatures.showsFeaturedCarousel(features, itemCount: pluginFeatured.count)
         let loadingPluginHome = pluginID.map { PluginStore.snapshot($0)?.manifest.capabilities.contains("home") == true && pluginHomeSource != $0 } ?? false
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -600,13 +606,18 @@ private struct HomeFeedPage: View {
                 } else {
                     // Lazy: boards below the fold are neither built nor requested until they are scrolled to.
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        if hasFeatured {
+                        if boards.isEmpty && pluginID != nil {
+                            DSEmptyState("暂无可用分类", systemImage: "rectangle.stack", message: "该站源暂未提供有效分类。")
+                                .padding(.top, 24)
+                        } else if hasFeatured {
                             HomePluginFeaturedSection(title: source.label, items: pluginFeatured, index: $featuredIndex)
                         } else if let first = boards.first {
+                            // Keep the carousel area: when no declared/valid featured data exists,
+                            // use the first real category's first page as the hero fallback.
                             HomeHeroSection(feed: BoardCache.shared.feed(first), board: first).id(first.id)
                         }
                         if source == .hongguo { HomeContinueSection() }
-                        sections(boards, featuredIDs: Set(pluginFeatured.map(\.id)))
+                        sections(boards, featuredIDs: hasFeatured ? Set(pluginFeatured.map(\.id)) : [])
                     }
                 }
             }
@@ -621,16 +632,17 @@ private struct HomeFeedPage: View {
             if tab == .actorRank {
                 await ActorRankStore.shared.reload()
             } else {
-                if case .site(let site) = tab, site.pluginID != nil {
+                if case .site(let site) = tab, usesCategoryShelves(site) {
                     pluginHomeSource = nil
                     pluginHomeError = nil
                     await loadPluginHome(site)
                 }
-                boards.forEach { BoardCache.shared.feed($0).load(force: true) }
+                // Recompute after home() may have refreshed the category cache.
+                self.boards.forEach { BoardCache.shared.feed($0).load(force: true) }
             }
         }
         .task(id: tab) {
-            if case .site(let site) = tab, site.pluginID != nil {
+            if case .site(let site) = tab, usesCategoryShelves(site) {
                 await loadPluginHome(site)
             } else if case .huangguo(.legacy) = tab, legacyChannels.isEmpty {
                 await loadLegacy()
@@ -648,6 +660,7 @@ private struct HomeFeedPage: View {
         pluginHomeError = nil
         guard let manifest = PluginStore.snapshot(id)?.manifest,
               manifest.capabilities.contains("home"),
+              PluginHomeFeatures.usesCategoryShelves(manifest.homeFeatures),
               let provider = Sites.provider(site) as? JSVideoProvider else {
             pluginHomeSource = id
             pluginFeatured = []
@@ -696,7 +709,7 @@ private struct HomeFeedPage: View {
         case .huangguo(.video): HuangguoClient.videoChannels.map { BoardSpec(kind: .huangguo($0)) }
         case .huangguo(.legacy): legacyChannels.map { BoardSpec(kind: .huangguo($0)) }
         case .site(let s): (Sites.provider(s)?.categories ?? []).map { category in
-            let numbered = s.pluginID.map { PluginStore.snapshot($0)?.manifest.homeFeatures?.contains("numbered") ?? false } ?? true
+            let numbered = s.pluginID.map { PluginHomeFeatures.usesNumbering(PluginStore.snapshot($0)?.manifest.homeFeatures) } ?? true
             return BoardSpec(kind: .site(s, category), numbered: numbered)
         }
         case .actorRank: []
