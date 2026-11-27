@@ -621,6 +621,48 @@ final class PluginTests: XCTestCase {
         XCTAssertEqual(try CMSStore.normalize("http://cms.example.com/api.php/provide/vod/?ac=list"), "https://cms.example.com/api.php/provide/vod/")
     }
 
+    // MARK: Plugin homepage capabilities and response parsing
+
+    func testPluginHomeFeatureRoutingAndPresentation() {
+        XCTAssertTrue(PluginHomeFeatures.usesCategoryShelves(["categoryShelves"]))
+        XCTAssertFalse(PluginHomeFeatures.usesCategoryShelves(["featured"]))
+        XCTAssertFalse(PluginHomeFeatures.usesCategoryShelves(nil))
+        XCTAssertTrue(PluginHomeFeatures.showsFeaturedCarousel(["featured"], itemCount: 1))
+        XCTAssertFalse(PluginHomeFeatures.showsFeaturedCarousel(["featured"], itemCount: 0))
+        XCTAssertFalse(PluginHomeFeatures.showsFeaturedCarousel(["categoryShelves"], itemCount: 3))
+        XCTAssertFalse(PluginHomeFeatures.usesNumbering(nil))
+        XCTAssertFalse(PluginHomeFeatures.usesNumbering(["categoryShelves"]))
+        XCTAssertTrue(PluginHomeFeatures.usesNumbering(["numbered"]))
+    }
+
+    func testJSVideoHomeResponseParsingAndCategoryCacheSemantics() {
+        let provider = JSVideoProvider(source: .plugin("com.test.video"))
+        let response: [String: Any] = [
+            "categories": [
+                ["id": "movie", "name": "电影"],
+                ["id": "movie", "name": "重复分类"],
+                ["id": "", "name": "无效分类"]
+            ],
+            "items": [
+                ["id": "featured-1", "title": "精选剧集", "cover": "https://img.example.com/1.jpg"],
+                ["id": "", "title": "缺少 ID", "cover": "https://img.example.com/2.jpg"]
+            ]
+        ]
+
+        // Without an installed manifest opting in, categories are still parsed but featured items stay disabled.
+        let legacy = provider.parseHomeResponse(response)
+        XCTAssertEqual(legacy.categories?.map(\.id), ["movie"])
+        XCTAssertTrue(legacy.featured.isEmpty)
+
+        // A missing categories key means "not supplied" (preserve cached values), not "clear cache".
+        let omitted = provider.parseHomeResponse(["items": []])
+        XCTAssertNil(omitted.categories)
+
+        // An explicitly empty categories array means the site currently has no real categories.
+        let empty = provider.parseHomeResponse(["categories": []])
+        XCTAssertEqual(empty.categories?.count, 0)
+    }
+
     // MARK: content filter
 
     func testMinorsFilter() {
