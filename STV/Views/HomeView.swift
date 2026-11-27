@@ -97,24 +97,42 @@ final class BoardFeed: ObservableObject {
     let board: BoardSpec
     @Published private(set) var state: State = .idle
     private var loading = false
+    private var waiters: [CheckedContinuation<[HGSeries], Never>] = []
 
     init(_ b: BoardSpec) { board = b }
 
     var items: [HGSeries] { if case .loaded(let i) = state { return i }; return [] }
     var error: Error? { if case .failed(let e) = state { return e }; return nil }
 
-    func load(force: Bool = false) {
-        guard !loading else { return }
-        if case .loaded = state, !force { return }
-        loading = true
-        Task {
-            defer { loading = false }
-            do { state = .loaded(try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items) }
-            catch {
-                // A failed refresh keeps what is on screen.
-                if items.isEmpty { state = .failed(error) }
-            }
+    /// Await the shared first-page cache. Concurrent shelf/hero requests share one in-flight fetch.
+    func loadFirstPageIfNeeded(force: Bool = false) async -> [HGSeries] {
+        if !force, case .loaded = state { return items }
+        if loading {
+            return await withCheckedContinuation { waiters.append($0) }
         }
+        loading = true
+        do {
+            let result = try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items
+            state = .loaded(result)
+            loading = false
+            let pending = waiters; waiters.removeAll()
+            pending.forEach { $0.resume(returning: result) }
+            return result
+        } catch {
+            // A failed refresh keeps what is already on screen.
+            if items.isEmpty { state = .failed(error) }
+            loading = false
+            let current = items
+            let pending = waiters; waiters.removeAll()
+            pending.forEach { $0.resume(returning: current) }
+            return current
+        }
+    }
+
+    func load(force: Bool = false) {
+        if loading { return }
+        if case .loaded = state, !force { return }
+        Task { _ = await loadFirstPageIfNeeded(force: force) }
     }
 }
 
@@ -557,6 +575,8 @@ private struct HomeFeedPage: View {
     @State private var pluginHomeSource: String?
     @State private var pluginFeatured: [HGSeries] = []
     @State private var pluginHomeError: Error?
+    @State private var fallbackHeroSource: String?
+    @State private var fallbackHeroBoardID: String?
     @State private var featuredIndex = 0
     private let gutter: CGFloat = 16
     /// DEBUG `STV_HOME_SCROLL=bottom` opens the feed scrolled to the end (simulator screenshots).
@@ -589,6 +609,9 @@ private struct HomeFeedPage: View {
         let features = pluginID.flatMap { PluginStore.snapshot($0)?.manifest.homeFeatures }
         let boards = allBoards
         let hasFeatured = PluginHomeFeatures.showsFeaturedCarousel(features, itemCount: pluginFeatured.count)
+        let fallbackHero = pluginID == nil
+            ? boards.first
+            : boards.first(where: { $0.id == fallbackHeroBoardID && fallbackHeroSource == pluginID })
         let loadingPluginHome = pluginID.map { PluginStore.snapshot($0)?.manifest.capabilities.contains("home") == true && pluginHomeSource != $0 } ?? false
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -611,10 +634,10 @@ private struct HomeFeedPage: View {
                                 .padding(.top, 24)
                         } else if hasFeatured {
                             HomePluginFeaturedSection(title: source.label, items: pluginFeatured, index: $featuredIndex)
-                        } else if let first = boards.first {
-                            // Keep the carousel area: when no declared/valid featured data exists,
-                            // use the first real category's first page as the hero fallback.
-                            HomeHeroSection(feed: BoardCache.shared.feed(first), board: first).id(first.id)
+                        } else if let fallbackHero {
+                            // If no valid declared featured items exist, use the first category
+                            // (in source order) that actually has content.
+                            HomeHeroSection(feed: BoardCache.shared.feed(fallbackHero), board: fallbackHero).id(fallbackHero.id)
                         }
                         if source == .hongguo { HomeContinueSection() }
                         sections(boards, featuredIDs: hasFeatured ? Set(pluginFeatured.map(\.id)) : [])
@@ -635,7 +658,10 @@ private struct HomeFeedPage: View {
                 if case .site(let site) = tab, usesCategoryShelves(site) {
                     pluginHomeSource = nil
                     pluginHomeError = nil
+                    fallbackHeroSource = nil
+                    fallbackHeroBoardID = nil
                     await loadPluginHome(site)
+                    await resolveFallbackHero(site, force: true)
                 }
                 // Recompute after home() may have refreshed the category cache.
                 self.boards.forEach { BoardCache.shared.feed($0).load(force: true) }
@@ -644,6 +670,7 @@ private struct HomeFeedPage: View {
         .task(id: tab) {
             if case .site(let site) = tab, usesCategoryShelves(site) {
                 await loadPluginHome(site)
+                await resolveFallbackHero(site)
             } else if case .huangguo(.legacy) = tab, legacyChannels.isEmpty {
                 await loadLegacy()
             }
@@ -674,6 +701,23 @@ private struct HomeFeedPage: View {
             pluginHomeError = error
             pluginHomeSource = nil
         }
+    }
+
+    private func resolveFallbackHero(_ site: DramaSource, force: Bool = false) async {
+        guard let id = site.pluginID,
+              usesCategoryShelves(site),
+              !PluginHomeFeatures.showsFeaturedCarousel(PluginStore.snapshot(id)?.manifest.homeFeatures, itemCount: pluginFeatured.count),
+              fallbackHeroSource != id || force else { return }
+        fallbackHeroSource = nil
+        fallbackHeroBoardID = nil
+        for board in self.boards {
+            let items = await BoardCache.shared.feed(board).loadFirstPageIfNeeded(force: force)
+            if !items.isEmpty {
+                fallbackHeroBoardID = board.id
+                break
+            }
+        }
+        fallbackHeroSource = id
     }
 
     /// ui-redesign 10: secondary boards are the same segmented control as 找剧.
@@ -724,13 +768,18 @@ private struct HomeFeedPage: View {
             let landscape: Bool = { if case .site(let s) = tab { return s.isLongVideo } else { return false } }()
             ForEach(Array(boards.enumerated()), id: \.element.id) { n, b in
                 HomeBoardSection(feed: BoardCache.shared.feed(b), board: b,
-                                 skip: n == 0 && featuredIDs.isEmpty ? HomeHeroSection.count : 0,
+                                 skip: featuredIDs.isEmpty && b.id == (fallbackHeroBoardID ?? (pluginIDForCurrentTab == nil ? boards.first?.id : nil)) ? HomeHeroSection.count : 0,
                                  landscape: landscape, excludeIDs: featuredIDs) {
                     boards.forEach { BoardCache.shared.feed($0).load(force: true) }
                 }
                 .padding(.top, 24)
             }
         }
+    }
+
+    private var pluginIDForCurrentTab: String? {
+        if case .site(let site) = tab { return site.pluginID }
+        return nil
     }
 
     private func loadLegacy() async {
