@@ -20,7 +20,7 @@ struct SourceStoreView: View {
             let description: String?
             let category: String?
             let author: String?
-            var isAdult: Bool { adult ?? false }
+            // Missing adult metadata is treated conservatively: hide until the user unlocks.
         }
         let schema: Int
         let name: String?
@@ -37,8 +37,6 @@ struct SourceStoreView: View {
     @State private var loading = false
     @State private var preparingID: String?
     @State private var updateAvailableIDs: Set<String> = []
-    @State private var checkingUpdateIDs: Set<String> = []
-    @State private var updateCheckFailedIDs: Set<String> = []
     @State private var pending: PendingInstall?
     @State private var message: String?
 
@@ -136,9 +134,6 @@ struct SourceStoreView: View {
                     // 提交成功后立即同步商店卡片状态，避免旧的 updateAvailableIDs
                     // 继续让“更新”按钮显示，直到用户重新进入商店或刷新目录。
                     updateAvailableIDs.remove(item.manifest.id)
-                    checkingUpdateIDs.remove(item.manifest.id)
-                    updateCheckFailedIDs.remove(item.manifest.id)
-                    updateCheckFailedIDs.remove(item.manifest.id)
                     message = "已安装 \(item.manifest.name) \(item.manifest.version)"
                 } catch {
                     message = error.localizedDescription
@@ -167,14 +162,9 @@ struct SourceStoreView: View {
     // Installed entries always expose a live manifest check; catalog version metadata is only advisory.
     private func sourceCard(_ entry: Catalog.Entry) -> some View {
         let installed = store.plugin(entry.id)
-        // Catalog version is a discovery fallback only. A newer catalog
-        // version remains actionable when live manifest/script validation fails;
-        // prepare() still performs the full checks before installation.
-        let catalogHasNewerVersion = installed.flatMap { current in
-            entry.version.map { PluginManifest.compare($0, current.manifest.version) > 0 }
-        } ?? false
+        // The catalog version is a lightweight discovery hint. Full manifest,
+        // script, integrity and permission validation still runs when tapped.
         let shouldOfferUpdate = updateAvailableIDs.contains(entry.id)
-            || (updateCheckFailedIDs.contains(entry.id) && catalogHasNewerVersion)
         return HStack(alignment: .top, spacing: 12) {
             RoundedRectangle(cornerRadius: 12)
                 .fill(STVTheme.glass)
@@ -206,10 +196,8 @@ struct SourceStoreView: View {
                             Task { await prepare(entry) }
                         }.buttonStyle(.borderedProminent).tint(STVTheme.accent).disabled(preparingID != nil)
                     } else {
-                        let status = checkingUpdateIDs.contains(entry.id)
-                            ? "检查更新中…"
-                            : (updateCheckFailedIDs.contains(entry.id) ? "版本校验失败" : "已是最新")
-                        Text(status).font(.caption2).foregroundStyle(STVTheme.secondary)
+                        Text(entry.version == nil ? "版本信息不可用" : "已是最新")
+                            .font(.caption2).foregroundStyle(STVTheme.secondary)
                     }
                 }
             } else {
@@ -262,37 +250,18 @@ struct SourceStoreView: View {
             guard decoded.schema == 1 else { throw PluginError.install("站源目录版本不兼容") }
             catalog = decoded
             message = nil
-            Task { await checkInstalledUpdates(decoded.plugins) }
+            // Compare lightweight catalog metadata only. Avoid downloading and
+            // compiling every installed plugin whenever the store is opened.
+            updateAvailableIDs = Set(decoded.plugins.compactMap { entry in
+                guard let installed = store.plugin(entry.id),
+                      let remoteVersion = entry.version,
+                      PluginManifest.compare(remoteVersion, installed.manifest.version) > 0 else {
+                    return nil
+                }
+                return entry.id
+            })
         } catch {
             message = "站源目录加载失败：\(error.localizedDescription)"
-        }
-    }
-
-    /// Prefer a fully validated live manifest; retain catalog-version discovery
-    /// as a fallback when remote validation cannot complete.
-    @MainActor private func checkInstalledUpdates(_ entries: [Catalog.Entry]) async {
-        let installedEntries = entries.filter { store.plugin($0.id) != nil }
-        checkingUpdateIDs = Set(installedEntries.map(\.id))
-        updateAvailableIDs = []
-        updateCheckFailedIDs = []
-        for entry in installedEntries {
-            guard let installed = store.plugin(entry.id) else { continue }
-            do {
-                let freshManifestURL = entry.manifest + (entry.manifest.contains("?") ? "&" : "?") + "_=" + String(Int(Date().timeIntervalSince1970))
-                let candidate = try await PluginInstaller.prepare(manifestURL: freshManifestURL, origin: "iDuanJu 站源商店")
-                if PluginManifest.compare(candidate.manifest.version, installed.manifest.version) > 0 {
-                    updateAvailableIDs.insert(entry.id)
-                } else {
-                    updateAvailableIDs.remove(entry.id)
-                }
-                updateCheckFailedIDs.remove(entry.id)
-            } catch {
-                // Never silently label a failed remote check as "up to date".
-                // The catalog version can still expose a newer update; tapping
-                // Update retries full validation and surfaces the actual error.
-                updateCheckFailedIDs.insert(entry.id)
-            }
-            checkingUpdateIDs.remove(entry.id)
         }
     }
 
@@ -303,6 +272,12 @@ struct SourceStoreView: View {
         do {
             let freshManifestURL = entry.manifest + (entry.manifest.contains("?") ? "&" : "?") + "_=" + String(Int(Date().timeIntervalSince1970))
             let candidate = try await PluginInstaller.prepare(manifestURL: freshManifestURL, origin: "iDuanJu 站源商店")
+            // Never trust the catalog flag alone: enforce the manifest's own
+            // adult classification immediately before presenting install consent.
+            guard !candidate.manifest.adult || gate.unlocked else {
+                message = "该站源包含成人内容，请先在「片源管理」完成验证后再安装"
+                return
+            }
             if let installed = store.plugin(entry.id) {
                 let comparison = PluginManifest.compare(candidate.manifest.version, installed.manifest.version)
                 if comparison > 0 {
