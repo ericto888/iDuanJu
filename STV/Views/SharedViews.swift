@@ -91,6 +91,7 @@ enum Route: Hashable {
     case tdChat(Int64, String)
     case plugins
     case tvboxConfig
+    case novel
 }
 
 struct ZoomNamespaceKey: EnvironmentKey { static let defaultValue: Namespace.ID? = nil }
@@ -133,6 +134,7 @@ extension View {
             case .tdChat(let id, let t): TDChatView(chatId: id, title: t)
             case .plugins: PluginsView()
             case .tvboxConfig: TVBoxConfigView()
+            case .novel: NovelHomeView()
             }
         }
     }
