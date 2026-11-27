@@ -446,8 +446,6 @@ private struct HomeFeedPage: View {
         .background(STVTheme.bg.ignoresSafeArea())
         .scrollIndicators(.hidden)
         .coordinateSpace(name: "home.feed.scroll")
-        .compatOnScrollInteraction { onScrollInteraction($0) }
-        .compatOnScrollMetrics { onScrollMetrics($0) }
         .compatDefaultScrollAnchor(Self.debugAnchor)
         .accessibilityIdentifier("home.page.\(source.label)")
         .homePageInset()
