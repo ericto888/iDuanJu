@@ -27,108 +27,6 @@ enum HomeTab: Hashable {
     }
 }
 
-/// One interaction-gated state machine drives both the home search header and root tab bar.
-/// Geometry changes caused by loading or viewport resizing reset the sample instead of changing chrome.
-struct HomeChromeScrollBehavior {
-    private(set) var isHidden = false
-    private var isInteracting = false
-    private var previousOffset: CGFloat?
-    private var previousTime: TimeInterval?
-    private var previousContentHeight: CGFloat?
-    private var previousViewportHeight: CGFloat?
-    private var previousViewportWidth: CGFloat?
-    let revealVelocity: CGFloat
-
-    init(revealVelocity: CGFloat = 400) {
-        self.revealVelocity = revealVelocity
-    }
-
-    mutating func setInteracting(_ active: Bool) {
-        guard isInteracting != active else { return }
-        isInteracting = active
-        resetSamples()
-    }
-
-    mutating func update(
-        offset: CGFloat,
-        contentHeight: CGFloat? = nil,
-        viewportHeight: CGFloat? = nil,
-        viewportWidth: CGFloat? = nil,
-        isWithinScrollRange: Bool? = nil,
-        at time: TimeInterval
-    ) -> Bool? {
-        guard isInteracting else {
-            resetSamples()
-            return nil
-        }
-        if isWithinScrollRange == false {
-            resetSamples()
-            return nil
-        }
-
-        let contentChanged = dimensionChanged(contentHeight, from: previousContentHeight)
-        let viewportChanged = dimensionChanged(viewportHeight, from: previousViewportHeight)
-        let widthChanged = dimensionChanged(viewportWidth, from: previousViewportWidth)
-        previousContentHeight = contentHeight
-        previousViewportHeight = viewportHeight
-        previousViewportWidth = viewportWidth
-
-        // Loading cards or collapsing the search header changes geometry, not user intent.
-        if contentChanged || viewportChanged || widthChanged {
-            previousOffset = offset
-            previousTime = time
-            return nil
-        }
-
-        let previous = previousOffset
-        let previousSampleTime = previousTime
-        previousOffset = offset
-        previousTime = time
-
-        if offset > -8 {
-            return setHidden(false)
-        }
-
-        guard let previous, let previousSampleTime else { return nil }
-        let delta = offset - previous
-        guard abs(delta) > 1.5 else { return nil }
-
-        if delta < 0 {
-            return setHidden(true)
-        }
-
-        let elapsed = max(time - previousSampleTime, 0.001)
-        guard delta / elapsed >= revealVelocity else { return nil }
-        return setHidden(false)
-    }
-
-    mutating func reset() {
-        isHidden = false
-        isInteracting = false
-        previousContentHeight = nil
-        previousViewportHeight = nil
-        previousViewportWidth = nil
-        resetSamples()
-    }
-
-    private func dimensionChanged(_ value: CGFloat?, from previous: CGFloat?) -> Bool {
-        guard let value, let previous else { return false }
-        return abs(value - previous) > 0.5
-    }
-
-    private mutating func resetSamples() {
-        previousOffset = nil
-        previousTime = nil
-    }
-
-    private mutating func setHidden(_ hidden: Bool) -> Bool? {
-        guard isHidden != hidden else { return nil }
-        isHidden = hidden
-        resetSamples()
-        return hidden
-    }
-}
-
 /// Top-level home pages (横滑翻页 + 顶部分类条): one page per source; each source's own boards
 /// (红果榜单 / 真人剧 / …) are secondary chips inside its page. Adult sites only appear once enabled in
 /// 片源管理 (and unlocked with Face ID when the lock is on) — `SourceGate.visibleSites`.
@@ -362,11 +260,11 @@ struct HomeView: View {
     @MainActor @ViewBuilder private func sourcePage(_ s: HomeSource) -> some View {
         Group {
             if s == .channels {
-                ChannelFeedView(embedded: true)
+                ChannelFeedView(embedded: true).homePageInset()
             } else if s == .manga {
-                MangaHomeView(embedded: true)
+                MangaHomeView(embedded: true).homePageInset()
             } else if s == .novel {
-                NovelHomeView(embedded: true)
+                NovelHomeView(embedded: true).homePageInset()
             } else {
                 HomeFeedPage(source: s,
                              bottomBarHidden: false,
@@ -416,7 +314,7 @@ struct HomeView: View {
         VStack(spacing: 0) {
             LiquidGlassGroup(spacing: 10) {
                 HStack(spacing: 10) {
-                    NavigationLink(value: activeSearchSource) {
+                    NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
                         DSSearchBarLabel()
                             .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
                             .liquidGlassCapsule(interactive: true)
