@@ -650,17 +650,28 @@ final class PluginTests: XCTestCase {
         ]
 
         // Without an installed manifest opting in, categories are still parsed but featured items stay disabled.
-        let legacy = provider.parseHomeResponse(response)
+        let legacy = provider.parseHomeResponse(response, features: [])
         XCTAssertEqual(legacy.categories?.map(\.id), ["movie"])
         XCTAssertTrue(legacy.featured.isEmpty)
 
+        let featured = provider.parseHomeResponse(response, features: ["featured"])
+        XCTAssertEqual(featured.featured.map(\.seriesId), ["featured-1"], "only valid items become featured entries")
+
         // A missing categories key means "not supplied" (preserve cached values), not "clear cache".
-        let omitted = provider.parseHomeResponse(["items": []])
+        let omitted = provider.parseHomeResponse(["items": []], features: ["featured"])
         XCTAssertNil(omitted.categories)
 
         // An explicitly empty categories array means the site currently has no real categories.
-        let empty = provider.parseHomeResponse(["categories": []])
+        let empty = provider.parseHomeResponse(["categories": []], features: ["categoryShelves"])
         XCTAssertEqual(empty.categories?.count, 0)
+
+        // Numbering is carried by the same BoardSpec that renders the full category list.
+        let site = DramaSource.plugin("com.test.video")
+        let category = SiteCategory(id: "movie", title: "电影", path: "movie")
+        let ordinaryBoard = BoardSpec(kind: .site(site, category), numbered: PluginHomeFeatures.usesNumbering(nil))
+        let rankedBoard = BoardSpec(kind: .site(site, category), numbered: PluginHomeFeatures.usesNumbering(["numbered"]))
+        XCTAssertFalse(ordinaryBoard.numbered)
+        XCTAssertTrue(rankedBoard.numbered)
     }
 
     // MARK: content filter
