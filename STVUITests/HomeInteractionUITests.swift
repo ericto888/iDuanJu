@@ -41,10 +41,6 @@ final class HomeInteractionUITests: XCTestCase {
         back()
         fingerTap(el("home.filter"))
         XCTAssertTrue(el("home.channelPanel").waitForExistence(timeout: 5), "filter panel did not open")
-        el("sheet.close").tap()
-        XCTAssertTrue(el("home.expand").waitForExistence(timeout: 5))
-        fingerTap(el("home.expand"))
-        XCTAssertTrue(el("home.channelPanel").waitForExistence(timeout: 5), "expand panel did not open")
         // Choose 黄果 · App 源 from the panel → that source page + sub chip are selected.
         fingerTap(el("panel.黄果.App 源"))
         XCTAssertTrue(el("home.channel.黄果").isSelectedChannel(), "panel pick did not switch source")

@@ -355,8 +355,7 @@ struct HomeView: View {
                 }
             }
             .padding(.horizontal, 16)
-            HomeChannelBar(items: sources, selection: $source, label: \.label, ink: STVTheme.text) { showChannels = true }
-                .padding(.leading, 20)
+            HomeChannelBar(items: sources, selection: $source, label: \.label, ink: STVTheme.text)
                 .padding(.top, 12)
         }
         .padding(.top, 8)
@@ -888,39 +887,33 @@ struct HomeChannelBar<T: Hashable>: View {
     @Binding var selection: T
     let label: (T) -> String
     var ink: Color = .white
-    var onExpand: () -> Void
     @Namespace private var ns
     var body: some View {
-        HStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .lastTextBaseline, spacing: 22) {
-                        ForEach(items, id: \.self) { it in
-                            let on = it == selection
-                            // Do NOT wrap `selection = it` in `withAnimation`: `TabView(.page)` (`UIPageViewController`)
-                            // otherwise sweeps & synchronously instantiates every intermediate page on the main thread.
-                            Button { if !on { DS.tick(); selection = it } } label: {
-                                UnderlineTabLabel(title: label(it), on: on, ink: ink, inkOff: STVTheme.secondary, ns: ns)
-                                    .frame(minHeight: 40, alignment: .bottom)
-                            }.buttonStyle(.plain).id(it).accessibilityIdentifier("home.channel.\(label(it))")
-                                .accessibilityAddTraits(on ? .isSelected : [])
-                        }
-                        Color.clear.frame(width: 12, height: 1)
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .lastTextBaseline, spacing: 22) {
+                    ForEach(items, id: \.self) { it in
+                        let on = it == selection
+                        // Do NOT wrap `selection = it` in `withAnimation`: `TabView(.page)` (`UIPageViewController`)
+                        // otherwise sweeps & synchronously instantiates every intermediate page on the main thread.
+                        Button { if !on { DS.tick(); selection = it } } label: {
+                            UnderlineTabLabel(title: label(it), on: on, ink: ink, inkOff: STVTheme.secondary, ns: ns)
+                                .frame(minHeight: 40, alignment: .bottom)
+                                .contentShape(Rectangle())
+                        }.buttonStyle(.plain).id(it).accessibilityIdentifier("home.channel.\(label(it))")
+                            .accessibilityAddTraits(on ? .isSelected : [])
                     }
-                    .animation(DS.select, value: selection)
-                    .animation(DS.select, value: items)
                 }
-                .accessibilityIdentifier("home.channels")
-                .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.88),
-                                             .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
-                .compatOnChange(of: selection) { it in withAnimation(DS.select) { proxy.scrollTo(it, anchor: .center) } }
-                .compatOnChange(of: items) { _ in proxy.scrollTo(selection, anchor: .center) }
-                .onAppear { proxy.scrollTo(selection, anchor: .center) }
+                .padding(.horizontal, 20)
+                .animation(DS.select, value: selection)
+                .animation(DS.select, value: items)
             }
-            Button(action: onExpand) {
-                Image(systemName: "chevron.down").font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(STVTheme.secondary).frame(width: 44, height: 40)
-            }.buttonStyle(.plain).accessibilityLabel("展开全部频道").accessibilityIdentifier("home.expand")
+            .accessibilityIdentifier("home.channels")
+            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.93),
+                                         .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
+            .compatOnChange(of: selection) { it in withAnimation(DS.select) { proxy.scrollTo(it, anchor: .center) } }
+            .compatOnChange(of: items) { _ in proxy.scrollTo(selection, anchor: .center) }
+            .onAppear { proxy.scrollTo(selection, anchor: .center) }
         }
         .frame(height: 40)
     }
