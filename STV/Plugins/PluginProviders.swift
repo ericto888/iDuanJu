@@ -329,9 +329,9 @@ struct JSVideoProvider: SiteProvider {
 
     /// Parse home() without conflating an omitted categories field with an explicitly empty list.
     /// A missing field preserves the last known categories; an explicit [] clears them.
-    func parseHomeResponse(_ response: [String: Any]) -> (categories: [PluginCategory]?, featured: [HGSeries]) {
+    func parseHomeResponse(_ response: [String: Any], features explicitFeatures: [String]? = nil) -> (categories: [PluginCategory]?, featured: [HGSeries]) {
         let categories = response.keys.contains("categories") ? PluginOut.categories(response["categories"]) : nil
-        let features = PluginStore.snapshot(pluginID)?.manifest.homeFeatures
+        let features = explicitFeatures ?? PluginStore.snapshot(pluginID)?.manifest.homeFeatures
         let featured = PluginHomeFeatures.has("featured", in: features)
             ? PluginOut.unique(((response["items"] as? [[String: Any]]) ?? []).prefix(100).compactMap(series)) { $0.id }
             : []
