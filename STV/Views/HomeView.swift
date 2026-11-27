@@ -103,6 +103,7 @@ final class BoardFeed: ObservableObject {
 
     var items: [HGSeries] { if case .loaded(let i) = state { return i }; return [] }
     var error: Error? { if case .failed(let e) = state { return e }; return nil }
+    var hasAttemptedLoad: Bool { if case .idle = state { return false }; return true }
 
     /// Await the shared first-page cache. Concurrent shelf/hero requests share one in-flight fetch.
     func loadFirstPageIfNeeded(force: Bool = false) async -> [HGSeries] {
@@ -666,12 +667,16 @@ private struct HomeFeedPage: View {
                     fallbackHeroSource = nil
                     fallbackHeroBoardID = nil
                     await loadPluginHome(site)
-                    await resolveFallbackHero(site, force: true)
+                    // Refresh only feeds that were already active; do not eagerly request every
+                    // shelf just because the homepage was pulled down.
+                    for board in self.boards {
+                        let feed = BoardCache.shared.feed(board)
+                        if feed.hasAttemptedLoad { _ = await feed.loadFirstPageIfNeeded(force: true) }
+                    }
+                    await resolveFallbackHero(site)
+                } else {
+                    self.boards.forEach { BoardCache.shared.feed($0).load(force: true) }
                 }
-                // Recompute after home() may have refreshed the category cache. The selected
-                // fallback feed was already force-loaded while locating the first populated shelf.
-                let heroID = fallbackHeroBoardID
-                self.boards.filter { $0.id != heroID }.forEach { BoardCache.shared.feed($0).load(force: true) }
             }
         }
         .task(id: tab) {
