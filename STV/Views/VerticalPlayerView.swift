@@ -940,21 +940,21 @@ struct PlayerScreen: View {
             .accessibilityLabel("下一集")
             .accessibilityIdentifier("player.nextEpisode")
 
-            PlayerChip(action: PlayerAction(
+            PlayerChip(glassBackground: false, action: PlayerAction(
                 id: "player.episodes", a11y: "选集", symbol: "square.grid.2x2", title: "选集",
                 active: panel == .episodes, action: { toggle(.episodes) }
             ))
-            PlayerChip(action: PlayerAction(
+            PlayerChip(glassBackground: false, action: PlayerAction(
                 id: "player.rate", a11y: "播放倍速 " + rate, symbol: "gauge.with.dots.needle.33percent",
                 title: "倍速", value: rate, active: panel == .rates || co.playbackRate != 1,
                 action: { toggle(.rates) }
             ))
-            PlayerChip(action: PlayerAction(
+            PlayerChip(glassBackground: false, action: PlayerAction(
                 id: "player.quality", a11y: "画质与播放源", symbol: "sparkles.tv", title: "画质",
                 value: qualityTag == "画质" ? nil : qualityTag, active: panel == .quality,
                 action: { toggle(.quality) }
             ))
-            PlayerChip(action: PlayerAction(
+            PlayerChip(glassBackground: false, action: PlayerAction(
                 id: "player.danmaku", a11y: danmaku.enabled ? "关闭弹幕" : "开启弹幕",
                 symbol: "text.bubble", title: "弹幕",
                 value: dmOK ? (danmaku.enabled ? "开" : "关") : nil,
@@ -964,7 +964,7 @@ struct PlayerScreen: View {
                     danmaku.enabled.toggle(); flashChrome()
                 }
             ))
-            PlayerChip(action: PlayerAction(
+            PlayerChip(glassBackground: false, action: PlayerAction(
                 id: "player.audio", a11y: "音轨与字幕", symbol: "captions.bubble", title: "音轨字幕",
                 active: panel == .audio || panel == .subtitles, action: { toggle(.audio) }
             ))
