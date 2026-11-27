@@ -49,6 +49,21 @@ enum SystemFilePicker {
         }
     }
 
+    static func shareFile(_ url: URL) async {
+        for _ in 0..<25 {
+            if !hasDismissingModal() { break }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        guard let presenter = topViewController() else { return }
+        let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        if let pop = sheet.popoverPresentationController {
+            pop.sourceView = presenter.view
+            pop.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1, height: 1)
+            pop.permittedArrowDirections = []
+        }
+        presenter.present(sheet, animated: true)
+    }
+
     /// Off-main helper: reads a copied temporary URL and removes the temporary copy afterwards.
     nonisolated static func readAndClean(_ url: URL, maxBytes: Int? = nil) throws -> (name: String, ext: String, data: Data) {
         let scoped = url.startAccessingSecurityScopedResource()

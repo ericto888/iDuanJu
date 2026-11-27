@@ -121,6 +121,18 @@ final class PluginStore: ObservableObject {
         publish()
     }
 
+    func reloadFromDisk() {
+        PluginRuntime.unloadAll()
+        if let data = try? Data(contentsOf: indexURL),
+           let list = try? JSONDecoder().decode([InstalledPlugin].self, from: data) {
+            plugins = list
+        } else {
+            plugins = []
+        }
+        subscriptions = d.data(forKey: Self.subsKey).flatMap { try? JSONDecoder().decode([PluginSubscription].self, from: $0) } ?? []
+        publish()
+    }
+
     func plugin(_ id: String) -> InstalledPlugin? { plugins.first { $0.id == id } }
 
     /// Installed plugins the current gate lets the user see (adult ones only after the 片源管理 lock is open).
@@ -497,6 +509,16 @@ enum PluginRuntime {
     static func unload(_ id: String) {
         lock.lock(); let i = instances.removeValue(forKey: id); jars[id] = nil; lock.unlock()
         i?.shutdown()
+    }
+
+    static func unloadAll() {
+        let all: [PluginInstance] = lock.withLock {
+            let v = Array(instances.values)
+            instances.removeAll()
+            jars.removeAll()
+            return v
+        }
+        for i in all { i.shutdown() }
     }
 
     static func jar(_ id: String) -> PluginCookieJar {

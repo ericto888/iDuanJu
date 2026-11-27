@@ -3,6 +3,8 @@ import SwiftUI
 struct ProfileView: View {
     @State private var message: String?
     @State private var showHongguoLogin = false
+    @State private var backupBusy: String?
+    @State private var refreshTick = 0
 
     var body: some View {
         ScrollView {
@@ -11,7 +13,23 @@ struct ProfileView: View {
                     .accessibilityAddTraits(.isHeader)
                 HongguoAccountCard(message: $message, login: $showHongguoLogin)
                 ProfileLibrary()
-                ProfileLinks()
+                ProfileLinks(refreshTick: refreshTick)
+                DSSection(
+                    "数据备份与迁移",
+                    footer: "换证书自签或换机前可导出备份；退到后台时也会自动保存在系统「文件 → 我的 iPhone → i短剧 → AutoBackup」，即使证书掉签打不开 App 也能从「文件」取出恢复。",
+                    separatorInset: 58
+                ) {
+                    DSRow(
+                        backupBusy == "export" ? "正在打包备份…" : "导出全量备份",
+                        icon: "square.and.arrow.up",
+                        subtitle: "插件、片源、观看历史、收藏、书源与小说"
+                    ) { Task { await exportBackup() } }
+                    DSRow(
+                        backupBusy == "import" ? "正在恢复备份…" : "从备份文件恢复",
+                        icon: "arrow.down.doc",
+                        subtitle: "导入 .idjbackup 无损合并恢复"
+                    ) { Task { await importBackup() } }
+                }
                 DSSection("维护", separatorInset: 58) {
                     maintenance("重置红果设备注册", "arrow.counterclockwise") { await HongguoClient.shared.resetDevice(); message = "已重置红果设备" }
                     maintenance("重置黄果访客会话", "person.badge.key") { await HuangguoClient.shared.resetSession(); message = "已清除黄果会话" }
@@ -43,6 +61,38 @@ struct ProfileView: View {
 
     private func maintenance(_ t: String, _ icon: String, _ action: @escaping () async -> Void) -> some View {
         DSRow(t, icon: icon) { Task { await action() } }
+    }
+
+    private func exportBackup() async {
+        guard backupBusy == nil else { return }
+        backupBusy = "export"
+        defer { backupBusy = nil }
+        do {
+            let url = try await AppBackup.exportTemporaryFile()
+            await SystemFilePicker.shareFile(url)
+        } catch {
+            message = "备份失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func importBackup() async {
+        guard backupBusy == nil else { return }
+        let urls = await SystemFilePicker.pick(types: [.data, .json, .item])
+        guard let url = urls.first else { return }
+        backupBusy = "import"
+        defer { backupBusy = nil }
+        do {
+            let loaded = try await Task.detached(priority: .userInitiated) {
+                try SystemFilePicker.readAndClean(url, maxBytes: 128 << 20)
+            }.value
+            let summary = try await AppBackup.restore(from: loaded.data)
+            refreshTick += 1
+            message = summary.toastText
+        } catch CocoaError.fileReadTooLarge {
+            message = "备份文件过大（超过 128 MB）"
+        } catch {
+            message = error.localizedDescription
+        }
     }
 }
 
@@ -114,6 +164,7 @@ private struct ProfileLibrary: View {
 }
 
 private struct ProfileLinks: View {
+    var refreshTick: Int = 0
     @ObservedObject private var gate = SourceGate.shared
     /// Counts of stores that load from disk: read after the first frame instead of while 我的 is being built.
     @State private var counts = Counts()
@@ -132,7 +183,7 @@ private struct ProfileLinks: View {
                 DSLinkRow("开源许可", route: Route.licenses, icon: "doc.text")
             }
         }
-        .task {
+        .task(id: refreshTick) {
             await Task.yield()
             let plugins = PluginStore.shared.visiblePlugins.count + CMSStore.shared.visibleSites.count
             counts = Counts(channels: "\(TGStore.shared.visibleChannels.count) 个",

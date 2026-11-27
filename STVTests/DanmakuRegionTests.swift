@@ -118,4 +118,43 @@ final class DanmakuRegionTests: XCTestCase {
         badMoov.append(contentsOf: [0, 0, 0, 12, 0x6D, 0x64, 0x61, 0x74, 1, 2, 3, 4])
         XCTAssertEqual(CENCDecryptor.moovLocation(badMoov), .end(24))
     }
+
+    @MainActor
+    func testAppBackupRoundTripAndSmartMerge() async throws {
+        let lib = LibraryStore.shared
+        let store = PluginStore.shared
+        let s1 = HGSeries(seriesId: "backup_ut_1", title: "备份测试剧1", cover: "", episodeCount: 20)
+        let s2 = HGSeries(seriesId: "backup_ut_2", title: "新包本地收藏2", cover: "", episodeCount: 10)
+        let hadDemo = store.plugin(DebugPlugins.demoID) != nil
+        defer {
+            if lib.isFavorite(s1) { lib.toggleFavorite(s1) }
+            if lib.isFavorite(s2) { lib.toggleFavorite(s2) }
+            lib.removeProgress(s1)
+            lib.removeProgress(s2)
+            if !hadDemo { store.uninstall(DebugPlugins.demoID) }
+        }
+
+        if let pending = DebugPlugins.demoPending(update: false) {
+            try store.commit(pending)
+        }
+        if !lib.isFavorite(s1) { lib.toggleFavorite(s1) }
+        lib.record(s1, index: 4, ep: 5, seconds: 66, duration: 120)
+
+        let backupData = try await AppBackup.createBackupData()
+        XCTAssertTrue(AppBackup.isBackupData(backupData))
+
+        // Simulate fresh install where old plugin & s1 are absent, while user already favorited s2.
+        store.uninstall(DebugPlugins.demoID)
+        XCTAssertNil(store.plugin(DebugPlugins.demoID))
+        if lib.isFavorite(s1) { lib.toggleFavorite(s1) }
+        lib.removeProgress(s1)
+        if !lib.isFavorite(s2) { lib.toggleFavorite(s2) }
+
+        let summary = try await AppBackup.restore(from: backupData)
+        XCTAssertNotNil(store.plugin(DebugPlugins.demoID))
+        XCTAssertTrue(lib.isFavorite(s1))
+        XCTAssertTrue(lib.isFavorite(s2), "Smart merge must keep favorites added in the new install")
+        XCTAssertEqual(lib.progress(for: s1)?.episodeNumber, 5)
+        XCTAssertGreaterThanOrEqual(summary.plugins, 1)
+    }
 }

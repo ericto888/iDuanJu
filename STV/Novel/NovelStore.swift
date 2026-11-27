@@ -264,6 +264,13 @@ final class NovelStore: ObservableObject {
 
     private nonisolated static func decode<T: Decodable>(_ key: String) -> T? { UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(T.self, from: $0) } }
     private func save<T: Encodable>(_ v: T, _ key: String) { d.set(try? JSONEncoder().encode(v), forKey: key) }
+
+    func reloadFromDefaults() {
+        textCache.removeAll()
+        books = Self.decode("stv.novel.books") ?? []
+        progress = Self.decode("stv.novel.progress") ?? [:]
+        readTime = (d.dictionary(forKey: "stv.novel.readTime") as? [String: Double]) ?? [:]
+    }
 }
 
 /// Reader appearance, after WeRead: size, margins, line spacing, paper colour, typeface, indent, page turning.
@@ -285,6 +292,16 @@ final class NovelPrefs: ObservableObject {
     private let d = UserDefaults.standard
 
     private init() {
+        fontSize = d.object(forKey: "stv.novel.font") as? Double ?? 18
+        lineSpacing = d.object(forKey: "stv.novel.lineSpacing") as? Double ?? 0.5
+        margin = d.object(forKey: "stv.novel.margin") as? Double ?? 0.3
+        theme = Theme(rawValue: d.integer(forKey: "stv.novel.theme")) ?? .white
+        turn = (d.object(forKey: "stv.novel.turnStyle") as? Int).flatMap(NovelTurnStyle.init(rawValue:)) ?? .slide
+        fontID = d.string(forKey: "stv.novel.fontID") ?? "system"
+        indent = d.object(forKey: "stv.novel.indent") as? Bool ?? true
+    }
+
+    func reloadFromDefaults() {
         fontSize = d.object(forKey: "stv.novel.font") as? Double ?? 18
         lineSpacing = d.object(forKey: "stv.novel.lineSpacing") as? Double ?? 0.5
         margin = d.object(forKey: "stv.novel.margin") as? Double ?? 0.3

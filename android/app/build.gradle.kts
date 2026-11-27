@@ -17,31 +17,38 @@ android {
     namespace = "app.iduanju"
     compileSdk = 35
     defaultConfig {
-        applicationId = "app.iduanju.full"
+        applicationId = "app.iduanju"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1642
-        versionName = "1.6.42-full"
+        versionCode = 1644
+        versionName = "1.6.44-android"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Chaquopy requires an explicit ABI list (each one costs about 17 MB): ARM by default, emulators with
         // -Pidj.abis=arm64-v8a,armeabi-v7a,x86_64. Without Python every ABI of the native dependencies is packaged.
         if (withPython) ndk { abiFilters += providers.gradleProperty("idj.abis").orElse("arm64-v8a,armeabi-v7a").get().split(',').map { it.trim() } }
     }
+    val localKeystore = rootProject.file("../local-plugins/iduanju-local.jks")
+    val envKeystore = System.getenv("ANDROID_KEYSTORE_PATH")
+    val hasDistributionKeystore = !envKeystore.isNullOrBlank() || localKeystore.isFile
     signingConfigs {
         create("distribution") {
-            val path = System.getenv("ANDROID_KEYSTORE_PATH")
-            if (!path.isNullOrBlank()) {
-                storeFile = file(path)
+            if (!envKeystore.isNullOrBlank()) {
+                storeFile = file(envKeystore)
                 storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
                 keyAlias = "iduanju"
                 keyPassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            } else if (localKeystore.isFile) {
+                storeFile = localKeystore
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "iduanju-local-sign"
+                keyAlias = "iduanju"
+                keyPassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "iduanju-local-sign"
             }
         }
     }
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName(if (System.getenv("ANDROID_KEYSTORE_PATH").isNullOrBlank()) "debug" else "distribution")
+            signingConfig = signingConfigs.getByName(if (hasDistributionKeystore) "distribution" else "debug")
         }
         debug {
             // Opt-in parallel QA install; never re-sign/uninstall or overwrite the owner's existing app.

@@ -78,6 +78,15 @@ final class TGStore: ObservableObject {
         heuristics = d.object(forKey: "stv.tg.heuristics") as? Bool ?? true
     }
 
+    func reloadFromDefaults() {
+        if let data = d.data(forKey: "stv.tg.channels"), let c = try? JSONDecoder().decode([TGChannel].self, from: data) {
+            channels = c
+        } else {
+            channels = Self.presets
+        }
+        loadSettings()
+    }
+
     // MARK: Visibility
 
     /// Adult channels only when enabled in 片源管理 and unlocked.

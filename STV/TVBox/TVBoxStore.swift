@@ -72,6 +72,7 @@ final class TVBoxStore: ObservableObject {
     // MARK: Shared, any thread
 
     nonisolated private static let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("tvbox", isDirectory: true)
+    nonisolated static var backupRoot: URL { root }
     nonisolated private static let stateFile = root.appendingPathComponent("tvbox_store_v2.json")
     nonisolated private static let localDir = root.appendingPathComponent("local", isDirectory: true)
     nonisolated private static let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -247,6 +248,33 @@ final class TVBoxStore: ObservableObject {
         pending = nil
         let snap = state
         Self.disk.async { try? Self.write(Self.stateFile, Data(snap.toJSON().toString().utf8)) }
+    }
+
+    func flushForBackup() async {
+        if loaded, pending != nil {
+            pending?.cancel()
+            pending = nil
+            let snap = state
+            try? await Self.onDisk { try Self.write(Self.stateFile, Data(snap.toJSON().toString().utf8)) }
+        } else {
+            _ = try? await Self.onDisk { () }
+        }
+    }
+
+    func reloadFromDisk() async {
+        pending?.cancel()
+        pending = nil
+        Self.adultLock.lock()
+        Self.adultUids = nil
+        Self.adultLock.unlock()
+        let s = (try? await Self.onDisk { Self.read() }) ?? Stored()
+        state = s.state
+        repos = s.repos
+        meters.latency = s.state.latency
+        pushEngine()
+        loaded = true
+        if !s.watches.isEmpty { importWatches(s.watches) }
+        if !state.doh.isEmpty { applyDoh() }
     }
 
     private func pushEngine() {

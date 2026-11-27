@@ -59,7 +59,13 @@ struct PluginsView: View {
                     action("添加采集站", "server.rack", id: "plugins.cms.add") { showCMS = true }
                 }
                 if !recommended.isEmpty {
-                    DSSection("推荐插件（App 内置）") {
+                    let missingRec = recommended.filter { store.plugin($0.manifest.id) == nil }
+                    DSSection("推荐插件（App 内置）", separatorInset: 58) {
+                        if missingRec.count > 1 {
+                            action("一键安装全部推荐（\(missingRec.count)）", "square.and.arrow.down.on.square", id: "plugins.bundled.installAll") {
+                                installAllBundled(missingRec)
+                            }
+                        }
                         ForEach(recommended, id: \.manifest.id) { b in
                             HStack(spacing: 12) {
                                 DSRowLabel(title: b.manifest.name, subtitle: b.manifest.description)
@@ -149,10 +155,16 @@ struct PluginsView: View {
         busy = "prepare"; message = nil
         do {
             let loaded = try await Task.detached(priority: .userInitiated) {
-                try SystemFilePicker.readAndClean(url, maxBytes: 8 << 20)
+                try SystemFilePicker.readAndClean(url, maxBytes: 64 << 20)
             }.value
             let d = loaded.data
             let file = loaded.name
+            if AppBackup.isBackupData(d) {
+                let summary = try await AppBackup.restore(from: d)
+                busy = nil
+                message = summary.toastText
+                return
+            }
             if let text = try? TVBoxDecoder.decode(d), TVBoxConfig.isConfig(text) {
                 await importTVBox { try await TVBoxStore.shared.importLocal(d, fileName: file) }
                 return
@@ -169,7 +181,7 @@ struct PluginsView: View {
             pending = p
         } catch CocoaError.fileReadTooLarge {
             busy = nil
-            message = "文件过大（超过 8 MB）"
+            message = "文件过大（超过 64 MB）"
         } catch {
             busy = nil
             message = error.localizedDescription
@@ -194,6 +206,21 @@ struct PluginsView: View {
             for e in entries {
                 do { prepared.append(try await Task.detached { try await PluginInstaller.prepare(manifestURL: e.manifest, origin: origin) }.value) }
                 catch { failures.append("\(e.name)：\(error.localizedDescription)") }
+            }
+            busy = nil
+            if prepared.isEmpty { message = "全部安装失败：" + (failures.first ?? "未知错误"); return }
+            batch = BatchInstall(items: prepared, failed: failures)
+        }
+    }
+
+    private func installAllBundled(_ list: [(name: String, manifest: PluginManifest, data: Data)]) {
+        busy = "prepare"; message = nil
+        Task {
+            var prepared: [PendingInstall] = []
+            var failures: [String] = []
+            for b in list {
+                do { prepared.append(try await Task.detached { try PluginInstaller.prepare(bundle: b.data, origin: "内置：" + b.name) }.value) }
+                catch { failures.append("\(b.manifest.name)：\(error.localizedDescription)") }
             }
             busy = nil
             if prepared.isEmpty { message = "全部安装失败：" + (failures.first ?? "未知错误"); return }

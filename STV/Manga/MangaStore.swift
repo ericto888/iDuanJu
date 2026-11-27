@@ -55,6 +55,11 @@ final class MangaStore: ObservableObject {
     }
     var recent: [MangaProgress] { progress.values.sorted { $0.updatedAt > $1.updatedAt } }
 
+    func reloadFromDefaults() {
+        favorites = load("stv.manga.favorites") ?? []
+        progress = load("stv.manga.progress") ?? [:]
+    }
+
     // MARK: Offline chapters
 
     nonisolated static var root: URL {

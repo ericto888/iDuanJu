@@ -67,6 +67,9 @@ struct STVApp: App {
                 }
                 #endif
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                Task { await AppBackup.writeAutoBackupIfNeeded() }
+            }
             .background(STVTheme.bg)
         }
     }

@@ -95,6 +95,18 @@ final class SourceGate: ObservableObject {
         revision += 1
     }
 
+    func reloadFromDefaults() {
+        let raw = d.stringArray(forKey: "stv.sources.enabled") ?? []
+        enabled = Set(raw.compactMap(DramaSource.init(rawValue:)).filter { $0.isDynamic || $0.isAdult })
+        lockEnabled = d.bool(forKey: "stv.sources.lock")
+        if !lockEnabled { unlocked = true }
+        adultChannels = d.bool(forKey: "stv.sources.adultChannels")
+        adultManga = d.bool(forKey: "stv.sources.adultManga")
+        huangguo = d.bool(forKey: "stv.sources.huangguo")
+        homeOrder = d.stringArray(forKey: Self.homeOrderKey) ?? []
+        revision += 1
+    }
+
     // MARK: Home source ordering
 
     /// Applies persisted custom order while keeping newly enabled sources appended in their natural order

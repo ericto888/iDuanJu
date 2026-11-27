@@ -52,6 +52,10 @@ final class CMSStore: ObservableObject {
         if let data = try? JSONEncoder().encode(sites) { d.set(data, forKey: Self.key) }
         publish()
     }
+    func reloadFromDefaults() {
+        sites = d.data(forKey: Self.key).flatMap { try? JSONDecoder().decode([CMSSite].self, from: $0) } ?? []
+        publish()
+    }
 
     nonisolated static func normalize(_ api: String, allowHTTP: Bool = false) throws -> String {
         var s = api.trimmingCharacters(in: .whitespacesAndNewlines)

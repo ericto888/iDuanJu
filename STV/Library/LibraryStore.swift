@@ -118,6 +118,16 @@ final class LibraryStore: ObservableObject {
     func removeSearch(_ q: String) { searchHistory.removeAll { $0 == q }; save(searchHistory, "stv.searchHistory") }
     func clearSearch() { searchHistory = []; save(searchHistory, "stv.searchHistory") }
 
+    func reloadFromDefaults() {
+        writes += 1
+        persistTask?.cancel()
+        persistTask = nil
+        live.removeAll()
+        progress = load("stv.progress") ?? [:]
+        allFavorites = load("stv.favorites") ?? []
+        searchHistory = load("stv.searchHistory") ?? []
+    }
+
     private func load<T: Decodable>(_ k: String) -> T? { d.data(forKey: k).flatMap { try? JSONDecoder().decode(T.self, from: $0) } }
     private func save<T: Encodable>(_ v: T, _ k: String) { if let data = try? JSONEncoder().encode(v) { d.set(data, forKey: k) } }
 }

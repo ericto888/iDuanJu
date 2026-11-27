@@ -209,6 +209,10 @@ final class LegadoSourceStore: ObservableObject {
         save()
     }
 
+    func reloadFromDisk() {
+        sources = Self.read()
+    }
+
     private func save() {
         try? FileManager.default.createDirectory(at: Self.file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? JSONEncoder().encode(sources).write(to: Self.file)
