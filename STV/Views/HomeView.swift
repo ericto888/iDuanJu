@@ -893,10 +893,6 @@ private struct DynamicSiteFeed: View {
                             PosterHero(board: source.label, picks: featuredItems, index: $featuredIndex)
                                 .padding(.horizontal, 16)
                                 .padding(.top, 4)
-                                .compatOnChange(of: featuredIndex) { index in
-                                    if featuredItems.indices.contains(index) {
-                                    }
-                                }
                         }
 
                         if usesCategoryShelves {
