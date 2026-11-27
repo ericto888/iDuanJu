@@ -31,7 +31,8 @@ manga18fx/
 | `permissions.cloudflare` | | `true` = 允许 App 在后台浏览器里替它过 CF 验证（只对 `http` 里的域名） |
 | `permissions.storage` | | `true` = 可用 `host.storage`（每插件 1MB，互相看不到） |
 | `permissions.login` | | `true` = 可以请用户在 App 的独立浏览器里登录这个站（cookie 只进本插件） |
-| `capabilities` | ✓ | 实现了哪些函数。video/shortdrama 至少 `detail`+`play`；comic 至少 `detail`+`pages` |
+| `capabilities` | ✓ | 实现了哪些函数。video/shortdrama 至少 `detail`+`play`；comic 至少 `detail`+`pages`；声明首页功能时还需包含 `home` |
+| `homeFeatures` | | 首页展示能力，可选值：`featured`（精选轮播）、`categoryShelves`（按真实分类显示多条横向货架）、`numbered`（分类「全部」列表显示序号）。可组合；不声明 `numbered` 时使用普通无序号海报网格。声明任一首页功能时，`capabilities` 必须包含 `home` |
 | `settings` | | 让用户填的配置项，如镜像地址、API key：`[{ "key": "mirror", "name": "镜像", "type": "text\|select\|secret", "default": "..." }]`。`secret` 类型脚本只拿到句柄，见安全说明 |
 | `update.url` | | 新版 manifest 的地址。必须是 https |
 | `integrity` | ✓(打包时) | 每个文件的 `sha256-…`，由 `idj pack` 填写；`signature` 可选（作者 Ed25519 签名） |
@@ -45,13 +46,22 @@ manga18fx/
 | 函数 | 参数 | 返回 | 何时调用 |
 |---|---|---|---|
 | `init` | `{}` | 无 | 每次加载插件 |
-| `home` | `{}` | `{ categories, items? }` | 打开插件首页 |
+| `home` | `{}` | `{ categories, items? }` | 打开插件首页；声明 `featured` 时，`items` 用作精选轮播；声明 `categoryShelves` 时，App 将真实分类接入统一横向货架与「全部」分页入口 |
 | `category` | `{ id, page, filters }` | `{ items, page, hasMore }` | 分类翻页，`page` 从 1 开始 |
 | `search` | `{ keyword, page }` | `{ items, page, hasMore }` | 全局搜索会并发调用所有开着的插件 |
 | `detail` | `{ id }` | 视频：`{ title, cover, desc, lines:[{name, episodes:[{id,name}]}] }`；漫画：`{ title, cover, desc, chapters:[{id,name}] }` | 进详情页 |
 | `play` | `{ line, episodeId, id }` | `{ streams:[{ url, format, headers, proxy? }], subtitles?, danmaku?, skip? }` | 点播放；`expiresAt` 到期前会再调 |
 | `pages` | `{ chapterId }` | `{ images:[{ url, transform? }], headers? }` | 漫画进章节 |
 | `danmaku` | `{ episodeKey, episodeId, seriesId, id, line, title, episodeName, ep, url, from, to }` | `{ items:[{ time, text, color?, mode?, likes? }], truncated? }` 等 | 可选；支持独立 `danmaku()` 导出或由 `play()` 直接返回 |
+
+首页声明示例：
+```json
+{
+  "capabilities": ["detail", "play", "home"],
+  "homeFeatures": ["featured", "categoryShelves"]
+}
+```
+如需在分类「全部」列表显示序号，再加入 `"numbered"`；不声明时不显示排名数字。精选轮播与分类货架可独立组合，首页布局和分页由 App 统一提供。
 
 规则：
 - **id 都是你自己定的字符串**，App 原样存、原样传回。不要把 cookie、token 塞进 id（会被存进观看历史）。
