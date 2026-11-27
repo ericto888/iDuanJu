@@ -79,8 +79,6 @@ struct PlayerScreen: View {
     @ObservedObject private var library = LibraryStore.shared
 
     private var landscape: Bool { vClass == .compact || (layoutMetrics.isPad && layoutMetrics.isLandscape) }
-    /// Landscape-format clips shown in the upright player keep their full chrome visible.
-    private var portraitLandscapeClip: Bool { !landscape && aspect > 1.0 }
     /// A display-only lift for wide clips on an upright iPhone. Unknown orientation
     /// falls back to the current presentation layout so the first frame never starts at 0pt.
     private func videoLift(for videoAspect: CGFloat) -> CGFloat {
@@ -89,7 +87,6 @@ struct PlayerScreen: View {
         return upright ? 44 : 0
     }
     private var videoLift: CGFloat { videoLift(for: aspect) }
-    private var keepsChromeVisible: Bool { portraitLandscapeClip }
     private var canShowPadSplit: Bool {
         layoutMetrics.isPad && layoutMetrics.isLandscape && layoutMetrics.width >= 840 && aspect < 1.0 && !co.pipActive && !co.episodes.isEmpty
     }
@@ -328,10 +325,8 @@ struct PlayerScreen: View {
         .background(InteractivePopEnabler())
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        // Keep the dark appearance local to the player subtree. preferredColorScheme is a
-        // presentation-level preference and can darken the hosting NavigationStack; popping
-        // the player then causes the underlying light pages to flash black before turning white.
-        .environment(\.colorScheme, .dark)
+        .statusBarHidden(landscape || !controlsVisible || panel == .danmaku)
+        .preferredColorScheme(.dark)
         .persistentSystemOverlays(.hidden)
         .animation(.easeOut(duration: 0.18), value: panel)
         .task(id: co.current) {
@@ -356,10 +351,7 @@ struct PlayerScreen: View {
         .task { await screenshotHooks() }
         .task(id: lastInteraction) {
             do { try await Task.sleep(for: .seconds(3)) } catch { return }
-            // Keep the rule explicit: only hide during playback (or while locked), and
-            // never while a panel, scrub gesture, VoiceOver, or persistent clip mode needs chrome.
-            guard !keepsChromeVisible, !noAutoHide, (!co.paused || locked),
-                  panel == nil, !scrubbing, !voiceOver else { return }
+            guard !noAutoHide, !co.paused || locked else { return }
             withAnimation(.easeOut(duration: 0.2)) { showChrome = false }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
@@ -701,7 +693,7 @@ struct PlayerScreen: View {
     }
 
     private var controlsVisible: Bool {
-        !speedMode && (keepsChromeVisible || showChrome || scrubbing || panel != nil || voiceOver)
+        !speedMode && (showChrome || scrubbing || panel != nil || voiceOver)
     }
 
     // MARK: Chrome
