@@ -20,6 +20,12 @@ enum SystemFilePicker {
         types: [UTType] = [.item, .data, .content],
         multiple: Bool = false
     ) async -> [URL] {
+        guard activeSession == nil else { return [] }
+        // Wait if a preceding sheet (e.g. import options) is still animating out so UIKit does not drop presentation.
+        for _ in 0..<25 {
+            if !hasDismissingModal() { break }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
         guard activeSession == nil, let presenter = topViewController() else { return [] }
         // Always include `.item` and `.data` so custom extensions (.idjplugin, .m3u, .json/txt downloaded as public.data) are selectable.
         var allTypes = types
@@ -34,6 +40,12 @@ enum SystemFilePicker {
             picker.delegate = session
             picker.presentationController?.delegate = session
             presenter.present(picker, animated: true)
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                if activeSession === session, picker.presentingViewController == nil, !picker.isBeingPresented {
+                    await session.finish([])
+                }
+            }
         }
     }
 
@@ -58,14 +70,26 @@ enum SystemFilePicker {
         return (name, ext, data)
     }
 
-    private static func topViewController() -> UIViewController? {
+    private static func keyWindow() -> UIWindow? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let window = scenes
+        return scenes
             .first { $0.activationState == .foregroundActive }?
             .windows.first { $0.isKeyWindow }
             ?? scenes.flatMap(\.windows).first { $0.isKeyWindow }
             ?? scenes.flatMap(\.windows).first
-        var top = window?.rootViewController
+    }
+
+    private static func hasDismissingModal() -> Bool {
+        var cur = keyWindow()?.rootViewController
+        while let presented = cur?.presentedViewController {
+            if presented.isBeingDismissed { return true }
+            cur = presented
+        }
+        return false
+    }
+
+    private static func topViewController() -> UIViewController? {
+        var top = keyWindow()?.rootViewController
         while let presented = top?.presentedViewController, !presented.isBeingDismissed {
             top = presented
         }
@@ -94,7 +118,7 @@ enum SystemFilePicker {
             Task { @MainActor in await self.finish([]) }
         }
 
-        private func finish(_ urls: [URL]) async {
+        fileprivate func finish(_ urls: [URL]) async {
             guard let cont = continuation else { return }
             continuation = nil
             // Wait until UIKit has fully torn down the picker transition before returning to callers that present sheets.

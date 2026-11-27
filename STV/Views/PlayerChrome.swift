@@ -83,6 +83,7 @@ struct PlayerProgressBar: View {
     @State private var drag: Double?
     @State private var dragStart: Double = 0
     @State private var thumb: UIImage?
+    @GestureState private var dragGestureActive = false
 
     init(co: PlaybackCoordinator, scrubbing: Binding<Bool>, onInteract: @escaping () -> Void = {}, mini: Bool = false) {
         self.co = co
@@ -128,29 +129,11 @@ struct PlayerProgressBar: View {
                         .accessibilityIdentifier("player.progress.bubble")
                 }
             }
-            .gesture(mini || duration <= 0 ? nil : DragGesture(minimumDistance: 3)
-                .onChanged { v in
-                    if drag == nil {
-                        dragStart = played; scrubbing = true
-                        UISelectionFeedbackGenerator().selectionChanged()
-                    }
-                    drag = min(1, max(0, v.location.x / max(1, w)))
-                    clock.scrubPreview = (drag ?? 0) * duration
-                    onInteract()
-                }
-                .onEnded { _ in
-                    if let f = drag { co.seek(fraction: f) }
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) { drag = nil }
-                    clock.scrubPreview = nil
-                    scrubbing = false
-                    onInteract()
-                }
-                // A zero-distance drag can lose a stationary tap during SwiftUI gesture arbitration.
-                // Keep taps explicit and exclusive with scrubbing, so a release sends exactly one seek.
-                .exclusively(before: SpatialTapGesture().onEnded { v in
-                    co.seek(fraction: min(1, max(0, v.location.x / max(1, w))))
-                    onInteract()
-                }))
+            .gesture(mini || duration <= 0 ? nil : scrubGesture(width: w, duration: duration, played: played))
+            .compatOnChange(of: dragGestureActive) { active in
+                if !active { cancelInterruptedScrub() }
+            }
+            .onDisappear { cancelInterruptedScrub(animated: false) }
         }
         .frame(height: mini ? Self.miniH : 22)
         .task(id: drag.map { Int($0 * max(1, clock.sample.duration) / PlayerThumbnailer.bucket) }) {
@@ -186,6 +169,52 @@ struct PlayerProgressBar: View {
     }
 
     private var thumbAvailable: Bool { thumb != nil && co.thumbnails.available }
+
+    private var isScrubDemoActive: Bool {
+        #if DEBUG
+        return co.scrubDemo != nil
+        #else
+        return false
+        #endif
+    }
+
+    private func cancelInterruptedScrub(animated: Bool = true) {
+        guard drag != nil, !isScrubDemoActive else { return }
+        if animated {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) { drag = nil }
+        } else {
+            drag = nil
+        }
+        clock.scrubPreview = nil
+        scrubbing = false
+    }
+
+    private func scrubGesture(width w: CGFloat, duration: Double, played: Double) -> some Gesture {
+        let dragPart = DragGesture(minimumDistance: 3)
+            .updating($dragGestureActive) { _, active, _ in active = true }
+            .onChanged { v in
+                if drag == nil {
+                    dragStart = played; scrubbing = true
+                    UISelectionFeedbackGenerator().selectionChanged()
+                }
+                let next = min(1, max(0, v.location.x / max(1, w)))
+                drag = next
+                clock.scrubPreview = next * duration
+                onInteract()
+            }
+            .onEnded { _ in
+                if let f = drag { co.seek(fraction: f) }
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) { drag = nil }
+                clock.scrubPreview = nil
+                scrubbing = false
+                onInteract()
+            }
+        let tapPart = SpatialTapGesture().onEnded { v in
+            co.seek(fraction: min(1, max(0, v.location.x / max(1, w))))
+            onInteract()
+        }
+        return dragPart.exclusively(before: tapPart)
+    }
 
     private func bubble(_ t: Double, _ d: Double, delta: Double) -> some View {
         VStack(spacing: 4) {

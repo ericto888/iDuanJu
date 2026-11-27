@@ -248,7 +248,6 @@ struct PlayerScreen: View {
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .statusBarHidden(landscape || !controlsVisible || panel == .danmaku)
-        .preferredColorScheme(.dark)
         .persistentSystemOverlays(.hidden)
         .task(id: co.current) {
             guard !series.source.isLongVideo, suppliedDetail == nil, co.autoNextDrama,
@@ -345,6 +344,7 @@ struct PlayerScreen: View {
         
         .compatOnChange(of: landscape) { l in if !l { locked = false }; panel = nil }
         .sheet(item: $verifyTarget) { t in SiteVerifySheet(target: t) { if let c = co.current { co.activate(c) } } }
+        .stvLocalColorScheme(.dark)
     }
 
     // MARK: Layers

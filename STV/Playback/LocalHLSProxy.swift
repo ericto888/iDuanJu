@@ -32,6 +32,8 @@ final class LocalHLSProxy: @unchecked Sendable {
         var chunk = BufferSettings.mp4Chunk
         /// TVBox: address policy of the playlist and of everything it names (see `LanPolicy`).
         var lan: Bool? = nil
+        /// Insertion order for bounded FIFO eviction (never wipes active routes wholesale).
+        var seq: UInt64 = 0
     }
     static let shared = LocalHLSProxy()
 
@@ -39,6 +41,8 @@ final class LocalHLSProxy: @unchecked Sendable {
     private let lock = NSLock()
     private var listener: NWListener?
     private var port: UInt16 = 0
+    private var preferredPort: UInt16 = 0
+    private var nextSeq: UInt64 = 0
     /// token → route (one token per resolved stream).
     private var routes: [String: Route] = [:]
     private let session: URLSession = {
@@ -152,9 +156,23 @@ final class LocalHLSProxy: @unchecked Sendable {
         let token = strongToken ? UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased() : String(UUID().uuidString.prefix(8)).lowercased()
         let pf = budget > 0 ? makePrefetcher(token, budget, headers, strip, lan) : nil
         lock.lock()
-        if routes.count > 64 { routes.values.forEach { $0.prefetcher?.stop() }; routes = [:] }
-        routes[token] = Route(headers: headers, strip: strip, prefetcher: pf, lan: lan)
+        var evicted: [(String, Route)] = []
+        if routes.count >= 64 {
+            let oldest = routes.sorted { $0.value.seq < $1.value.seq }.prefix(16)
+            for (k, v) in oldest {
+                routes.removeValue(forKey: k)
+                evicted.append((k, v))
+            }
+        }
+        nextSeq &+= 1
+        routes[token] = Route(headers: headers, strip: strip, prefetcher: pf, lan: lan, seq: nextSeq)
         lock.unlock()
+        for (k, r) in evicted {
+            r.prefetcher?.stop()
+            r.guardedNet?.cancel()
+            if r.prefetcher != nil { PrefetchStore.shared.remove(k) }
+            if let td = r.td { Task { await td.cancel() } }
+        }
         return "http://127.0.0.1:\(port)/\(token)/\(kind)?u=\(Self.b64(upstream))"
     }
 
@@ -236,9 +254,17 @@ final class LocalHLSProxy: @unchecked Sendable {
     private func start() -> UInt16? {
         lock.lock()
         if port != 0 { defer { lock.unlock() }; return port }
+        let savedPort = preferredPort
         lock.unlock()
+        if savedPort != 0, let p = bindListener(port: NWEndpoint.Port(rawValue: savedPort) ?? .any) {
+            return p
+        }
+        return bindListener(port: .any)
+    }
+
+    private func bindListener(port targetPort: NWEndpoint.Port) -> UInt16? {
         let params = NWParameters.tcp
-        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: targetPort)
         params.allowLocalEndpointReuse = true
         guard let l = try? NWListener(using: params) else { return nil }
         let ready = DispatchSemaphore(value: 0)
@@ -247,7 +273,7 @@ final class LocalHLSProxy: @unchecked Sendable {
             case .ready: ready.signal()
             case .failed, .cancelled:
                 ready.signal()
-                // iOS tears the socket down after long backgrounding; next playlistURL() restarts it.
+                // iOS tears the socket down after long backgrounding; next start() rebinds to `preferredPort`.
                 self?.lock.lock(); if self?.listener === l { self?.listener = nil; self?.port = 0 }; self?.lock.unlock()
             default: break
             }
@@ -256,7 +282,7 @@ final class LocalHLSProxy: @unchecked Sendable {
         l.start(queue: queue)
         _ = ready.wait(timeout: .now() + 3)
         guard let p = l.port?.rawValue, p != 0 else { l.cancel(); return nil }
-        lock.lock(); listener = l; port = p; lock.unlock()
+        lock.lock(); listener = l; port = p; preferredPort = p; lock.unlock()
         return p
     }
 

@@ -151,8 +151,10 @@ final class SourceGate: ObservableObject {
     private func authenticate(reason: String) async -> Bool {
         let ctx = LAContext()
         var err: NSError?
-        // Device passcode fallback keeps it usable without biometrics (and on the simulator).
-        guard ctx.canEvaluatePolicy(.deviceOwnerAuthentication, error: &err) else { return true }
+        // Device passcode fallback keeps it usable without biometrics; only skip auth when no device passcode exists (e.g. Simulator).
+        guard ctx.canEvaluatePolicy(.deviceOwnerAuthentication, error: &err) else {
+            return err?.code == LAError.passcodeNotSet.rawValue
+        }
         return (try? await ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false
     }
 }

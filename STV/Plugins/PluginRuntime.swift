@@ -302,7 +302,7 @@ final class PluginInstance: @unchecked Sendable {
             sem.signal()
         }
         sem.wait()
-        if let failure { thread.stop(); throw failure }
+        if let failure { h.net.cancel(); thread.stop(); throw failure }
     }
 
     deinit { shutdown() }
@@ -312,6 +312,7 @@ final class PluginInstance: @unchecked Sendable {
         box = nil
         let t = thread
         let h = host
+        h.net.cancel()
         t.enqueue { idj_free(b); _ = h }
         t.stop()
     }

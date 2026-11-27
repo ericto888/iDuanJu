@@ -87,13 +87,13 @@ struct NovelMediaPlayer: View {
             }
             .ignoresSafeArea()
         }
-        .preferredColorScheme(.dark)
         .sheet(isPresented: $showQueue) {
             DSSheet("章节列表", subtitle: "共 \(chapters.count) 章") {
                 DSOptionList(options: Array(chapters.indices), selected: index, label: { chapters.indices.contains($0) ? chapters[$0].title : "" }) { i in selected = i; showQueue = false }
             }
             .dsSheetChrome()
         }
+        .stvLocalColorScheme(.dark)
         .task(id: "\(index)-\(retry)") { await playAudio() }
         .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in clock.tick() }
         .onReceive(clock.$failed) { if $0 { failure = "本章暂时无法播放" } }
@@ -145,7 +145,12 @@ struct NovelMediaPlayer: View {
         stop(); failure = nil
         do {
             let url = try await mediaURL(index)
-            token = LocalHLSProxy.token(of: url.absoluteString)
+            let nextToken = LocalHLSProxy.token(of: url.absoluteString)
+            guard !Task.isCancelled else {
+                if let nextToken { LocalHLSProxy.shared.release(nextToken) }
+                return
+            }
+            token = nextToken
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
             let next = AVPlayer(url: url); player = next; clock.player = next; next.play()
         } catch { if !Task.isCancelled { failure = error.localizedDescription } }

@@ -194,12 +194,23 @@ enum CENCDecryptor {
 
     // MARK: - Parsing helpers
 
-    private static func u16(_ b: [UInt8], _ o: Int) -> UInt16 { UInt16(b[o]) << 8 | UInt16(b[o + 1]) }
-    private static func u32(_ b: [UInt8], _ o: Int) -> UInt32 {
-        UInt32(b[o]) << 24 | UInt32(b[o + 1]) << 16 | UInt32(b[o + 2]) << 8 | UInt32(b[o + 3])
+    private static func byte(_ b: [UInt8], _ o: Int) -> UInt8 { (o >= 0 && o < b.count) ? b[o] : 0 }
+    private static func u16(_ b: [UInt8], _ o: Int) -> UInt16 {
+        guard o >= 0, o + 2 <= b.count else { return 0 }
+        return UInt16(b[o]) << 8 | UInt16(b[o + 1])
     }
-    private static func u64(_ b: [UInt8], _ o: Int) -> UInt64 { UInt64(u32(b, o)) << 32 | UInt64(u32(b, o + 4)) }
-    private static func fourcc(_ b: [UInt8], _ o: Int) -> String { String(decoding: b[o..<o + 4], as: UTF8.self) }
+    private static func u32(_ b: [UInt8], _ o: Int) -> UInt32 {
+        guard o >= 0, o + 4 <= b.count else { return 0 }
+        return UInt32(b[o]) << 24 | UInt32(b[o + 1]) << 16 | UInt32(b[o + 2]) << 8 | UInt32(b[o + 3])
+    }
+    private static func u64(_ b: [UInt8], _ o: Int) -> UInt64 {
+        guard o >= 0, o + 8 <= b.count else { return 0 }
+        return UInt64(u32(b, o)) << 32 | UInt64(u32(b, o + 4))
+    }
+    private static func fourcc(_ b: [UInt8], _ o: Int) -> String {
+        guard o >= 0, o + 4 <= b.count else { return "" }
+        return String(decoding: b[o..<o + 4], as: UTF8.self)
+    }
 
     private static func boxes(_ b: [UInt8], _ from: Int, _ to: Int) -> [Box] {
         var out: [Box] = []
@@ -230,7 +241,7 @@ enum CENCDecryptor {
         guard let tkhd = child(b, trak, ["tkhd"]),
               let stbl = child(b, trak, ["mdia", "minf", "stbl"]),
               let stsd = child(b, stbl, ["stsd"]) else { return nil }
-        let trackId = b[tkhd.body] == 1 ? u32(b, tkhd.body + 20) : u32(b, tkhd.body + 12)
+        let trackId = byte(b, tkhd.body) == 1 ? u32(b, tkhd.body + 20) : u32(b, tkhd.body + 12)
 
         // stsd entries start after fullbox header(4) + entry_count(4)
         var info: TrackInfo?
@@ -238,20 +249,23 @@ enum CENCDecryptor {
             let childStart = entry.body + (entry.type == "encv" ? 78 : 28)
             guard let sinf = boxes(b, childStart, entry.end).first(where: { $0.type == "sinf" }) else { continue }
             let sb = boxes(b, sinf.body, sinf.end)
-            guard let frma = sb.first(where: { $0.type == "frma" }) else { throw Failure.malformed("缺少 frma") }
+            guard let frma = sb.first(where: { $0.type == "frma" }), frma.body + 4 <= b.count else { throw Failure.malformed("缺少 frma") }
             if let schm = sb.first(where: { $0.type == "schm" }) {
                 let scheme = fourcc(b, schm.body + 4)
                 if scheme != "cenc" { throw Failure.unsupportedScheme(scheme) }
             }
             guard let schi = sb.first(where: { $0.type == "schi" }),
-                  let tenc = boxes(b, schi.body, schi.end).first(where: { $0.type == "tenc" }) else {
+                  let tenc = boxes(b, schi.body, schi.end).first(where: { $0.type == "tenc" }),
+                  tenc.body + 8 <= b.count else {
                 throw Failure.malformed("缺少 tenc")
             }
             let t = tenc.body + 4
-            let ivSize = Int(b[t + 3])
+            let ivSize = Int(byte(b, t + 3))
             var constIV: [UInt8] = []
-            if b[t + 2] == 1 && ivSize == 0 {
-                let n = Int(b[t + 20]); constIV = Array(b[(t + 21)..<(t + 21 + n)])
+            if byte(b, t + 2) == 1 && ivSize == 0 {
+                let n = Int(byte(b, t + 20))
+                guard t + 21 + n <= b.count else { throw Failure.malformed("tenc 常量 IV 越界") }
+                constIV = Array(b[(t + 21)..<(t + 21 + n)])
             }
             patches.append((entry.start + 4, Array(b[frma.body..<frma.body + 4])))
             patches.append((sinf.start + 4, Array("free".utf8)))
@@ -297,12 +311,14 @@ enum CENCDecryptor {
             return track
         }
         if let saiz = sb.first(where: { $0.type == "saiz" }), let saio = sb.first(where: { $0.type == "saio" }) {
-            var p = saiz.body + 4; if b[saiz.body + 3] & 1 != 0 { p += 8 }
-            let def = Int(b[p]); let n = Int(u32(b, p + 1))
-            auxSizes = (0..<n).map { def != 0 ? def : Int(b[p + 5 + $0]) }
-            var q = saio.body + 4; if b[saio.body + 3] & 1 != 0 { q += 8 }
-            let v1 = b[saio.body] == 1
+            var p = saiz.body + 4; if byte(b, saiz.body + 3) & 1 != 0 { p += 8 }
+            let def = Int(byte(b, p)); let n = Int(u32(b, p + 1))
+            guard def != 0 || p + 5 + n <= b.count else { throw Failure.malformed("saiz 越界") }
+            auxSizes = (0..<n).map { def != 0 ? def : Int(byte(b, p + 5 + $0)) }
+            var q = saio.body + 4; if byte(b, saio.body + 3) & 1 != 0 { q += 8 }
+            let v1 = byte(b, saio.body) == 1
             let on = Int(u32(b, q))
+            guard q + 4 + on * (v1 ? 8 : 4) <= b.count else { throw Failure.malformed("saio 越界") }
             let offs = (0..<on).map { v1 ? Int(u64(b, q + 4 + $0 * 8)) : Int(u32(b, q + 4 + $0 * 4)) }
             // either one contiguous run or one offset per chunk
             var idx = 0
@@ -337,11 +353,13 @@ enum CENCDecryptor {
 
     private static func auxJob(_ b: [UInt8], at p: Int, auxSize: Int, ivSize: Int, constIV: [UInt8],
                                sampleOffset: Int, sampleSize: Int) throws -> SampleJob {
-        guard p >= 0, p + max(auxSize, ivSize) <= b.count else { throw Failure.malformed("辅助信息越界") }
+        guard p >= 0, ivSize >= 0, p + max(auxSize, ivSize) <= b.count else { throw Failure.malformed("辅助信息越界") }
         let iv = ivSize > 0 ? Array(b[p..<p + ivSize]) : constIV
         var ranges: [(Int, Int)] = []
         if auxSize > ivSize {
+            guard p + ivSize + 2 <= b.count else { throw Failure.malformed("辅助子采样越界") }
             let n = Int(u16(b, p + ivSize)); var q = p + ivSize + 2; var cur = sampleOffset
+            guard q + n * 6 <= b.count else { throw Failure.malformed("辅助子采样表越界") }
             for _ in 0..<n {
                 let clear = Int(u16(b, q)); let enc = Int(u32(b, q + 2)); q += 6
                 cur += clear; ranges.append((cur, enc)); cur += enc
@@ -354,18 +372,22 @@ enum CENCDecryptor {
 
     private static func parseSenc(_ b: [UInt8], _ senc: Box, ivSize: Int, constIV: [UInt8],
                                   sampleOffsets: [Int], sampleSizes: [Int]) throws -> [SampleJob] {
-        let hasSub = b[senc.body + 3] & 0x2 != 0
+        guard senc.body + 8 <= senc.end, senc.end <= b.count else { throw Failure.malformed("senc 越界") }
+        let hasSub = byte(b, senc.body + 3) & 0x2 != 0
         let n = Int(u32(b, senc.body + 4))
         var p = senc.body + 8
         var jobs: [SampleJob] = []
         for i in 0..<min(n, sampleOffsets.count) {
+            guard ivSize >= 0, p + ivSize <= senc.end else { throw Failure.malformed("senc IV 越界") }
             let iv = ivSize > 0 ? Array(b[p..<p + ivSize]) : constIV
             p += ivSize
             var ranges: [(Int, Int)] = []
             if hasSub {
+                guard p + 2 <= senc.end else { throw Failure.malformed("senc 子采样越界") }
                 let sc = Int(u16(b, p)); p += 2; var cur = sampleOffsets[i]
+                guard p + sc * 6 <= senc.end else { throw Failure.malformed("senc 子采样表越界") }
                 for _ in 0..<sc {
-                    let clear = Int(u16(b, p)); let enc = Int(u32(b, p + 2)); p += 6
+                    let clear = Int(u16(b, qOffset(p))); let enc = Int(u32(b, p + 2)); p += 6
                     cur += clear; ranges.append((cur, enc)); cur += enc
                 }
             } else {
@@ -375,6 +397,8 @@ enum CENCDecryptor {
         }
         return jobs
     }
+
+    private static func qOffset(_ p: Int) -> Int { p }
 
     private static func parseTraf(_ b: [UInt8], moof: Box, traf: Box, tracks: [UInt32: TrackInfo],
                                   trex: [UInt32: UInt32], _ patches: inout [(Int, [UInt8])]) throws -> [SampleJob] {
@@ -415,11 +439,12 @@ enum CENCDecryptor {
                                  sampleOffsets: offsets, sampleSizes: sizes)
         }
         if let saiz = kids.first(where: { $0.type == "saiz" }), let saio = kids.first(where: { $0.type == "saio" }) {
-            var q = saiz.body + 4; if b[saiz.body + 3] & 1 != 0 { q += 8 }
-            let def = Int(b[q]); let n = Int(u32(b, q + 1))
-            let auxSizes = (0..<n).map { def != 0 ? def : Int(b[q + 5 + $0]) }
-            var r = saio.body + 4; if b[saio.body + 3] & 1 != 0 { r += 8 }
-            let off = b[saio.body] == 1 ? Int(u64(b, r + 4)) : Int(u32(b, r + 4))
+            var q = saiz.body + 4; if byte(b, saiz.body + 3) & 1 != 0 { q += 8 }
+            let def = Int(byte(b, q)); let n = Int(u32(b, q + 1))
+            guard def != 0 || q + 5 + n <= b.count else { throw Failure.malformed("traf saiz 越界") }
+            let auxSizes = (0..<n).map { def != 0 ? def : Int(byte(b, q + 5 + $0)) }
+            var r = saio.body + 4; if byte(b, saio.body + 3) & 1 != 0 { r += 8 }
+            let off = byte(b, saio.body) == 1 ? Int(u64(b, r + 4)) : Int(u32(b, r + 4))
             var a = moof.start + off
             var jobs: [SampleJob] = []
             for i in 0..<min(n, offsets.count) {

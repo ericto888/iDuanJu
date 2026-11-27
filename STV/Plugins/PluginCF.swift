@@ -114,6 +114,7 @@ import SwiftUI
         let ua = (try? await wv.evaluateJavaScript("navigator.userAgent")) as? String
         let cookies = await wv.configuration.websiteDataStore.httpCookieStore.allCookies()
         PluginLog.add(pluginID, "☁︎ 后台验证通过 · 同步 \(cookies.count) 个 cookie")
+        scheduleReap(pluginID)
         return (true, ua, cookies)
     }
 
@@ -124,7 +125,20 @@ import SwiftUI
             for _ in 0..<20 where wv.isLoading { try? await Task.sleep(for: .milliseconds(300)) }
         }
         let js = "const r = await fetch(u, {credentials: 'include'}); return await r.text();"
-        return try? await wv.callAsyncJavaScript(js, arguments: ["u": url.absoluteString], in: nil, contentWorld: .page) as? String
+        let text = try? await wv.callAsyncJavaScript(js, arguments: ["u": url.absoluteString], in: nil, contentWorld: .page) as? String
+        scheduleReap(pluginID)
+        return text
+    }
+
+    /// Reclaims idle hidden WebViews (50–150 MB WebContent process each) once verification + follow-up fetch settle.
+    private func scheduleReap(_ pluginID: String) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(45))
+            guard let self, self.inflight[pluginID] == nil, let wv = self.webs.removeValue(forKey: pluginID) else { return }
+            wv.stopLoading()
+            wv.navigationDelegate = nil
+            wv.removeFromSuperview()
+        }
     }
 
     /// Main frame may only go to allow-listed hosts; Cloudflare's challenge iframe is allowed as a sub-frame.

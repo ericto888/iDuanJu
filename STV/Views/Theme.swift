@@ -3,8 +3,8 @@ import UIKit
 
 /// App palette, light + dark (follows the system). Dark is the PlutoFish mini-app palette; light is its
 /// counterpart (white surfaces on a soft grey ground). Brand blue marks focus and playback progress.
-/// Screens that must stay dark (player, image viewer, manga reader) force `.preferredColorScheme(.dark)`,
-/// so the same tokens resolve to the dark values there.
+/// Screens that must stay dark (player, image viewer, manga reader) scope `.stvLocalColorScheme(.dark)` to their
+/// own subtree + leaf hosting controller, so underlying NavigationStack pages stay in the user's light/dark theme.
 enum STVTheme {
     static let bg = adaptive(light: (0.957, 0.961, 0.969), dark: (0.067, 0.075, 0.090))
     static let surface = adaptive(light: (1, 1, 1), dark: (0.110, 0.122, 0.145))
@@ -53,6 +53,10 @@ enum STVTheme {
                               rgba(light: (213, 133, 20, 0.06), dark: (96, 60, 50, 0.30))]
     static let ambientCool = [rgba(light: (40, 109, 239, 0.15), dark: (72, 104, 168, 0.34)),
                               rgba(light: (40, 109, 239, 0.05), dark: (40, 56, 92, 0.16))]
+    /// Warm coral-crimson for favorite hearts and destructive badges (distinct from playback accent blue).
+    static let favorite = rgba(light: (238, 56, 86, 1), dark: (255, 84, 112, 1))
+    static let favoriteSoft = rgba(light: (238, 56, 86, 0.11), dark: (255, 84, 112, 0.17))
+    static let favoriteLine = rgba(light: (238, 56, 86, 0.30), dark: (255, 84, 112, 0.38))
     static func rankColor(_ r: Int) -> Color { r == 1 ? gold : r == 2 ? silver : r == 3 ? bronze : tertiary }
 
     private static func adaptive(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
@@ -78,6 +82,64 @@ struct GlassBackground: ViewModifier {
 
 extension View {
     func stvGlass(_ radius: CGFloat = 20) -> some View { modifier(GlassBackground(radius: radius)) }
+
+    /// Scopes `scheme` strictly to this screen's SwiftUI subtree and its own leaf `UIViewController` (never
+    /// `UINavigationController`, `UITabBarController`, or `UIWindow`), preventing pushed dark pages from turning
+    /// underlying light-mode pages black during back-swipe / pop transitions.
+    func stvLocalColorScheme(_ scheme: ColorScheme) -> some View {
+        self.environment(\.colorScheme, scheme)
+            .background(LocalInterfaceStyleHost(style: scheme == .dark ? .dark : .light))
+    }
+}
+
+private struct LocalInterfaceStyleHost: UIViewRepresentable {
+    let style: UIUserInterfaceStyle
+    func makeUIView(context: Context) -> ProbeView {
+        let v = ProbeView()
+        v.targetStyle = style
+        v.isUserInteractionEnabled = false
+        v.isHidden = true
+        return v
+    }
+    func updateUIView(_ uiView: ProbeView, context: Context) {
+        if uiView.targetStyle != style {
+            uiView.targetStyle = style
+            uiView.applyStyle()
+        }
+    }
+
+    final class ProbeView: UIView {
+        var targetStyle: UIUserInterfaceStyle = .dark
+        private weak var appliedVC: UIViewController?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            applyStyle()
+        }
+
+        func applyStyle() {
+            guard let window else { return }
+            let root = window.rootViewController
+            var responder: UIResponder? = self
+            var leafVC: UIViewController?
+            while let cur = responder {
+                if let vc = cur as? UIViewController {
+                    if vc is UINavigationController || vc is UITabBarController || vc is UISplitViewController || vc === root {
+                        break
+                    }
+                    leafVC = vc
+                }
+                responder = cur.next
+            }
+            guard let vc = leafVC else { return }
+            appliedVC = vc
+            if vc.overrideUserInterfaceStyle != targetStyle {
+                vc.overrideUserInterfaceStyle = targetStyle
+                vc.setNeedsStatusBarAppearanceUpdate()
+                vc.navigationController?.setNeedsStatusBarAppearanceUpdate()
+            }
+        }
+    }
 }
 
 struct GlassChip: View {

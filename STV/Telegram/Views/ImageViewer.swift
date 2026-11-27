@@ -60,7 +60,7 @@ struct ImageViewer: View {
         .statusBarHidden()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tg.viewer")
-        .preferredColorScheme(.dark)
+        .stvLocalColorScheme(.dark)
     }
 }
 

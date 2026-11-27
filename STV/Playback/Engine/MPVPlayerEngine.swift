@@ -93,7 +93,12 @@ final class MPVMetalView: UIView {
     private var loadContinuation: CheckedContinuation<Void, Error>?
     private var lastURL: URL?
     private var refitTask: Task<Void, Never>?
-    private let videoQueue = DispatchQueue(label: "stv.mpv.video", qos: .userInitiated)
+    private static let videoQueueKey = DispatchSpecificKey<Void>()
+    private let videoQueue: DispatchQueue = {
+        let q = DispatchQueue(label: "stv.mpv.video", qos: .userInitiated)
+        q.setSpecific(key: MPVPlayerEngine.videoQueueKey, value: ())
+        return q
+    }()
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var suspendedForBackground = false
     private var savedVidForBackground = "auto"
@@ -161,7 +166,9 @@ final class MPVMetalView: UIView {
         shuttingDown = true
         refitTask?.cancel()
         lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        videoQueue.sync {}
+        if DispatchQueue.getSpecific(key: Self.videoQueueKey) == nil {
+            videoQueue.sync {}
+        }
         if let handle = mpv {
             mpv = nil
             // Keep MPVMetalView / CAMetalLayer (`wid` unretained pointer) alive until `mpv_terminate_destroy`

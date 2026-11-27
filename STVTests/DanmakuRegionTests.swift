@@ -91,4 +91,31 @@ final class DanmakuRegionTests: XCTestCase {
         let ordered = gate.orderedKeys(["builtin:hongguo", "builtin:ai", "builtin:novel", "site:plugin:com.test.new"])
         XCTAssertEqual(ordered, ["builtin:novel", "builtin:hongguo", "builtin:ai", "site:plugin:com.test.new"])
     }
+
+    func testDetailInlineEpisodePreviewRangeAnchorsAroundResume() {
+        // <= 12 episodes: show everything inline
+        XCTAssertEqual(EpisodeGroups.previewRange(total: 8, columns: 6, rows: 2, resume: nil, ascending: true), EpisodeRange(0, 7))
+        // Fresh 80-ep drama (ascending): first 2 rows (0...11)
+        XCTAssertEqual(EpisodeGroups.previewRange(total: 80, columns: 6, rows: 2, resume: nil, ascending: true), EpisodeRange(0, 11))
+        // Fresh 80-ep drama (descending): latest 12 episodes (68...79)
+        XCTAssertEqual(EpisodeGroups.previewRange(total: 80, columns: 6, rows: 2, resume: nil, ascending: false), EpisodeRange(68, 79))
+        // Mid-series resume at index 37 (Ep 38): snaps to row boundary 36...47
+        XCTAssertEqual(EpisodeGroups.previewRange(total: 80, columns: 6, rows: 2, resume: 37, ascending: true), EpisodeRange(36, 47))
+        // Near-end resume at index 78 (Ep 79): clamps to full 12-cell window 68...79
+        XCTAssertEqual(EpisodeGroups.previewRange(total: 80, columns: 6, rows: 2, resume: 78, ascending: true), EpisodeRange(68, 79))
+    }
+
+    func testTruncatedCENCHeadersDoNotCrash() {
+        // Malformed moov with truncated trak/tkhd/senc boxes must fail gracefully rather than trap on subscript.
+        var badMoov: [UInt8] = [
+            0, 0, 0, 24, 0x6D, 0x6F, 0x6F, 0x76, // moov (24B)
+            0, 0, 0, 16, 0x74, 0x72, 0x61, 0x6B, // trak (16B)
+            0, 0, 0, 8,  0x74, 0x6B, 0x68, 0x64, // empty tkhd (0-byte body!)
+        ]
+        XCTAssertNoThrow(try {
+            _ = try? CENCDecryptor.rangePlan(header: badMoov, keyHex: String(repeating: "00", count: 16))
+        }())
+        badMoov.append(contentsOf: [0, 0, 0, 12, 0x6D, 0x64, 0x61, 0x74, 1, 2, 3, 4])
+        XCTAssertEqual(CENCDecryptor.moovLocation(badMoov), .end(24))
+    }
 }

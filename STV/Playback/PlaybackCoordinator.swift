@@ -1318,6 +1318,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     private func prebuffered(_ s: HGStream, budget: Int, index i: Int) -> Source? {
         if let tok = LocalHLSProxy.token(of: s.url) {           // SupJav: already proxied
             LocalHLSProxy.shared.enablePrefetch(tok, budget: budget)
+            if let old = prefetchTokens[i], old != tok { LocalHLSProxy.shared.release(old) }
             prefetchTokens[i] = tok
             return nil
         }
@@ -1331,6 +1332,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         default: proxied = nil
         }
         guard let proxied, let u = URL(string: proxied), let tok = LocalHLSProxy.token(of: proxied) else { return nil }
+        if let old = prefetchTokens[i], old != tok { LocalHLSProxy.shared.release(old) }
         prefetchTokens[i] = tok
         return .direct(u)
     }
@@ -1359,6 +1361,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     private func tdStream(_ ref: TDFileRef, source: TDFileStreamSource, budget: Int, index i: Int) -> Source? {
         guard let proxied = LocalHLSProxy.shared.tdURL(ref, budget: budget, source: source),
               let u = URL(string: proxied), let tok = LocalHLSProxy.token(of: proxied) else { return nil }
+        if let old = prefetchTokens[i], old != tok { LocalHLSProxy.shared.release(old) }
         prefetchTokens[i] = tok
         return .direct(u)
     }

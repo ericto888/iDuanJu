@@ -292,8 +292,16 @@ struct MangaDetailView: View {
                 if let d = detail, !d.chapters.isEmpty { readButton(d) }
                 let on = store.isFavorite(item)
                 Button { withAnimation(DS.press) { store.toggleFavorite(detail?.item ?? item) } } label: {
-                    Image(systemName: on ? "heart.fill" : "heart").font(.system(size: 19, weight: .medium)).foregroundStyle(on ? STVTheme.accent : STVTheme.text)
-                        .compatSymbolReplace().frame(width: 50, height: 50).liquidGlass(Circle(), interactive: true).contentShape(Circle())
+                    Image(systemName: on ? "heart.fill" : "heart").font(.system(size: 19, weight: .semibold)).foregroundStyle(on ? STVTheme.favorite : STVTheme.text)
+                        .compatSymbolReplace().frame(width: 50, height: 50)
+                        .background {
+                            if on {
+                                Circle().fill(STVTheme.favoriteSoft).overlay(Circle().strokeBorder(STVTheme.favoriteLine, lineWidth: 1))
+                            } else {
+                                Circle().fill(Color.clear).liquidGlass(Circle(), interactive: true)
+                            }
+                        }
+                        .contentShape(Circle())
                 }
                 .buttonStyle(GlassPress()).accessibilityLabel(on ? "取消收藏" : "收藏").accessibilityIdentifier("manga.favorite")
             }
@@ -304,7 +312,7 @@ struct MangaDetailView: View {
     @ViewBuilder private func readButton(_ d: MangaDetail) -> some View {
         let p = store.progress[item.id], resume = p.flatMap { p in d.chapters.firstIndex { $0.chapterId == p.chapterId } }
         Button { reader = ReaderTarget(chapters: d.chapters, index: resume ?? 0, page: resume == nil ? 0 : p?.page ?? 0) } label: {
-            PillButtonLabel(title: resume == nil ? "开始阅读" : "续读 \((p?.chapterTitle ?? "").prefix(8))", icon: "book.fill", tone: .accent, height: 50, expand: true, glass: true)
+            PillButtonLabel(title: resume == nil ? "开始阅读" : "续读 \((p?.chapterTitle ?? "").prefix(8))", icon: "book.fill", tone: .ink, height: 50, expand: true)
         }
         .buttonStyle(GlassPress()).accessibilityIdentifier("manga.read")
     }
@@ -388,7 +396,7 @@ struct MangaReaderView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("manga.reader")
-        .preferredColorScheme(.dark)
+        .stvLocalColorScheme(.dark)
         .compatOnChange(of: vertical) { visible = [] }
     }
 
@@ -502,15 +510,18 @@ struct MangaReaderView: View {
     }
 
     private func load() async {
-        pages = []; error = nil; page = 0; visible = []
-        if let local = store.localPages(item, chapter) { pages = local }
+        pages = []; error = nil; visible = []
+        let loaded: [String]
+        if let local = store.localPages(item, chapter) { loaded = local }
         else {
-            do { pages = try await provider.pages(item, chapter) } catch { self.error = error.localizedDescription; return }
+            do { loaded = try await provider.pages(item, chapter) } catch { self.error = error.localizedDescription; return }
         }
         if startChapter == nil { startChapter = index }
-        page = index == startChapter ? min(startPage, max(0, pages.count - 1)) : 0
-        store.record(item, chapter, page: page, of: pages.count)
-        preload(from: page)
+        let initialPage = index == startChapter ? min(startPage, max(0, loaded.count - 1)) : 0
+        page = initialPage
+        pages = loaded
+        store.record(item, chapter, page: initialPage, of: loaded.count)
+        preload(from: initialPage)
     }
 
     /// Warm the image cache for the next few pages.

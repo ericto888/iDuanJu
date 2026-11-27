@@ -171,6 +171,8 @@ struct NovelReaderView: View {
     @StateObject private var speaker = NovelSpeaker()
     @State private var opened = Date()
     @State private var brightness = 0.5
+    @State private var savedBrightness: CGFloat?
+    @State private var brightnessTouched = false
     @State private var tocSearch = false
     @State private var query = ""
     @State private var hits: [(chapter: Int, offset: Int, snippet: String)] = []
@@ -249,7 +251,9 @@ struct NovelReaderView: View {
                 bottomGlass(geo)
             }
             .onAppear {
-                configure(PageBox(geo)); restore(); brightness = Double(screen?.brightness ?? 0.5)
+                configure(PageBox(geo)); restore()
+                if savedBrightness == nil { savedBrightness = screen?.brightness }
+                brightness = Double(screen?.brightness ?? 0.5)
                 if book.isWeb {
                     loader.prefetch(book, around: ref.chapter)
                     Task { _ = try? await loader.refreshToc(book) }
@@ -277,7 +281,7 @@ struct NovelReaderView: View {
         .dsOptions(isPresented: $choosingVoice, title: "音色", options: voices.map(\.identifier),
                    selection: Binding(get: { speaker.voiceID ?? voices.first { $0.language == "zh-CN" }?.identifier ?? "" }, set: { speaker.voiceID = $0 }),
                    label: { id in voices.first { $0.identifier == id }.map(NovelSpeaker.label) ?? "系统默认" })
-        .preferredColorScheme(prefs.theme == .night ? .dark : .light)
+        .stvLocalColorScheme(prefs.theme == .night ? .dark : .light)
         .compatOnChange(of: speaker.sentence) { s in if let s { follow(s) } }
         .compatOnChange(of: loader.revision) {
             guard book.isWeb else { return }
@@ -287,7 +291,13 @@ struct NovelReaderView: View {
             version += 1
         }
         .compatOnChange(of: ref.chapter) { c in if book.isWeb { loader.prefetch(book, around: c) } }
-        .onDisappear { relayoutTask?.cancel(); loader.cancelPrefetch(book); store.addReadTime(book, Date().timeIntervalSince(opened)); speaker.stop() }
+        .onDisappear {
+            relayoutTask?.cancel()
+            loader.cancelPrefetch(book)
+            store.addReadTime(book, Date().timeIntervalSince(opened))
+            speaker.stop()
+            if brightnessTouched, let orig = savedBrightness { screen?.brightness = orig }
+        }
         .task {
             // WeRead shows the hint briefly when a book opens.
             try? await Task.sleep(for: .seconds(3))
@@ -615,7 +625,7 @@ struct NovelReaderView: View {
     // 亮度 / 颜色
     private var lightPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
-            PillSlider(value: Binding(get: { brightness }, set: { brightness = $0; screen?.brightness = CGFloat($0) }),
+            PillSlider(value: Binding(get: { brightness }, set: { brightness = $0; brightnessTouched = true; screen?.brightness = CGFloat($0) }),
                 track: fill, thumb: pal.thumb, ink: pal.ink, leading: AnyView(Image(systemName: "sun.min").font(.system(size: 14)).foregroundStyle(pal.ink)),
                 trailing: AnyView(Image(systemName: "sun.max").font(.system(size: 16)).foregroundStyle(pal.ink)))
                 .accessibilityLabel("亮度")
