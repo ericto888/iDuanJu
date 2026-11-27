@@ -204,13 +204,42 @@ struct UnderlineTabLabel: View {
     var inkOff: Color = STVTheme.secondary
     let ns: Namespace.ID
     var body: some View {
+        let activeSize: CGFloat = small ? 18 : 24
+        let idleSize: CGFloat = small ? 16 : 17
+        let activeWeight: Font.Weight = small ? .bold : .heavy
+        let anchor: UnitPoint = small ? .bottom : .bottomLeading
+        let align: Alignment = small ? .bottom : .bottomLeading
+
+        // Hidden sizer drives neighbor spacing while the overlaid `.fixedSize()` layers morph smoothly
+        // via `scaleEffect`, preventing CoreText from clipping CJK characters (e.g. "AI" + "剧") mid-spring.
         Text(title)
-            .font(.system(size: on ? (small ? 18 : 24) : (small ? 16 : 17), weight: on ? (small ? .bold : .heavy) : .regular))
+            .font(.system(size: on ? activeSize : idleSize, weight: on ? activeWeight : .regular))
             .tracking(on && !small ? 0.2 : 0)
-            .foregroundStyle(on ? ink : inkOff)
-            .lineLimit(1).fixedSize()
+            .lineLimit(1)
+            .fixedSize()
+            .hidden()
+            .overlay(alignment: align) {
+                Text(title)
+                    .font(.system(size: activeSize, weight: activeWeight))
+                    .tracking(!small ? 0.2 : 0)
+                    .foregroundStyle(ink)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .scaleEffect(on ? 1 : idleSize / activeSize, anchor: anchor)
+                    .opacity(on ? 1 : 0)
+            }
+            .overlay(alignment: align) {
+                Text(title)
+                    .font(.system(size: idleSize, weight: .regular))
+                    .foregroundStyle(inkOff)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .scaleEffect(on ? activeSize / idleSize : 1, anchor: anchor)
+                    .opacity(on ? 0 : 1)
+            }
+            .accessibilityLabel(title)
             .padding(.bottom, small ? 0 : 6)
-            .overlay(alignment: small ? .bottom : .bottomLeading) {
+            .overlay(alignment: align) {
                 if on {
                     Capsule().fill(STVTheme.accent)
                         .frame(width: small ? 22 : 26, height: small ? 3 : 4)
