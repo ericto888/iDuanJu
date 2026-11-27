@@ -4,13 +4,12 @@ import UniformTypeIdentifiers
 /// ui-redesign 07: one sheet for every import path — local books, a source URL, the clipboard or a source file.
 /// Results stay in the sheet as a banner instead of an alert.
 struct NovelImportSheet: View {
-    var onLocalFiles: () -> Void = {}
+    var onLocalFiles: (() -> Void)? = nil
     /// 书源 page opens the sheet without the 书籍 group.
     var showBooks = true
     @ObservedObject private var store = LegadoSourceStore.shared
     @State private var url = ""
     @State private var busy = false
-    @State private var fileImport = false
     @State private var result: Result?
 
     struct Result: Equatable { var ok: Bool; var title: String; var detail: String? }
@@ -22,7 +21,9 @@ struct NovelImportSheet: View {
                     if showBooks {
                         label("书籍")
                         group {
-                            row("doc.text", "本地 TXT / EPUB", "可多选，自动识别编码和章节", id: "import.local", action: onLocalFiles)
+                            row("doc.text", "本地 TXT / EPUB", busy ? "正在导入…" : "可多选，自动识别编码和章节", id: "import.local") {
+                                if let onLocalFiles { onLocalFiles() } else { Task { await pickLocalBooks() } }
+                            }
                         }
                     }
                     label("书源（阅读 / Legado 格式）")
@@ -43,7 +44,9 @@ struct NovelImportSheet: View {
                     group {
                         row("doc.on.clipboard", "从剪贴板导入", "支持书源 JSON 或书源链接", id: "import.clipboard", action: importClipboard)
                         Hairline()
-                        row("folder", "从文件导入", "选择 .json 书源文件", id: "import.file") { fileImport = true }
+                        row("folder", "从文件导入", "选择 .json / .txt 书源文件", id: "import.file") {
+                            Task { await pickSourceFile() }
+                        }
                     }
                     .padding(.top, 10)
                     if let result { banner(result).padding(.top, 12).transition(.move(edge: .bottom).combined(with: .opacity)) }
@@ -56,12 +59,42 @@ struct NovelImportSheet: View {
             .compatScrollBounceBasedOnSize()
         }
         .dsSheetChrome(showBooks ? [.height(650), .large] : [.height(540), .large])
-        .fileImporter(isPresented: $fileImport, allowedContentTypes: [.json, .plainText, .text]) { r in
-            guard case .success(let u) = r else { return }
-            let scoped = u.startAccessingSecurityScopedResource()
-            defer { if scoped { u.stopAccessingSecurityScopedResource() } }
-            report { try store.add(LegadoSourceStore.parse(try Data(contentsOf: u))) }
+    }
+
+    private func pickLocalBooks() async {
+        guard !busy else { return }
+        let urls = await SystemFilePicker.pick(types: [.plainText, .text, .epub, .data, .item], multiple: true)
+        guard !urls.isEmpty else { return }
+        busy = true; result = nil
+        let errs = await NovelStore.shared.importFiles(urls, removeTemp: true)
+        busy = false
+        let okCount = max(0, urls.count - errs.count)
+        if errs.isEmpty {
+            result = Result(ok: true, title: "已导入 \(okCount) 本本地书籍", detail: "已加入书架，返回即可开始阅读")
+        } else if okCount > 0 {
+            result = Result(ok: false, title: "已导入 \(okCount) 本，失败 \(errs.count) 本", detail: errs.joined(separator: "\n"))
+        } else {
+            result = Result(ok: false, title: "书籍导入失败", detail: errs.joined(separator: "\n"))
         }
+    }
+
+    private func pickSourceFile() async {
+        guard !busy else { return }
+        let urls = await SystemFilePicker.pick(types: [.json, .plainText, .text, .data, .item])
+        guard let u = urls.first else { return }
+        busy = true; result = nil
+        do {
+            let parsed = try await Task.detached(priority: .userInitiated) {
+                let loaded = try SystemFilePicker.readAndClean(u, maxBytes: 32 << 20)
+                return try LegadoSourceStore.parse(loaded.data)
+            }.value
+            report { store.add(parsed) }
+        } catch CocoaError.fileReadTooLarge {
+            result = Result(ok: false, title: "导入失败", detail: "书源文件过大（超过 32 MB）")
+        } catch {
+            result = Result(ok: false, title: "导入失败", detail: (error as? LegadoSourceImportError)?.localizedDescription ?? "不是有效的 Legado 文本/媒体/RSS 源 JSON")
+        }
+        busy = false
     }
 
     private func label(_ t: String) -> some View {

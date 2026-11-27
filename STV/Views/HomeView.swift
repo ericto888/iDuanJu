@@ -39,7 +39,19 @@ enum HomeSource: Hashable, Identifiable {
     case manga
     /// 小说 (NovelHomeView: local TXT / EPUB bookshelf).
     case novel
-    var id: String { label }
+    /// Stable unique identity (never collides even when a plugin shares a display name with a built-in source).
+    var key: String {
+        switch self {
+        case .hongguo: "builtin:hongguo"
+        case .huangguo: "builtin:huangguo"
+        case .ai: "builtin:ai"
+        case .site(let s): "site:" + s.rawValue
+        case .channels: "builtin:channels"
+        case .manga: "builtin:manga"
+        case .novel: "builtin:novel"
+        }
+    }
+    var id: String { key }
     var label: String {
         switch self {
         case .hongguo: "红果"
@@ -60,13 +72,18 @@ enum HomeSource: Hashable, Identifiable {
         case .channels, .manga, .novel: []
         }
     }
-    @MainActor static var all: [HomeSource] {
+    @MainActor static var defaultAll: [HomeSource] {
         let g = SourceGate.shared
         let nonTVBoxSites = g.visibleSites.filter { src in
             if let k = src.cmsKey, let s = CMSStore.site(k), s.origin == "TVBox" || s.origin.hasPrefix("TVBox") { return false }
             return true
         }
         return [.hongguo] + (g.showHuangguo ? [.huangguo] : []) + [.ai] + nonTVBoxSites.map { .site($0) } + [.channels, .manga, .novel]
+    }
+    @MainActor static var all: [HomeSource] {
+        let raw = defaultAll
+        let byKey = Dictionary(uniqueKeysWithValues: raw.map { ($0.key, $0) })
+        return SourceGate.shared.orderedKeys(raw.map(\.key)).compactMap { byKey[$0] }
     }
 }
 
@@ -197,14 +214,21 @@ extension View {
 /// 分类条联动（选中项自动滚到居中、指示条跟随）。每页：二级榜单选择 → 竖海报 hero → 真实榜单分段。
 /// 横滑冲突：hero 轮播区域内的横滑归轮播；其它区域横滑翻来源页；首页是根页面，没有系统侧滑返回。
 struct HomeView: View {
+    @ObservedObject private var gate = SourceGate.shared
+    @ObservedObject private var pluginStore = PluginStore.shared
+    @ObservedObject private var cmsStore = CMSStore.shared
     @State private var source: HomeSource
     @State private var subs: [HomeSource: HomeTab]
     /// Cached: building it walks every site, plugin and 采集站, and it used to run several times per body.
     @State private var sources: [HomeSource] = HomeSource.all
+    /// Lazy page mounting: only build the active page, its immediate ±1 swipe neighbors, and previously visited pages
+    /// so jumping across tabs or installing a new plugin never instantiates all intermediate pages on the main thread.
+    @State private var visited: Set<HomeSource>
     @State private var scrolled: [HomeSource: Bool] = [:]
     @State private var headerSpan: VSpan?
     @State private var safeSpan: VSpan?
     @State private var showChannels = false
+    @State private var reorderingSources = false
     private var rest: VSpan? {
         guard let h = headerSpan, let s = safeSpan else { return nil }
         return VSpan(top: h.bottom, bottom: s.bottom)
@@ -213,11 +237,14 @@ struct HomeView: View {
     /// Home-indicator part of the bottom safe area; the rest is the floating tab bar (none next to the iPad rail).
     private var indicator: CGFloat { bottomInset >= GlassTabBar.clearance ? bottomInset - GlassTabBar.clearance : bottomInset }
     private var pinned: Bool { scrolled[source] ?? false }
+    private var sourceRevisionToken: String {
+        "\(gate.revision)-\(pluginStore.revision)-\(cmsStore.revision)"
+    }
 
     init() {
         let e = ProcessInfo.processInfo.environment["STV_HOME_TAB"] ?? ""
-        var src = HomeSource.hongguo, sub: [HomeSource: HomeTab] = [:]
-        if e == "actorRank" { sub[.hongguo] = .actorRank }
+        var src = HomeSource.all.first ?? .hongguo, sub: [HomeSource: HomeTab] = [:]
+        if e == "actorRank" { src = .hongguo; sub[.hongguo] = .actorRank }
         #if DEBUG
         if let s = DramaSource(rawValue: e), s.isLongVideo { src = .site(s) }
         if e == "huangguo" { src = .huangguo }
@@ -228,15 +255,31 @@ struct HomeView: View {
         #endif
         _source = State(initialValue: src)
         _subs = State(initialValue: sub)
+        _visited = State(initialValue: [src])
+    }
+
+    private func shouldMount(_ s: HomeSource) -> Bool {
+        if s == source || visited.contains(s) { return true }
+        guard let cur = sources.firstIndex(of: source), let idx = sources.firstIndex(of: s) else { return false }
+        return abs(cur - idx) <= 1
     }
 
     var body: some View {
         TabView(selection: $source) {
             ForEach(sources) { s in
                 // `Binding(get:)` reads eagerly, and 频道 / 漫画 / 小说 have no sub boards.
-                HomePage(source: s, tab: Binding(get: { subs[s] ?? s.subs.first ?? .hongguo(.all) }, set: { subs[s] = $0 }))
-                    .environment(\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: bottomInset - indicator, onScrolled: { v in if scrolled[s] != v { scrolled[s] = v } }))
-                    .tag(s)
+                Group {
+                    if shouldMount(s) {
+                        HomePage(source: s, tab: Binding(get: { subs[s] ?? s.subs.first ?? .hongguo(.all) }, set: { subs[s] = $0 }))
+                    } else {
+                        Color.clear
+                    }
+                }
+                .environment(\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: bottomInset - indicator, onScrolled: { v in
+                    guard s == source else { return }
+                    if scrolled[s] != v { scrolled[s] = v }
+                }))
+                .tag(s)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
@@ -254,8 +297,11 @@ struct HomeView: View {
         .overlay(alignment: .top) { header }
         .dsAmbient(visible: !pinned)
         .toolbar(.hidden, for: .navigationBar)
-        .sheet(isPresented: $showChannels) { channelPanel }
-        .onReceive(Self.sourceChanges) { _ in refreshSources() }
+        .sheet(isPresented: $showChannels, onDismiss: { reorderingSources = false }) { channelPanel }
+        .compatOnChange(of: sourceRevisionToken) { _ in refreshSources() }
+        .compatOnChange(of: source) { next in
+            if !visited.contains(next) { visited.insert(next) }
+        }
         .task {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             await NovelStore.prewarm()
@@ -264,14 +310,11 @@ struct HomeView: View {
         .onAppear { refreshSources() }
     }
 
-    @MainActor private static let sourceChanges = SourceGate.shared.objectWillChange
-        .merge(with: CMSStore.shared.objectWillChange, PluginStore.shared.objectWillChange)
-        .debounce(for: .milliseconds(60), scheduler: DispatchQueue.main)
-
     private func refreshSources() {
         let now = HomeSource.all
         if now != sources { sources = now }
-        if !now.contains(source) { source = .hongguo }
+        if !now.contains(source), let first = now.first { source = first }
+        if !visited.contains(source) { visited.insert(source) }
     }
 
     /// Use the currently visible home source as the initial search provider.
@@ -323,26 +366,89 @@ struct HomeView: View {
     }
 
     private var channelPanel: some View {
-        DSSheet("频道", subtitle: "选择来源和榜单") {
+        DSSheet("频道", subtitle: reorderingSources ? "调整首页顶部来源顺序" : "选择来源、排序与榜单") {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    ForEach(sources.filter { !$0.subs.isEmpty }) { s in
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text(s.label).dsFont(13, .semibold, relativeTo: .footnote).foregroundStyle(STVTheme.secondary)
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], spacing: 10) {
-                                ForEach(s.subs, id: \.self) { t in
-                                    let on = s == source && (subs[s] ?? s.subs[0]) == t
-                                    Button { subs[s] = t; source = s; showChannels = false } label: {
-                                        Text(t.subLabel).dsFont(14, on ? .semibold : .regular, relativeTo: .subheadline)
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 12) {
+                            Text("首页来源").dsFont(13, .semibold, relativeTo: .footnote).foregroundStyle(STVTheme.secondary)
+                            Spacer(minLength: 0)
+                            if reorderingSources && !gate.homeOrder.isEmpty {
+                                Button {
+                                    DS.tick()
+                                    withAnimation(DS.select) {
+                                        gate.resetHomeOrder()
+                                        refreshSources()
+                                    }
+                                } label: {
+                                    Text("恢复默认").dsFont(13, .medium, relativeTo: .footnote).foregroundStyle(STVTheme.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("home.order.reset")
+                            }
+                            if sources.count > 1 {
+                                Button {
+                                    DS.tick()
+                                    withAnimation(DS.select) { reorderingSources.toggle() }
+                                } label: {
+                                    Text(reorderingSources ? "完成" : "排序")
+                                        .dsFont(13, .semibold, relativeTo: .footnote)
+                                        .foregroundStyle(STVTheme.accent)
+                                        .padding(.horizontal, 12).padding(.vertical, 5)
+                                        .background(STVTheme.accentSoft, in: Capsule())
+                                }
+                                .buttonStyle(PressScale())
+                                .accessibilityIdentifier("home.order.toggle")
+                            }
+                        }
+                        if reorderingSources {
+                            HomeSourceOrderRows(sources: sources) { updated in
+                                sources = updated
+                                gate.setHomeOrder(updated.map(\.key))
+                            }
+                        } else {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 10)], spacing: 10) {
+                                ForEach(sources) { s in
+                                    let on = s == source
+                                    Button {
+                                        DS.tick()
+                                        source = s
+                                        showChannels = false
+                                    } label: {
+                                        Text(s.label).dsFont(14, on ? .semibold : .regular, relativeTo: .subheadline)
                                             .foregroundStyle(on ? STVTheme.accent : STVTheme.text)
                                             .lineLimit(1).minimumScaleFactor(0.8)
-                                            .frame(maxWidth: .infinity, minHeight: 44)
+                                            .frame(maxWidth: .infinity, minHeight: 42)
                                             .background(on ? STVTheme.accentSoft : STVTheme.glass,
                                                         in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                                             .contentShape(RoundedRectangle(cornerRadius: 14))
                                     }
                                     .buttonStyle(PressScale()).accessibilityAddTraits(on ? .isSelected : [])
-                                    .accessibilityIdentifier("panel.\(s.label).\(t.subLabel)")
+                                    .accessibilityIdentifier("panel.source.\(s.label)")
+                                }
+                            }
+                        }
+                    }
+
+                    if !reorderingSources {
+                        ForEach(sources.filter { !$0.subs.isEmpty }) { s in
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text(s.label + " · 板块").dsFont(13, .semibold, relativeTo: .footnote).foregroundStyle(STVTheme.secondary)
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], spacing: 10) {
+                                    ForEach(s.subs, id: \.self) { t in
+                                        let on = s == source && (subs[s] ?? s.subs[0]) == t
+                                        Button { subs[s] = t; source = s; showChannels = false } label: {
+                                            Text(t.subLabel).dsFont(14, on ? .semibold : .regular, relativeTo: .subheadline)
+                                                .foregroundStyle(on ? STVTheme.accent : STVTheme.text)
+                                                .lineLimit(1).minimumScaleFactor(0.8)
+                                                .frame(maxWidth: .infinity, minHeight: 44)
+                                                .background(on ? STVTheme.accentSoft : STVTheme.glass,
+                                                            in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                                .contentShape(RoundedRectangle(cornerRadius: 14))
+                                        }
+                                        .buttonStyle(PressScale()).accessibilityAddTraits(on ? .isSelected : [])
+                                        .accessibilityIdentifier("panel.\(s.label).\(t.subLabel)")
+                                    }
                                 }
                             }
                         }
@@ -353,7 +459,77 @@ struct HomeView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home.channelPanel")
-        .dsSheetChrome()
+        .dsSheetChrome([.medium, .large])
+    }
+}
+
+/// Shared inline reorder list for Home sources (supports 置顶 / 上移 / 下移, used in both Home sheet & 片源管理).
+struct HomeSourceOrderRows: View {
+    let sources: [HomeSource]
+    let onChange: ([HomeSource]) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(sources.enumerated()), id: \.element.id) { idx, item in
+                HStack(spacing: 12) {
+                    Text("\(idx + 1)")
+                        .dsFont(12, .bold, relativeTo: .caption)
+                        .foregroundStyle(idx == 0 ? STVTheme.accent : STVTheme.tertiary)
+                        .frame(width: 22, alignment: .center)
+                    Text(item.label)
+                        .dsFont(15, .medium, relativeTo: .body)
+                        .foregroundStyle(STVTheme.text)
+                        .lineLimit(1)
+                    if case .site(let s) = item {
+                        DSTag(text: s.pluginID != nil ? "插件" : (s.cmsKey != nil ? "采集站" : "内置"))
+                    }
+                    Spacer(minLength: 0)
+                    Button { moveTop(idx) } label: {
+                        Image(systemName: "arrow.up.to.line")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(idx > 0 ? STVTheme.secondary : STVTheme.tertiary.opacity(0.35))
+                            .frame(width: 34, height: 34).contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressScale()).disabled(idx == 0).accessibilityLabel("置顶 \(item.label)")
+                    Button { move(idx, by: -1) } label: {
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(idx > 0 ? STVTheme.text : STVTheme.tertiary.opacity(0.35))
+                            .frame(width: 34, height: 34).contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressScale()).disabled(idx == 0).accessibilityLabel("上移 \(item.label)")
+                    Button { move(idx, by: 1) } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(idx < sources.count - 1 ? STVTheme.text : STVTheme.tertiary.opacity(0.35))
+                            .frame(width: 34, height: 34).contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressScale()).disabled(idx >= sources.count - 1).accessibilityLabel("下移 \(item.label)")
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 48)
+                if idx < sources.count - 1 { Hairline().padding(.leading, 48) }
+            }
+        }
+        .background(STVTheme.glass, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func moveTop(_ idx: Int) {
+        guard idx > 0, sources.indices.contains(idx) else { return }
+        DS.tick()
+        var copy = sources
+        let picked = copy.remove(at: idx)
+        copy.insert(picked, at: 0)
+        withAnimation(DS.select) { onChange(copy) }
+    }
+
+    private func move(_ idx: Int, by delta: Int) {
+        let target = idx + delta
+        guard sources.indices.contains(idx), sources.indices.contains(target) else { return }
+        DS.tick()
+        var copy = sources
+        copy.swapAt(idx, target)
+        withAnimation(DS.select) { onChange(copy) }
     }
 }
 
@@ -721,7 +897,9 @@ struct HomeChannelBar<T: Hashable>: View {
                     HStack(alignment: .lastTextBaseline, spacing: 22) {
                         ForEach(items, id: \.self) { it in
                             let on = it == selection
-                            Button { if !on { DS.tick(); withAnimation(DS.select) { selection = it } } } label: {
+                            // Do NOT wrap `selection = it` in `withAnimation`: `TabView(.page)` (`UIPageViewController`)
+                            // otherwise sweeps & synchronously instantiates every intermediate page on the main thread.
+                            Button { if !on { DS.tick(); selection = it } } label: {
                                 UnderlineTabLabel(title: label(it), on: on, ink: ink, inkOff: STVTheme.secondary, ns: ns)
                                     .frame(minHeight: 40, alignment: .bottom)
                             }.buttonStyle(.plain).id(it).accessibilityIdentifier("home.channel.\(label(it))")
@@ -729,11 +907,14 @@ struct HomeChannelBar<T: Hashable>: View {
                         }
                         Color.clear.frame(width: 12, height: 1)
                     }
+                    .animation(DS.select, value: selection)
+                    .animation(DS.select, value: items)
                 }
                 .accessibilityIdentifier("home.channels")
                 .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.88),
                                              .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
                 .compatOnChange(of: selection) { it in withAnimation(DS.select) { proxy.scrollTo(it, anchor: .center) } }
+                .compatOnChange(of: items) { _ in proxy.scrollTo(selection, anchor: .center) }
                 .onAppear { proxy.scrollTo(selection, anchor: .center) }
             }
             Button(action: onExpand) {

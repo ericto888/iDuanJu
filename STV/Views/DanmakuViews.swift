@@ -302,6 +302,7 @@ struct DanmakuOverlay: View {
     var source: String? = nil
     /// Plugin that owns this series; its `danmaku` export is asked for comments.
     var pluginID: String? = nil
+    var pluginContext: PluginDanmaku.Context = .init()
     var landscape = false
     /// Screen-space y of lane 0 (the overlay itself covers the whole screen).
     var laneTop: CGFloat = 96
@@ -379,11 +380,15 @@ struct DanmakuOverlay: View {
         let r: HGDanmakuResult
         if let source {
             settings.status = "弹幕加载中…"
-            r = await DanmakuFile.fetch(source, lan: co.streamLan)
+            if let pluginID, !pluginID.isEmpty, source.hasPrefix("idj-danmaku://") {
+                r = await PluginDanmaku.fetchPlayPayload(token: source, pluginID: pluginID)
+            } else {
+                r = await DanmakuFile.fetch(source, lan: co.streamLan)
+            }
         } else if let pluginID, !pluginID.isEmpty {
             guard !vid.isEmpty, !seriesId.isEmpty else { return }
             settings.status = "弹幕加载中…"
-            r = await PluginDanmaku.fetch(pluginID: pluginID, seriesId: seriesId, vid: vid)
+            r = await PluginDanmaku.fetch(pluginID: pluginID, seriesId: seriesId, vid: vid, context: pluginContext)
         } else {
             guard !vid.isEmpty, seriesId.allSatisfy(\.isNumber) else { return }
             settings.status = "弹幕加载中…"
@@ -482,38 +487,318 @@ struct DanmakuOverlay: View {
     }
 }
 
-/// Comments from an idj1 plugin's `danmaku` export (红果 official comments live behind it).
+/// Comments from an idj1 third-party or official plugin:
+/// 1. `export default { danmaku(arg) }` (matching the Hongguo plugin contract `{ items: [{ time, text, color?, mode?, likes? }], truncated? }`,
+///    plus Bilibili/DanDanPlay/DPlayer arrays, `{ xml: "..." }` strings, or `{ url, headers? }` delegated files).
+/// 2. `play()` returning `danmaku` as a URL string, `{ url, headers? }`, `{ xml }`, `{ items: [...] }`, or inline array.
 enum PluginDanmaku {
-    static func fetch(pluginID: String, seriesId: String, vid: String) async -> HGDanmakuResult {
-        guard PluginStore.snapshot(pluginID)?.manifest.capabilities.contains("danmaku") == true else {
+    static let maxItems = 12_000
+
+    struct Context: Equatable, Sendable {
+        var seriesTitle: String = ""
+        var episodeTitle: String = ""
+        var epNumber: Int = 1
+        var line: String = ""
+        var streamURL: String = ""
+    }
+
+    private enum PlayPayload: Sendable {
+        case parsed(HGDanmakuResult)
+        case remote(url: String, headers: [String: String])
+    }
+
+    nonisolated(unsafe) private static var playPayloads: [String: PlayPayload] = [:]
+    nonisolated private static let payloadLock = NSLock()
+
+    private static func cacheKey(_ pluginID: String, _ seriesId: String, _ vid: String) -> String {
+        "\(pluginID)|\(seriesId)|\(vid)"
+    }
+
+    nonisolated static func isCapable(pluginID: String, seriesId: String = "", vid: String = "") -> Bool {
+        if PluginRuntime.supportsDanmaku(pluginID) { return true }
+        if !seriesId.isEmpty && !vid.isEmpty {
+            payloadLock.lock()
+            let hasCached = playPayloads[cacheKey(pluginID, seriesId, vid)] != nil
+            payloadLock.unlock()
+            if hasCached { return true }
+        }
+        return false
+    }
+
+    /// Captures `play().danmaku` in any supported third-party shape and returns either a plain URL or an `idj-danmaku://` token.
+    nonisolated static func capturePlayDanmaku(
+        raw: Any?,
+        pluginID: String,
+        seriesId: String,
+        vid: String,
+        rec: InstalledPlugin
+    ) -> String? {
+        guard let raw, !(raw is NSNull) else { return nil }
+        let key = cacheKey(pluginID, seriesId, vid)
+        let token = "idj-danmaku://\(key)"
+        let policy = DomainPolicy(rec.manifest.httpDomains + rec.manifest.mediaDomains + rec.extraDomains)
+        let defaultUA = rec.learnedUA ?? PluginHostContext.defaultUA
+
+        if let s = raw as? String {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            if trimmed.hasPrefix("https://") || trimmed.hasPrefix("http://") {
+                guard let u = checkedPluginURL(trimmed, policy: policy) else {
+                    PluginLog.add(pluginID, "✕ 丢弃未授权的弹幕地址 \(trimmed.prefix(60))")
+                    return nil
+                }
+                storePayload(key, .remote(url: u, headers: ["User-Agent": defaultUA]))
+                return token
+            }
+            let parsed = parseAnyPayload(trimmed)
+            guard !parsed.items.isEmpty else { return nil }
+            storePayload(key, .parsed(parsed))
+            return token
+        }
+
+        if let dict = raw as? [String: Any] {
+            let urlStr = PluginOut.url(dict["url"])
+            if !urlStr.isEmpty {
+                guard let u = checkedPluginURL(urlStr, policy: policy) else {
+                    PluginLog.add(pluginID, "✕ 丢弃未授权的弹幕地址 \(urlStr.prefix(60))")
+                    return nil
+                }
+                var h = PluginOut.headers(dict["headers"])
+                if h["User-Agent"] == nil { h["User-Agent"] = defaultUA }
+                storePayload(key, .remote(url: u, headers: h))
+                return token
+            }
+        }
+
+        let parsed = parseAnyPayload(raw)
+        guard !parsed.items.isEmpty else { return nil }
+        storePayload(key, .parsed(parsed))
+        return token
+    }
+
+    private nonisolated static func storePayload(_ key: String, _ p: PlayPayload) {
+        payloadLock.lock()
+        if playPayloads.count > 64 { playPayloads.removeAll() }
+        playPayloads[key] = p
+        payloadLock.unlock()
+    }
+
+    static func fetchPlayPayload(token: String, pluginID: String) async -> HGDanmakuResult {
+        let key = String(token.dropFirst("idj-danmaku://".count))
+        payloadLock.lock()
+        let entry = playPayloads[key]
+        payloadLock.unlock()
+        guard let entry else { return HGDanmakuResult(items: [], error: "弹幕缓存已过期") }
+        switch entry {
+        case .parsed(let res):
+            return res
+        case .remote(let url, let headers):
+            return await fetchPluginURL(pluginID: pluginID, urlString: url, headers: headers)
+        }
+    }
+
+    static func fetch(pluginID: String, seriesId: String, vid: String, context: Context = .init()) async -> HGDanmakuResult {
+        let inst = try? await PluginRuntime.instance(pluginID)
+        let supported = PluginRuntime.supportsDanmaku(pluginID) || inst?.exported.contains("danmaku") == true
+        guard supported else {
             return HGDanmakuResult(items: [], error: "当前片源不支持弹幕")
         }
+        let args: [String: Any] = [
+            "episodeKey": vid,
+            "episodeId": vid,
+            "seriesId": seriesId,
+            "id": seriesId,
+            "line": context.line,
+            "title": context.seriesTitle,
+            "episodeName": context.episodeTitle,
+            "ep": context.epNumber,
+            "url": context.streamURL,
+            "from": 0,
+            "to": 0,
+        ]
         do {
-            let o = try await PluginRuntime.call(pluginID, "danmaku", ["episodeKey": vid, "seriesId": seriesId, "from": 0, "to": 0]) as? [String: Any] ?? [:]
-            var items: [HGDanmaku] = []
-            var seen = Set<String>()
-            for row in ((o["items"] as? [[String: Any]]) ?? []).prefix(3000) {
-                let text = PluginOut.s(row["text"], max: 200)
-                guard !text.isEmpty, text.count <= 200 else { continue }
-                let time: Double
-                if let n = row["time"] as? NSNumber { time = n.doubleValue }
-                else if let s = row["time"] as? String, let d = Double(s) { time = d }
-                else { continue }
-                guard time.isFinite, time >= 0, time <= 604_800 else { continue }
-                let color = PluginOut.s(row["color"], max: 7)
-                let hex = color.range(of: "^#[0-9A-Fa-f]{6}$", options: .regularExpression) != nil ? color.uppercased() : "#FFFFFF"
-                let modeName = PluginOut.s(row["mode"], max: 10).lowercased()
-                let mode: HGDanmaku.Mode = modeName == "top" ? .top : (modeName == "bottom" ? .bottom : .scroll)
-                let likes = max(0, (row["likes"] as? NSNumber)?.intValue ?? 0)
-                let key = String(format: "%.3f|", time) + text
-                guard seen.insert(key).inserted else { continue }
-                items.append(HGDanmaku(time: time, text: text, likes: likes, color: hex, mode: mode))
+            let raw = try await PluginRuntime.call(pluginID, "danmaku", args, timeout: 27, countWatchdog: false)
+            if let s = raw as? String {
+                let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                if t.hasPrefix("https://") || t.hasPrefix("http://") {
+                    guard let rec = PluginStore.snapshot(pluginID) else { return HGDanmakuResult(items: [], error: "插件未安装") }
+                    let policy = DomainPolicy(rec.manifest.httpDomains + rec.manifest.mediaDomains + rec.extraDomains)
+                    guard let u = checkedPluginURL(t, policy: policy) else {
+                        return HGDanmakuResult(items: [], error: "弹幕地址未在插件 permissions.http / media 白名单中")
+                    }
+                    return await fetchPluginURL(pluginID: pluginID, urlString: u, headers: ["User-Agent": rec.learnedUA ?? PluginHostContext.defaultUA])
+                }
+                return parseAnyPayload(t)
             }
-            items.sort { $0.time < $1.time }
-            return HGDanmakuResult(items: items, truncated: o["truncated"] as? Bool ?? false)
+            if let dict = raw as? [String: Any] {
+                let uStr = PluginOut.url(dict["url"])
+                if !uStr.isEmpty, dict["items"] == nil {
+                    guard let rec = PluginStore.snapshot(pluginID) else { return HGDanmakuResult(items: [], error: "插件未安装") }
+                    let policy = DomainPolicy(rec.manifest.httpDomains + rec.manifest.mediaDomains + rec.extraDomains)
+                    guard let u = checkedPluginURL(uStr, policy: policy) else {
+                        return HGDanmakuResult(items: [], error: "弹幕地址未在插件 permissions.http / media 白名单中")
+                    }
+                    var h = PluginOut.headers(dict["headers"])
+                    if h["User-Agent"] == nil { h["User-Agent"] = rec.learnedUA ?? PluginHostContext.defaultUA }
+                    return await fetchPluginURL(pluginID: pluginID, urlString: u, headers: h)
+                }
+            }
+            return parseAnyPayload(raw)
         } catch {
             let message = (error as? PluginError)?.errorDescription ?? error.localizedDescription
             return HGDanmakuResult(items: [], error: "弹幕加载失败：\(message)")
+        }
+    }
+
+    private nonisolated static func checkedPluginURL(_ raw: String, policy: DomainPolicy) -> String? {
+        guard let url = URL(string: raw),
+              url.scheme == "https",
+              let host = url.host,
+              url.user == nil, url.password == nil,
+              url.port == nil || url.port == 443,
+              !NetGuard.isIPLiteral(host),
+              policy.allows(host) else { return nil }
+        return raw
+    }
+
+    private static func fetchPluginURL(pluginID: String, urlString: String, headers: [String: String]) async -> HGDanmakuResult {
+        guard let url = URL(string: urlString), let host = url.host else {
+            return HGDanmakuResult(items: [], error: "弹幕地址无效")
+        }
+        let blocked = await Task.detached { NetGuard.resolvesToBlocked(host) }.value
+        if blocked { return HGDanmakuResult(items: [], error: "弹幕地址解析到内网，已拦截") }
+        do {
+            var req = URLRequest(url: url, timeoutInterval: 15)
+            for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+            let cookies = PluginRuntime.jar(pluginID).cookies(for: url)
+            for (k, v) in HTTPCookie.requestHeaderFields(with: cookies) where req.value(forHTTPHeaderField: k) == nil {
+                req.setValue(v, forHTTPHeaderField: k)
+            }
+            let data = try await SegmentFeed.fetch(req, limit: 16 << 20, lan: false).data
+            let all = await Task.detached(priority: .userInitiated) { DanmakuFile.parse(data) }.value
+            return HGDanmakuResult(items: Array(all.prefix(maxItems)), truncated: all.count > maxItems)
+        } catch {
+            return HGDanmakuResult(items: [], error: "弹幕加载失败：\(error.localizedDescription)")
+        }
+    }
+
+    /// Parses Hongguo-style `{ items: [{ time, text, color?, mode?, likes? }], truncated? }`,
+    /// XML/JSON strings `{ xml }` / `{ raw }`, or DPlayer / DanDanPlay / Bilibili arrays.
+    nonisolated static func parseAnyPayload(_ raw: Any) -> HGDanmakuResult {
+        if let str = raw as? String {
+            let all = DanmakuFile.parse(Data(str.utf8))
+            return HGDanmakuResult(items: Array(all.prefix(maxItems)), truncated: all.count > maxItems)
+        }
+        if let dict = raw as? [String: Any], let xml = (dict["xml"] ?? dict["raw"]) as? String, !xml.isEmpty {
+            let all = DanmakuFile.parse(Data(xml.utf8))
+            return HGDanmakuResult(items: Array(all.prefix(maxItems)), truncated: all.count > maxItems)
+        }
+        let dict = raw as? [String: Any]
+        let listAny: [Any] = {
+            if let arr = raw as? [Any] { return arr }
+            if let d = dict {
+                for k in ["items", "danmaku", "danmuku", "data", "comments"] {
+                    if let arr = d[k] as? [Any] { return arr }
+                }
+            }
+            return []
+        }()
+        var items: [HGDanmaku] = []
+        var seen = Set<String>()
+        for entry in listAny.prefix(maxItems * 2) {
+            guard let parsed = parseItem(entry) else { continue }
+            let dedup = String(format: "%.3f|", parsed.time) + parsed.text
+            guard seen.insert(dedup).inserted else { continue }
+            items.append(parsed)
+            if items.count >= maxItems { break }
+        }
+        items.sort { $0.time < $1.time }
+        let truncated = (dict?["truncated"] as? Bool ?? false) || listAny.count > maxItems
+        return HGDanmakuResult(items: items, truncated: truncated)
+    }
+
+    private nonisolated static func parseItem(_ entry: Any) -> HGDanmaku? {
+        // DPlayer / ArtPlayer tuple: [time, mode, color, uid, text]
+        if let arr = entry as? [Any], arr.count >= 5 {
+            guard let t = doubleVal(arr[0]), t.isFinite, t >= 0, t <= 604_800 else { return nil }
+            let txt = PluginOut.s(arr[4], max: 200)
+            guard !txt.isEmpty else { return nil }
+            return HGDanmaku(time: t, text: txt, likes: 0, color: normalizeColor(arr[2]), mode: normalizeMode(arr[1]))
+        }
+        guard let row = entry as? [String: Any] else { return nil }
+        // Bilibili (`time,mode,size,color,ts,…`) or DanDanPlay (`time,mode,color,uid`)
+        if let p = row["p"] as? String {
+            let rawText = PluginOut.s(row["m"] ?? row["text"] ?? row["c"], max: 200)
+            guard !rawText.isEmpty else { return nil }
+            let fields = p.split(separator: ",", omittingEmptySubsequences: false)
+            guard let first = fields.first, let t = Double(first), t.isFinite, t >= 0, t <= 604_800 else { return nil }
+            let modeVal: Any? = fields.count > 1 ? String(fields[1]) : nil
+            let colorInt: Int? = {
+                if fields.count >= 5 { return Int(fields[3]) }
+                if fields.count == 4, let f2 = Int(fields[2]), f2 <= 64, let f3 = Int(fields[3]), f3 > 64 { return f3 }
+                return fields.count > 2 ? Int(fields[2]) : nil
+            }()
+            return HGDanmaku(time: t, text: rawText, likes: max(0, intVal(row["likes"]) ?? 0),
+                             color: colorInt.map { String(format: "#%06X", max(0, min(0xFFFFFF, $0))) } ?? normalizeColor(row["color"]),
+                             mode: normalizeMode(modeVal ?? row["mode"]))
+        }
+        // Standard Hongguo / idj1 item: `{ time (sec) | progress (ms), text | content, color?, mode?, likes? }`
+        let text = PluginOut.s(row["text"] ?? row["content"] ?? row["m"], max: 200)
+        guard !text.isEmpty else { return nil }
+        let time: Double
+        if let t = doubleVal(row["time"]) {
+            time = t
+        } else if let ms = doubleVal(row["progress"]) {
+            time = ms / 1000.0
+        } else {
+            return nil
+        }
+        guard time.isFinite, time >= 0, time <= 604_800 else { return nil }
+        let likes = max(0, intVal(row["likes"]) ?? 0)
+        return HGDanmaku(time: time, text: text, likes: likes, color: normalizeColor(row["color"]), mode: normalizeMode(row["mode"]))
+    }
+
+    private nonisolated static func doubleVal(_ raw: Any?) -> Double? {
+        guard let v = raw else { return nil }
+        if let d = v as? Double { return d }
+        if let i = v as? Int { return Double(i) }
+        if let f = v as? Float { return Double(f) }
+        if let n = v as? NSNumber { return n.doubleValue }
+        if let s = v as? String { return Double(s.trimmingCharacters(in: .whitespaces)) }
+        return nil
+    }
+
+    private nonisolated static func intVal(_ raw: Any?) -> Int? {
+        guard let v = raw else { return nil }
+        if let i = v as? Int { return i }
+        if let d = v as? Double, d.isFinite { return Int(d) }
+        if let n = v as? NSNumber { return n.intValue }
+        if let s = v as? String { return Int(s.trimmingCharacters(in: .whitespaces)) }
+        return nil
+    }
+
+    private nonisolated static func normalizeColor(_ raw: Any?) -> String {
+        if let i = intVal(raw) {
+            return String(format: "#%06X", max(0, min(0xFFFFFF, i)))
+        }
+        let s = PluginOut.s(raw, max: 16).trimmingCharacters(in: .whitespaces)
+        if s.range(of: "^#[0-9A-Fa-f]{6}$", options: .regularExpression) != nil { return s.uppercased() }
+        if s.range(of: "^[0-9A-Fa-f]{6}$", options: .regularExpression) != nil { return "#" + s.uppercased() }
+        return "#FFFFFF"
+    }
+
+    private nonisolated static func normalizeMode(_ raw: Any?) -> HGDanmaku.Mode {
+        if let i = intVal(raw) {
+            switch i {
+            case 5: return .top
+            case 4: return .bottom
+            default: return .scroll
+            }
+        }
+        switch PluginOut.s(raw, max: 12).lowercased() {
+        case "top", "5": return .top
+        case "bottom", "4": return .bottom
+        default: return .scroll
         }
     }
 }

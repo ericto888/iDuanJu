@@ -49,9 +49,9 @@ manga18fx/
 | `category` | `{ id, page, filters }` | `{ items, page, hasMore }` | 分类翻页，`page` 从 1 开始 |
 | `search` | `{ keyword, page }` | `{ items, page, hasMore }` | 全局搜索会并发调用所有开着的插件 |
 | `detail` | `{ id }` | 视频：`{ title, cover, desc, lines:[{name, episodes:[{id,name}]}] }`；漫画：`{ title, cover, desc, chapters:[{id,name}] }` | 进详情页 |
-| `play` | `{ line, episodeId }` | `{ streams:[{ url, format, headers, proxy? }], subtitles?, danmaku?, skip? }` | 点播放；`expiresAt` 到期前会再调 |
+| `play` | `{ line, episodeId, id }` | `{ streams:[{ url, format, headers, proxy? }], subtitles?, danmaku?, skip? }` | 点播放；`expiresAt` 到期前会再调 |
 | `pages` | `{ chapterId }` | `{ images:[{ url, transform? }], headers? }` | 漫画进章节 |
-| `danmaku` | `{ episodeKey, from, to }` | `{ items:[{ time, text, color?, mode? }] }` | 可选，按时间段分批拉 |
+| `danmaku` | `{ episodeKey, episodeId, seriesId, id, line, title, episodeName, ep, url, from, to }` | `{ items:[{ time, text, color?, mode?, likes? }], truncated? }` 等 | 可选；支持独立 `danmaku()` 导出或由 `play()` 直接返回 |
 
 规则：
 - **id 都是你自己定的字符串**，App 原样存、原样传回。不要把 cookie、token 塞进 id（会被存进观看历史）。
@@ -79,6 +79,50 @@ return {
 `proxy` 能声明的处理（都由 App 原生代码执行，插件不在播放热路径里跑代码）：`stripFakeHeader`（去假头）、`hlsKey`（覆盖 AES-128 key）、`segmentDecrypt`（分段解密）、`drm: {type:'cenc-ctr', key}`（CENC MP4 解密）、`rewriteHosts`（段地址换 CDN）。
 
 图片同理：`transform: {type:'stripes', segments: 10}` 让 App 原生把打乱的横条拼回去（18comic 这类）；`{type:'aes', ...}` 解密加密图片（黄果封面这类）。
+
+### 4.1 三方插件弹幕接口（参考红果插件实现）
+
+插件可以通过以下**任一方式**接入 App 原生弹幕层（支持竖屏短剧与横屏长视频、字号/透明度/区域/屏蔽词/重复合并全套能力）：
+
+1. **方式 A：导出 `danmaku(arg)` 函数（推荐，与 `PluginsSrc/hongguo/main.js` 一致）**
+   - 在 `manifest.json` 的 `capabilities` 中加入 `"danmaku"`（未写但脚本实际导出了 `danmaku` 函数也会自动识别）。
+   - App 播放分集时会调用 `danmaku(arg)`，入参同时提供：
+     - `episodeKey` / `episodeId`：当前集 ID（与 `play()` 的 `episodeId` 相同）
+     - `seriesId` / `id`：剧集 ID（与 `detail()` / `play()` 的 `id` 相同）
+     - `line`：当前线路名称；`title`：剧名；`episodeName`：分集标题；`ep`：集数序号（从 1 开始）；`url`：当前选中的视频流地址
+     - `from` / `to`：起止秒数（全量拉取时均为 `0`）
+   - 支持的返回格式（上限 12,000 条，自动去重与按时间排序）：
+     ```js
+     // 1) 标准结构化列表（红果插件同款）
+     return {
+       items: [
+         {
+           time: 12.5,          // 秒（也兼容毫秒字段 progress: 12500）
+           text: '前方高能',     // 弹幕文本（<=200 字）
+           color: '#FFFFFF',    // 可选：#RRGGBB 或十进制整数如 16777215
+           mode: 'scroll',      // 可选：'scroll' | 'top' | 'bottom'（或 B 站 1/5/4）
+           likes: 0             // 可选：点赞数（>=50 高亮加粗）
+         }
+       ],
+       truncated: false
+     };
+
+     // 2) 直接透传 B 站 XML 或弹弹Play / DPlayer JSON 文本
+     const res = await host.http.get('https://comment.example.com/123.xml');
+     return { xml: res.body };
+
+     // 3) 返回白名单内的 HTTPS 弹幕文件地址（自动附带插件 Cookie 与自定义请求头）
+     return { url: 'https://comment.example.com/123.xml', headers: { Referer: 'https://example.com/' } };
+     ```
+
+2. **方式 B：在 `play()` 返回值中直接附带 `danmaku` 字段**
+   - 适合在解析播放地址时就能一并拿到弹幕链接或内联弹幕数据的站点：
+     ```js
+     return {
+       streams: [{ name: '1080P', url: m3u8Url, format: 'hls' }],
+       danmaku: 'https://comment.example.com/ep1.xml' // 或 { url, headers } / { items: [...] } / { xml: '...' }
+     };
+     ```
 
 ## 5. 宿主能力 host.*
 

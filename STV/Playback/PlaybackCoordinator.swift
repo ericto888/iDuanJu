@@ -268,7 +268,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     private var nowPlaying: MPNowPlayingSession?
     @Published private(set) var pipActive = false
     @Published var pipError: String?
-    private var restoringPiP = false
+    @Published private(set) var restoringPiP = false
     private var backgrounded = false
     @Published private var interrupted = false
     private var recoverInterruptedTransport = false
@@ -540,8 +540,10 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         if pip.isPictureInPictureActive {
             continuePiP = false
             restoringPiP = true
+            pipActive = false
             pip.stopPictureInPicture()
         } else if pip.isPictureInPicturePossible {
+            restoringPiP = false
             pip.startPictureInPicture()
         }
     }
@@ -554,6 +556,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
 
     func pictureInPictureControllerWillStartPictureInPicture(_ controller: AVPictureInPictureController) {
         guard controller === pip else { return }
+        restoringPiP = false
         pipActive = true
         engine.setPiPActive(true)
     }
@@ -561,14 +564,21 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     func pictureInPictureController(_ controller: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
         guard controller === pip else { return }
         pipActive = false
+        restoringPiP = false
         engine.setPiPActive(false)
         continuePiP = false
         if !backgrounded { pipError = error.localizedDescription }
     }
 
+    func pictureInPictureControllerWillStopPictureInPicture(_ controller: AVPictureInPictureController) {
+        guard controller === pip else { return }
+        if !continuePiP { pipActive = false }
+    }
+
     func pictureInPictureController(_ controller: AVPictureInPictureController,
                                     restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completion: @escaping (Bool) -> Void) {
         restoringPiP = true
+        pipActive = false
         completion(controller === pip && observer != nil)
     }
 
@@ -598,6 +608,16 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         }
     }
 
+    /// Fires before the foreground frame is composited so the inline player never flashes the PiP placeholder pill.
+    func willEnterForeground() {
+        if pip?.isPictureInPictureActive == true || pipActive {
+            continuePiP = false
+            restoringPiP = true
+            pipActive = false
+            pip?.stopPictureInPicture()
+        }
+    }
+
     func didBecomeActive() {
         guard backgrounded else { return }
         backgrounded = false
@@ -606,6 +626,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         if !pipActive { engine.setPiPActive(false) }
         if pip?.isPictureInPictureActive == true {
             restoringPiP = true
+            pipActive = false
             pip?.stopPictureInPicture()
         }
         resumeIfRequested()

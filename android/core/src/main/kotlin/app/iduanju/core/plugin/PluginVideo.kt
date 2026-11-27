@@ -111,39 +111,120 @@ class PluginVideo(val inst: PluginInstance, private val extraDomains: List<Strin
             danmaku = PluginOut.url(o.opt("danmaku")).ifEmpty { null })
     }
 
-    /** Official comments through the plugin's `danmaku` export (episodeKey/from/to, docs/plugins/SPEC_ZH.md). Blocking. */
+    fun hasDanmaku(): Boolean = "danmaku" in m.capabilities || runCatching { inst.has("danmaku") }.getOrDefault(false)
+
+    /** Official or third-party comments through the plugin's `danmaku` export (docs/plugins/SPEC_ZH.md). Blocking. */
     fun danmaku(episodeVid: String): HGDanmakuResult {
-        if ("danmaku" !in m.capabilities) return HGDanmakuResult(emptyList(), error = "当前片源不支持弹幕")
+        if (!hasDanmaku()) return HGDanmakuResult(emptyList(), error = "当前片源不支持弹幕")
         val (_, sidRaw, eid) = parseEp(episodeVid) ?: return HGDanmakuResult(emptyList(), error = "插件剧集 id 无效")
-        val o = try {
-            inst.call("danmaku", JSONObject().put("episodeKey", eid).put("seriesId", sidRaw).put("from", 0).put("to", 0), 27.0) as? JSONObject ?: JSONObject()
+        val raw = try {
+            val arg = JSONObject()
+                .put("episodeKey", eid)
+                .put("episodeId", eid)
+                .put("seriesId", sidRaw)
+                .put("id", sidRaw)
+                .put("from", 0)
+                .put("to", 0)
+            inst.call("danmaku", arg, 27.0)
         } catch (e: PluginException) {
             return HGDanmakuResult(emptyList(), error = e.friendly)
         }
+        return parseDanmakuPayload(raw)
+    }
+
+    private fun parseDanmakuPayload(raw: Any?): HGDanmakuResult {
+        val maxItems = 12_000
+        if (raw is String) {
+            val items = parseXmlDanmaku(raw, maxItems)
+            return HGDanmakuResult(items, truncated = items.size >= maxItems)
+        }
+        val obj = raw as? JSONObject
+        val xml = obj?.optString("xml", "")?.ifEmpty { obj.optString("raw", "") }.orEmpty()
+        if (xml.isNotEmpty()) {
+            val items = parseXmlDanmaku(xml, maxItems)
+            return HGDanmakuResult(items, truncated = items.size >= maxItems)
+        }
+        val arr: JSONArray = when {
+            raw is JSONArray -> raw
+            obj != null -> listOf("items", "danmaku", "danmuku", "data", "comments")
+                .firstNotNullOfOrNull { obj.optJSONArray(it) } ?: JSONArray()
+            else -> JSONArray()
+        }
         val items = ArrayList<HGDanmaku>()
         val seen = HashSet<String>()
-        val arr = o.optJSONArray("items") ?: JSONArray()
-        for (i in 0 until minOf(arr.length(), 3000)) {
-            val row = arr.optJSONObject(i) ?: continue
-            val text = PluginOut.s(row.opt("text"), 200)
-            if (text.isEmpty() || text.length > 200) continue
-            val time = when (val t = row.opt("time")) {
-                is Number -> t.toDouble()
-                is String -> t.toDoubleOrNull() ?: Double.NaN
-                else -> Double.NaN
-            }
-            if (!time.isFinite() || time < 0 || time > 604_800) continue
-            val color = PluginOut.s(row.opt("color"), 7).let { if (Regex("^#[0-9A-Fa-f]{6}$").matches(it)) it.uppercase() else "#FFFFFF" }
-            val mode = when (PluginOut.s(row.opt("mode"), 10).lowercase()) {
-                "top" -> HGDanmaku.Mode.top
-                "bottom" -> HGDanmaku.Mode.bottom
-                else -> HGDanmaku.Mode.scroll
-            }
-            if (!seen.add(String.format("%.3f|", time) + text)) continue
-            items.add(HGDanmaku(time, text, row.optInt("likes", 0).coerceAtLeast(0), color, mode))
+        for (i in 0 until minOf(arr.length(), maxItems * 2)) {
+            val parsed = parseSingleDanmaku(arr.opt(i)) ?: continue
+            if (!seen.add(String.format("%.3f|", parsed.time) + parsed.text)) continue
+            items.add(parsed)
+            if (items.size >= maxItems) break
         }
         items.sortBy { it.time }
-        return HGDanmakuResult(items, truncated = o.optBoolean("truncated"))
+        return HGDanmakuResult(items, truncated = (obj?.optBoolean("truncated") == true) || arr.length() > maxItems)
+    }
+
+    private fun parseSingleDanmaku(entry: Any?): HGDanmaku? {
+        if (entry is JSONArray && entry.length() >= 5) {
+            val t = numVal(entry.opt(0)) ?: return null
+            if (!t.isFinite() || t < 0 || t > 604_800) return null
+            val txt = PluginOut.s(entry.opt(4), 200)
+            if (txt.isEmpty()) return null
+            return HGDanmaku(t, txt, 0, normColor(entry.opt(2)), normMode(entry.opt(1)))
+        }
+        val row = entry as? JSONObject ?: return null
+        val p = row.optString("p", "")
+        if (p.isNotEmpty()) {
+            val txt = PluginOut.s(row.opt("m") ?: row.opt("text") ?: row.opt("c"), 200)
+            if (txt.isEmpty()) return null
+            val fields = p.split(",")
+            val t = fields.firstOrNull()?.toDoubleOrNull() ?: return null
+            if (!t.isFinite() || t < 0 || t > 604_800) return null
+            val colorInt = (if (fields.size >= 5) fields[3] else fields.getOrNull(2))?.toIntOrNull()
+            val color = colorInt?.let { String.format("#%06X", it.coerceIn(0, 0xFFFFFF)) } ?: normColor(row.opt("color"))
+            val mode = normMode(fields.getOrNull(1) ?: row.opt("mode"))
+            return HGDanmaku(t, txt, row.optInt("likes", 0).coerceAtLeast(0), color, mode)
+        }
+        val text = PluginOut.s(row.opt("text") ?: row.opt("content") ?: row.opt("m"), 200)
+        if (text.isEmpty() || text.length > 200) return null
+        val time = numVal(row.opt("time")) ?: numVal(row.opt("progress"))?.let { it / 1000.0 } ?: return null
+        if (!time.isFinite() || time < 0 || time > 604_800) return null
+        return HGDanmaku(time, text, row.optInt("likes", 0).coerceAtLeast(0), normColor(row.opt("color")), normMode(row.opt("mode")))
+    }
+
+    private fun parseXmlDanmaku(xml: String, limit: Int): List<HGDanmaku> {
+        val out = ArrayList<HGDanmaku>()
+        val re = Regex("""<d\b[^>]*\bp\s*=\s*"([^"]+)"[^>]*>([\s\S]*?)</d>""", RegexOption.IGNORE_CASE)
+        for (m in re.findAll(xml)) {
+            val p = m.groupValues[1]
+            val body = m.groupValues[2]
+                .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&quot;", "\"").replace("&apos;", "'").trim()
+            val item = parseSingleDanmaku(JSONObject().put("p", p).put("m", body)) ?: continue
+            out.add(item)
+            if (out.size >= limit) break
+        }
+        out.sortBy { it.time }
+        return out
+    }
+
+    private fun numVal(v: Any?): Double? = when (v) {
+        is Number -> v.toDouble()
+        is String -> v.trim().toDoubleOrNull()
+        else -> null
+    }
+
+    private fun normColor(raw: Any?): String {
+        if (raw is Number) return String.format("#%06X", raw.toInt().coerceIn(0, 0xFFFFFF))
+        val s = PluginOut.s(raw, 16).trim()
+        if (Regex("^#[0-9A-Fa-f]{6}$").matches(s)) return s.uppercase()
+        if (Regex("^[0-9A-Fa-f]{6}$").matches(s)) return "#" + s.uppercase()
+        s.toIntOrNull()?.let { return String.format("#%06X", it.coerceIn(0, 0xFFFFFF)) }
+        return "#FFFFFF"
+    }
+
+    private fun normMode(raw: Any?): HGDanmaku.Mode = when (PluginOut.s(raw, 12).lowercase()) {
+        "top", "5" -> HGDanmaku.Mode.top
+        "bottom", "4" -> HGDanmaku.Mode.bottom
+        else -> HGDanmaku.Mode.scroll
     }
 
     companion object {

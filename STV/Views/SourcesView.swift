@@ -4,11 +4,19 @@ import SwiftUI
 /// hidden behind Face ID (`SourceGate`).
 struct SourcesView: View {
     @ObservedObject private var gate = SourceGate.shared
+    @ObservedObject private var pluginStore = PluginStore.shared
+    @ObservedObject private var cmsStore = CMSStore.shared
     @State private var message: String?
+    @State private var showHomeOrder = false
     @State private var bufferMB = BufferSettings.megabytes
     @State private var cacheBytes: Int64 = 0
     @State private var adStrip = HLSAdFilter.enabled
     @State private var engineKind = PlayerEngineSettings.preferred
+
+    private var homeOrderSummary: String {
+        let labels = HomeSource.all.prefix(4).map(\.label)
+        return labels.joined(separator: " · ") + (HomeSource.all.count > 4 ? "…" : "")
+    }
 
     var body: some View {
         ScrollView {
@@ -17,14 +25,26 @@ struct SourcesView: View {
                     DSEmptyState("18+ 片源已锁定", systemImage: "lock.fill", message: "验证后才显示隐藏的片源。", actionTitle: "用 Face ID 解锁") { Task { await gate.unlock() } }
                         .padding(.top, 60)
                 } else {
-                    DSSection("内置", separatorInset: 58) {
+                    DSSection("内置与首页展示", separatorInset: 58) {
                         DSRow(title: DramaSource.hongguo.label, icon: "play.rectangle.on.rectangle") { DSStatus(text: "内置", tone: .muted) }
+                        DSRow("首页来源排序", icon: "arrow.up.arrow.down", subtitle: homeOrderSummary, value: gate.homeOrder.isEmpty ? "默认" : "自定义", chevron: true) {
+                            showHomeOrder = true
+                        }
+                        .accessibilityIdentifier("sources.homeOrder")
                     }
                     DSSection("18+ 片源（默认隐藏）", separatorInset: 58) {
                         DSToggleRow(DramaSource.huangguo.label, isOn: Binding(get: { gate.huangguo }, set: { gate.setHuangguo($0) }), icon: "film.stack",
                                     subtitle: "18+ · 视频站 / App 源 / AI 站；开启后出现在「发现」「搜索」和 AI剧")
                             .accessibilityIdentifier("sources.huangguo")
-                        ForEach(Sites.all.filter(\.isAdult)) { s in siteRow(s) }
+                        ForEach(Sites.all.filter { $0.isAdult && !$0.isDynamic }) { s in siteRow(s) }
+                        ForEach(pluginStore.plugins.filter { $0.manifest.adult && [.video, .shortdrama].contains($0.manifest.type) }) { p in
+                            DSToggleRow(p.manifest.name, isOn: Binding(get: { p.enabled }, set: { pluginStore.setEnabled(p.id, $0) }),
+                                        icon: "puzzlepiece.extension", subtitle: "JS 插件 · " + (p.manifest.httpDomains.first ?? p.manifest.id))
+                        }
+                        ForEach(cmsStore.sites.filter { $0.adult && $0.origin != "TVBox" && !$0.origin.hasPrefix("TVBox") }) { c in
+                            DSToggleRow(c.name, isOn: Binding(get: { c.enabled }, set: { cmsStore.setEnabled(c.key, $0) }),
+                                        icon: "server.rack", subtitle: "苹果 CMS 采集站 · " + (URL(string: c.api)?.host ?? c.api))
+                        }
                     }
                     DSSection("插件与采集站", separatorInset: 58) {
                         DSLinkRow("插件管理", route: Route.plugins, icon: "puzzlepiece.extension", subtitle: "JS 插件、订阅、苹果 CMS 采集站；成人插件在这里解锁后才显示")
@@ -48,6 +68,7 @@ struct SourcesView: View {
         .compatDefaultScrollAnchor(DebugScroll.anchor)
         .dsNavigation("片源管理")
         .dsToast($message, icon: "checkmark.circle.fill")
+        .sheet(isPresented: $showHomeOrder) { HomeSourceOrderSheet() }
         .task { if gate.lockEnabled { await gate.unlock() } }
         .task { cacheBytes = await Task.detached { PrefetchStore.shared.totalBytes() }.value }
     }
@@ -104,6 +125,44 @@ struct SourcesView: View {
 
     private func siteRow(_ s: DramaSource) -> some View {
         DSToggleRow(s.label, isOn: Binding(get: { gate.enabled.contains(s) }, set: { gate.set(s, on: $0) }), icon: "globe", subtitle: Self.note(s))
+    }
+
+    fileprivate struct HomeSourceOrderSheet: View {
+        @Environment(\.dismiss) private var dismiss
+        @ObservedObject private var gate = SourceGate.shared
+        @ObservedObject private var pluginStore = PluginStore.shared
+        @ObservedObject private var cmsStore = CMSStore.shared
+        @State private var list: [HomeSource] = HomeSource.all
+
+        var body: some View {
+            DSSheet("首页来源排序", subtitle: "调整顶部栏与左右横滑页面的排列顺序", onClose: { dismiss() }) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HomeSourceOrderRows(sources: list) { updated in
+                            list = updated
+                            gate.setHomeOrder(updated.map(\.key))
+                        }
+                        if !gate.homeOrder.isEmpty {
+                            Button {
+                                DS.tick()
+                                withAnimation(DS.select) {
+                                    gate.resetHomeOrder()
+                                    list = HomeSource.all
+                                }
+                            } label: {
+                                PillButtonPlain(title: "恢复默认顺序", expand: true)
+                            }
+                            .buttonStyle(PressScale(scale: 0.98))
+                        }
+                        Text("新启用或新安装的插件会自动排在末尾，也可以随时在首页右上角展开面板里点击「排序」快速调整。")
+                            .dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.tertiary).lineSpacing(3).padding(.horizontal, 4)
+                    }
+                    .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 28)
+                }
+            }
+            .compatOnChange(of: "\(gate.revision)-\(pluginStore.revision)-\(cmsStore.revision)") { _ in list = HomeSource.all }
+            .dsSheetChrome([.medium, .large])
+        }
     }
 
     static func note(_ s: DramaSource) -> String {

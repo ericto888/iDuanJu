@@ -72,19 +72,26 @@ final class NovelStore: ObservableObject {
         books.sorted { (progress[$0.id]?.updatedAt ?? $0.addedAt) > (progress[$1.id]?.updatedAt ?? $1.addedAt) }
     }
 
-    /// Imports files picked in the document picker (security-scoped URLs). Returns per-file errors.
-    func importFiles(_ urls: [URL]) async -> [String] {
+    /// Imports files picked in the document picker (copied temp URLs or security-scoped URLs). Returns per-file errors.
+    func importFiles(_ urls: [URL], removeTemp: Bool = false) async -> [String] {
         var errors: [String] = []
         for url in urls {
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let fallbackName = url.lastPathComponent
             do {
-                let data = try Data(contentsOf: url)
-                let name = url.lastPathComponent
-                let parsed = try await Task.detached(priority: .userInitiated) { try NovelImport.parse(data, fileName: name) }.value
-                try add(parsed, format: url.pathExtension.lowercased())
+                let (parsed, ext) = try await Task.detached(priority: .userInitiated) { () throws -> (NovelParsed, String) in
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer {
+                        if scoped { url.stopAccessingSecurityScopedResource() }
+                        if removeTemp { try? FileManager.default.removeItem(at: url) }
+                    }
+                    let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                    let name = url.lastPathComponent
+                    let ext = url.pathExtension.lowercased()
+                    return (try NovelImport.parse(data, fileName: name), ext)
+                }.value
+                try add(parsed, format: ext)
             } catch {
-                errors.append("\(url.lastPathComponent)：\(error.localizedDescription)")
+                errors.append("\(fallbackName)：\(error.localizedDescription)")
             }
         }
         return errors

@@ -20,6 +20,8 @@ struct InstalledPlugin: Codable, Hashable, Identifiable {
     var failures = 0
     var disabledReason: String?
     var cachedCategories: [PluginCategory] = []
+    /// Exported functions discovered at install/load time (e.g. `danmaku`, even if omitted from `manifest.capabilities`).
+    var exported: [String]? = nil
     var id: String { manifest.id }
 }
 
@@ -138,6 +140,7 @@ final class PluginStore: ObservableObject {
         rec.updatedAt = Date()
         rec.failures = 0
         rec.disabledReason = nil
+        if !p.exported.isEmpty { rec.exported = p.exported }
         if p.existing == nil { rec.enabled = true }
         // Settings removed from the manifest are dropped.
         let keys = Set((p.manifest.settings ?? []).map(\.key))
@@ -198,6 +201,11 @@ final class PluginStore: ObservableObject {
     func cacheCategories(_ id: String, _ cats: [PluginCategory]) {
         guard plugin(id)?.cachedCategories != cats else { return }
         mutate(id) { $0.cachedCategories = cats }
+    }
+
+    func recordExports(_ id: String, _ exp: [String]) {
+        guard plugin(id)?.exported != exp else { return }
+        mutate(id) { $0.exported = exp }
     }
 
     /// Watchdog: 3 consecutive timeouts / memory blow-ups → disable.
@@ -529,20 +537,32 @@ enum PluginRuntime {
                                extraDomains: rec.extraDomains, learnedUA: rec.learnedUA)
         }.value
         if let existing = store(id, inst) { inst.shutdown(); return existing }
+        let exp = inst.exported.sorted()
+        if rec.exported != exp {
+            await MainActor.run { PluginStore.shared.recordExports(id, exp) }
+        }
         if inst.exported.contains("init") { _ = try? await inst.call("init", [:]) }
         return inst
     }
 
-    /// Calls a plugin function with the watchdog bookkeeping.
-    static func call(_ id: String, _ fn: String, _ arg: [String: Any]) async throws -> Any {
+    nonisolated static func supportsDanmaku(_ id: String) -> Bool {
+        if let rec = PluginStore.snapshot(id) {
+            if rec.manifest.capabilities.contains("danmaku") { return true }
+            if rec.exported?.contains("danmaku") == true { return true }
+        }
+        return cached(id)?.exported.contains("danmaku") == true
+    }
+
+    /// Calls a plugin function with optional watchdog bookkeeping and custom script timeout.
+    static func call(_ id: String, _ fn: String, _ arg: [String: Any], timeout: Double = 10, countWatchdog: Bool = true) async throws -> Any {
         let inst = try await instance(id)
         do {
-            let r = try await inst.call(fn, arg)
-            await MainActor.run { PluginStore.shared.recordOutcome(id, error: nil) }
+            let r = try await inst.call(fn, arg, timeout: timeout)
+            if countWatchdog { await MainActor.run { PluginStore.shared.recordOutcome(id, error: nil) } }
             return r
         } catch let e as PluginError {
             PluginLog.add(id, "✕ \(fn)() \(e.code) \(e.errorDescription ?? "")")
-            await MainActor.run { PluginStore.shared.recordOutcome(id, error: e) }
+            if countWatchdog { await MainActor.run { PluginStore.shared.recordOutcome(id, error: e) } }
             throw e
         }
     }

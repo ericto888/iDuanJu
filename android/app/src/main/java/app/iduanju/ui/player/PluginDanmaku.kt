@@ -15,6 +15,6 @@ internal object PluginDanmaku {
 
     fun capable(seriesId: String): Boolean {
         val pid = PluginVideo.pluginId(seriesId) ?: return false
-        return runCatching { "danmaku" in IdjApp.instance.plugins.video(pid).m.capabilities }.getOrDefault(false)
+        return runCatching { IdjApp.instance.plugins.video(pid).hasDanmaku() }.getOrDefault(false)
     }
 }

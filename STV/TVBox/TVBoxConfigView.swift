@@ -82,8 +82,13 @@ struct TVBoxConfigView: View {
         .tvboxShot("paste") { panel = .paste }
         .tvboxShot("manual") { panel = .manual }
         .tvboxShot("parse") { panel = .parse }
-        .fileImporter(isPresented: $picking, allowedContentTypes: [.json, .plainText, .data, .item]) { r in
-            if case .success(let u) = r { importFile(u) }
+        .compatOnChange(of: picking) { on in
+            guard on else { return }
+            picking = false
+            Task {
+                let urls = await SystemFilePicker.pick(types: [.json, .plainText, .data, .item])
+                if let u = urls.first { importFile(u, removeTemp: true) }
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("screen.tvbox.config")
@@ -138,13 +143,16 @@ struct TVBoxConfigView: View {
         run("正在获取配置…") { try await store.importUrl(u) }
     }
 
-    private func importFile(_ u: URL) {
+    private func importFile(_ u: URL, removeTemp: Bool = false) {
         let name = u.lastPathComponent
         run("正在读取文件…") {
             let data = try await Task.detached { () throws -> Data in
                 let scoped = u.startAccessingSecurityScopedResource()
-                defer { if scoped { u.stopAccessingSecurityScopedResource() } }
-                guard let d = try? Data(contentsOf: u) else { throw ProviderError.invalid("无法读取文件") }
+                defer {
+                    if scoped { u.stopAccessingSecurityScopedResource() }
+                    if removeTemp { try? FileManager.default.removeItem(at: u) }
+                }
+                guard let d = try? Data(contentsOf: u, options: [.mappedIfSafe]) else { throw ProviderError.invalid("无法读取文件") }
                 return d
             }.value
             return try await store.importLocal(data, fileName: name)

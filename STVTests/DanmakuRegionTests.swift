@@ -51,4 +51,44 @@ final class DanmakuRegionTests: XCTestCase {
                                       area: 0.25, laneHeight: lane, maxRows: 4)
         XCTAssertEqual(r.rows, 1)
     }
+
+    func testPluginDanmakuSupportsHongguoXmlAndTupleFormats() {
+        let hg = PluginDanmaku.parseAnyPayload([
+            "items": [
+                ["time": 12.5, "text": "标准弹幕", "color": "#FF6600", "mode": "top", "likes": 88],
+                ["progress": 5000, "content": "毫秒字段弹幕", "color": 0x00FF88, "mode": 4],
+                ["p": "2.0,5,25,16711680", "m": "B站属性弹幕"],
+            ],
+            "truncated": false,
+        ])
+        XCTAssertEqual(hg.items.count, 3)
+        XCTAssertEqual(hg.items[0].time, 2.0, accuracy: 0.001)
+        XCTAssertEqual(hg.items[0].color, "#FF0000")
+        XCTAssertEqual(hg.items[0].mode, .top)
+        XCTAssertEqual(hg.items[1].time, 5.0, accuracy: 0.001)
+        XCTAssertEqual(hg.items[1].color, "#00FF88")
+        XCTAssertEqual(hg.items[1].mode, .bottom)
+        XCTAssertEqual(hg.items[2].time, 12.5, accuracy: 0.001)
+        XCTAssertEqual(hg.items[2].likes, 88)
+
+        let xml = PluginDanmaku.parseAnyPayload(["xml": #"<i><d p="3.5,1,25,16777215,0,0,0,1">XML弹幕</d></i>"#])
+        XCTAssertEqual(xml.items.count, 1)
+        XCTAssertEqual(xml.items[0].text, "XML弹幕")
+
+        let tuple = PluginDanmaku.parseAnyPayload([[8.25, 5, 0xABCDEF, "u1", "DPlayer数组弹幕"]])
+        XCTAssertEqual(tuple.items.count, 1)
+        XCTAssertEqual(tuple.items[0].color, "#ABCDEF")
+        XCTAssertEqual(tuple.items[0].mode, .top)
+    }
+
+    @MainActor
+    func testHomeSourceOrderingPreservesCustomAndAppendsNewSources() {
+        let gate = SourceGate.shared
+        let prev = gate.homeOrder
+        defer { if prev.isEmpty { gate.resetHomeOrder() } else { gate.setHomeOrder(prev) } }
+
+        gate.setHomeOrder(["builtin:novel", "builtin:hongguo", "site:plugin:com.test.hidden"])
+        let ordered = gate.orderedKeys(["builtin:hongguo", "builtin:ai", "builtin:novel", "site:plugin:com.test.new"])
+        XCTAssertEqual(ordered, ["builtin:novel", "builtin:hongguo", "builtin:ai", "site:plugin:com.test.new"])
+    }
 }

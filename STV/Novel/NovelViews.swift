@@ -111,11 +111,6 @@ struct NovelHomeView: View {
         .scrollIndicators(.hidden)
         .overlay(alignment: .bottom) { editBar(books) }
         .homePageInset()
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.plainText, .text, .epub, .item], allowsMultipleSelection: true) { r in
-            guard case .success(let urls) = r, !urls.isEmpty else { return }
-            busy = true
-            Task { errors = await store.importFiles(urls); busy = false }
-        }
         .dsDialog("部分文件导入失败", isPresented: Binding(get: { !errors.isEmpty }, set: { if !$0 { errors = [] } }), message: errors.joined(separator: "\n")) {
             [.primary("好")]
         }
@@ -144,10 +139,7 @@ struct NovelHomeView: View {
         .fullScreenCover(isPresented: $managing) { NovelSourcesView() }
         .fullScreenCover(isPresented: $exploring) { NovelExploreView() }
         .sheet(isPresented: $importSheet) {
-            NovelImportSheet(onLocalFiles: {
-                importSheet = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { importing = true }
-            })
+            NovelImportSheet()
         }
         .task {
             seedFixtureIfNeeded()

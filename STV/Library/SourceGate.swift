@@ -18,7 +18,12 @@ final class SourceGate: ObservableObject {
     @Published private(set) var adultManga: Bool
     /// 黄果 (视频站 / App 源 / AI 站) is 18+: hidden until switched on here, like the long-video sites.
     @Published private(set) var huangguo: Bool
+    /// Persisted custom ordering of Home top-bar sources (keys from `HomeSource.key`). Empty = default order.
+    @Published private(set) var homeOrder: [String]
+    /// Bumped after every state mutation so views observing `$revision` always read post-mutation values.
+    @Published private(set) var revision = 0
     private let d = UserDefaults.standard
+    private static let homeOrderKey = "stv.home.sourceOrder"
 
     private init() {
         let raw = d.stringArray(forKey: "stv.sources.enabled") ?? []
@@ -28,6 +33,7 @@ final class SourceGate: ObservableObject {
         adultChannels = d.bool(forKey: "stv.sources.adultChannels")
         adultManga = d.bool(forKey: "stv.sources.adultManga")
         huangguo = d.bool(forKey: "stv.sources.huangguo")
+        homeOrder = d.stringArray(forKey: Self.homeOrderKey) ?? []
         #if DEBUG
         // Simulator screenshot hook: STV_SOURCES=jable,missav enables those sites for this run.
         if let e = ProcessInfo.processInfo.environment["STV_SOURCES"], !e.isEmpty {
@@ -40,13 +46,21 @@ final class SourceGate: ObservableObject {
     }
 
     /// Sites currently shown in 首页 / 搜索 / 继续观看.
+    /// Dynamic plugins & CMS sites already carry their own per-entry `enabled` switch in `PluginStore` / `CMSStore`
+    /// (`Sites.all` includes only enabled entries); adult entries additionally require the 18+ lock to be open.
     var visibleSites: [DramaSource] {
-        Sites.all.filter { s in (s.isDynamic && !s.isAdult) || (unlocked && enabled.contains(s)) }
+        Sites.all.filter { s in
+            if s.isDynamic { return !s.isAdult || unlocked }
+            return unlocked && enabled.contains(s)
+        }
     }
-    var enabledCount: Int { enabled.count }
+    var enabledCount: Int {
+        enabled.filter { !$0.isDynamic }.count + Sites.all.filter(\.isDynamic).count
+    }
     func isVisible(_ s: DramaSource) -> Bool {
         // TVBox sites are switched on and off in their own config: only the adult lock applies here.
         if s.isTVBox { return !s.isAdult || unlocked }
+        if s.isDynamic { return (!s.isAdult || unlocked) && Sites.all.contains(s) }
         return s == .huangguo ? showHuangguo : s.isBuiltin || (unlocked && enabled.contains(s))
     }
     /// Series-level check: Telegram videos from adult channels follow the adult-channel switch.
@@ -60,14 +74,56 @@ final class SourceGate: ObservableObject {
     var showAdultChannels: Bool { unlocked && adultChannels }
     var showAdultManga: Bool { unlocked && adultManga }
     var showHuangguo: Bool { unlocked && huangguo }
-    func setHuangguo(_ on: Bool) { huangguo = on; d.set(on, forKey: "stv.sources.huangguo") }
-    func setAdultChannels(_ on: Bool) { adultChannels = on; d.set(on, forKey: "stv.sources.adultChannels") }
-    func setAdultManga(_ on: Bool) { adultManga = on; d.set(on, forKey: "stv.sources.adultManga") }
+    func setHuangguo(_ on: Bool) { huangguo = on; d.set(on, forKey: "stv.sources.huangguo"); revision += 1 }
+    func setAdultChannels(_ on: Bool) { adultChannels = on; d.set(on, forKey: "stv.sources.adultChannels"); revision += 1 }
+    func setAdultManga(_ on: Bool) { adultManga = on; d.set(on, forKey: "stv.sources.adultManga"); revision += 1 }
 
     func set(_ s: DramaSource, on: Bool) {
+        if let pid = s.pluginID {
+            PluginStore.shared.setEnabled(pid, on)
+            revision += 1
+            return
+        }
+        if let key = s.cmsKey {
+            CMSStore.shared.setEnabled(key, on)
+            revision += 1
+            return
+        }
         guard s.isAdult else { return }
         if on { enabled.insert(s) } else { enabled.remove(s) }
         d.set(enabled.map(\.rawValue).sorted(), forKey: "stv.sources.enabled")
+        revision += 1
+    }
+
+    // MARK: Home source ordering
+
+    /// Applies persisted custom order while keeping newly enabled sources appended in their natural order
+    /// and preserving positions of temporarily hidden sources in `homeOrder`.
+    func orderedKeys(_ activeKeys: [String]) -> [String] {
+        guard !homeOrder.isEmpty else { return activeKeys }
+        var rank: [String: Int] = [:]
+        for (i, k) in homeOrder.enumerated() where rank[k] == nil { rank[k] = i }
+        let known = activeKeys.filter { rank[$0] != nil }.sorted { rank[$0]! < rank[$1]! }
+        let fresh = activeKeys.filter { rank[$0] == nil }
+        return known + fresh
+    }
+
+    func setHomeOrder(_ orderedVisibleKeys: [String]) {
+        // Preserve relative slots of currently hidden sources after the visible list so re-enabling doesn't lose them.
+        let visibleSet = Set(orderedVisibleKeys)
+        let hiddenSaved = homeOrder.filter { !visibleSet.contains($0) }
+        let merged = orderedVisibleKeys + hiddenSaved
+        guard merged != homeOrder else { return }
+        homeOrder = merged
+        d.set(merged, forKey: Self.homeOrderKey)
+        revision += 1
+    }
+
+    func resetHomeOrder() {
+        guard !homeOrder.isEmpty else { return }
+        homeOrder = []
+        d.removeObject(forKey: Self.homeOrderKey)
+        revision += 1
     }
 
     func setLock(_ on: Bool) async {
@@ -81,14 +137,16 @@ final class SourceGate: ObservableObject {
             lockEnabled = false; unlocked = true
         }
         d.set(lockEnabled, forKey: "stv.sources.lock")
+        revision += 1
     }
 
     @discardableResult func unlock() async -> Bool {
         if unlocked { return true }
         unlocked = await authenticate(reason: "解锁隐藏片源")
+        revision += 1
         return unlocked
     }
-    func relock() { if lockEnabled { unlocked = false } }
+    func relock() { if lockEnabled { unlocked = false; revision += 1 } }
 
     private func authenticate(reason: String) async -> Bool {
         let ctx = LAContext()

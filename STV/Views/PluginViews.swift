@@ -14,7 +14,6 @@ struct PluginsView: View {
     @State private var showURL = false
     @State private var urlText = ""
     @State private var showPaste = false
-    @State private var showFile = false
     @State private var showSub = false
     @State private var subText = ""
     @State private var showCMS = false
@@ -34,7 +33,7 @@ struct PluginsView: View {
                 }
                 DSSection("添加插件", separatorInset: 58) {
                     action("从网址添加", "link", id: "plugins.add.url") { urlText = ""; showURL = true }
-                    action("从文件导入", "doc.badge.plus", subtitle: "插件 / M3U / TVBox JSON", id: "plugins.add.file") { showFile = true }
+                    action("从文件导入", "doc.badge.plus", subtitle: "插件 / M3U / TVBox JSON", id: "plugins.add.file") { await pickPluginFile() }
                     action("粘贴插件内容", "doc.on.clipboard", id: "plugins.add.paste") { showPaste = true }
                     action(busy == "update" ? "正在检查更新…" : "检查更新", "arrow.triangle.2.circlepath", id: "plugins.update") { await checkUpdates() }
                 }
@@ -121,23 +120,6 @@ struct PluginsView: View {
         }
         .sheet(isPresented: $showPaste) { PasteSheet { text in showPaste = false; if let text { interpret(text) } } }
         .sheet(isPresented: $showCMS) { AddCMSSheet { showCMS = false; if let m = $0 { message = m } } }
-        .fileImporter(isPresented: $showFile, allowedContentTypes: [.json, .data, .plainText, .item]) { r in
-            guard case let .success(url) = r else { return }
-            let ok = url.startAccessingSecurityScopedResource()
-            defer { if ok { url.stopAccessingSecurityScopedResource() } }
-            guard let d = try? Data(contentsOf: url), d.count < 4 << 20 else { message = "无法读取文件"; return }
-            if let text = try? TVBoxDecoder.decode(d), TVBoxConfig.isConfig(text) {
-                let file = url.lastPathComponent
-                Task { await importTVBox { try await TVBoxStore.shared.importLocal(d, fileName: file) } }
-                return
-            }
-            if let list = String(data: d, encoding: .utf8), M3UImport.isChannelList(list) {
-                let name = url.deletingPathExtension().lastPathComponent
-                prepare { try PluginInstaller.prepareM3U(list, url: nil, name: name, origin: "文件：" + url.lastPathComponent) }
-                return
-            }
-            prepare { try PluginInstaller.prepare(bundle: d, origin: "文件：" + url.lastPathComponent) }
-        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("plugins.root")
         .task { if bundled.isEmpty { bundled = await Task.detached { PluginInstaller.bundled() }.value } }
@@ -158,6 +140,39 @@ struct PluginsView: View {
         bundled.filter {
             !Self.iosNativeBundledIDs.contains($0.manifest.id)
                 && (!$0.manifest.adult || ($0.manifest.type == .comic ? gate.showAdultManga : gate.unlocked))
+        }
+    }
+
+    private func pickPluginFile() async {
+        let urls = await SystemFilePicker.pick(types: [.json, .data, .plainText, .item])
+        guard let url = urls.first else { return }
+        busy = "prepare"; message = nil
+        do {
+            let loaded = try await Task.detached(priority: .userInitiated) {
+                try SystemFilePicker.readAndClean(url, maxBytes: 8 << 20)
+            }.value
+            let d = loaded.data
+            let file = loaded.name
+            if let text = try? TVBoxDecoder.decode(d), TVBoxConfig.isConfig(text) {
+                await importTVBox { try await TVBoxStore.shared.importLocal(d, fileName: file) }
+                return
+            }
+            if let list = String(data: d, encoding: .utf8), M3UImport.isChannelList(list) {
+                let baseName = (file as NSString).deletingPathExtension
+                let p = try await Task.detached { try PluginInstaller.prepareM3U(list, url: nil, name: baseName, origin: "文件：" + file) }.value
+                busy = nil
+                pending = p
+                return
+            }
+            let p = try await Task.detached { try PluginInstaller.prepare(bundle: d, origin: "文件：" + file) }.value
+            busy = nil
+            pending = p
+        } catch CocoaError.fileReadTooLarge {
+            busy = nil
+            message = "文件过大（超过 8 MB）"
+        } catch {
+            busy = nil
+            message = error.localizedDescription
         }
     }
 
