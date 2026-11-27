@@ -578,6 +578,8 @@ private struct HomeFeedPage: View {
     @State private var pluginHomeError: Error?
     @State private var fallbackHeroSource: String?
     @State private var fallbackHeroBoardID: String?
+    /// Invalidates older homepage requests when the selected tab changes or a refresh/retry starts.
+    @State private var pluginHomeRequestID = UUID()
     @State private var featuredIndex = 0
     private let gutter: CGFloat = 16
     /// DEBUG `STV_HOME_SCROLL=bottom` opens the feed scrolled to the end (simulator screenshots).
@@ -622,10 +624,13 @@ private struct HomeFeedPage: View {
                         ErrorStateView(error: error) {
                             if case .site(let site) = source {
                                 Task {
+                                    let requestID = UUID()
+                                    pluginHomeRequestID = requestID
                                     fallbackHeroSource = nil
                                     fallbackHeroBoardID = nil
-                                    await loadPluginHome(site)
-                                    await resolveFallbackHero(site)
+                                    await loadPluginHome(site, requestID: requestID)
+                                    guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
+                                    await resolveFallbackHero(site, requestID: requestID)
                                 }
                             }
                         }
@@ -664,18 +669,23 @@ private struct HomeFeedPage: View {
                 await ActorRankStore.shared.reload()
             } else {
                 if case .site(let site) = tab, usesCategoryShelves(site) {
+                    let requestID = UUID()
+                    pluginHomeRequestID = requestID
                     pluginHomeSource = nil
                     pluginHomeError = nil
                     fallbackHeroSource = nil
                     fallbackHeroBoardID = nil
-                    await loadPluginHome(site)
+                    await loadPluginHome(site, requestID: requestID)
+                    guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
                     // Refresh only feeds that were already active; do not eagerly request every
                     // shelf just because the homepage was pulled down.
                     for board in self.boards {
+                        guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
                         let feed = BoardCache.shared.feed(board)
                         if feed.hasAttemptedLoad { _ = await feed.loadFirstPageIfNeeded(force: true) }
                     }
-                    await resolveFallbackHero(site)
+                    guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
+                    await resolveFallbackHero(site, requestID: requestID)
                 } else {
                     self.boards.forEach { BoardCache.shared.feed($0).load(force: true) }
                 }
@@ -683,8 +693,11 @@ private struct HomeFeedPage: View {
         }
         .task(id: tab) {
             if case .site(let site) = tab, usesCategoryShelves(site) {
-                await loadPluginHome(site)
-                await resolveFallbackHero(site)
+                let requestID = UUID()
+                pluginHomeRequestID = requestID
+                await loadPluginHome(site, requestID: requestID)
+                guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
+                await resolveFallbackHero(site, requestID: requestID)
             } else if case .huangguo(.legacy) = tab, legacyChannels.isEmpty {
                 await loadLegacy()
             }
@@ -696,38 +709,49 @@ private struct HomeFeedPage: View {
         return nil
     }
 
-    private func loadPluginHome(_ site: DramaSource) async {
-        guard let id = site.pluginID, pluginHomeSource != id else { return }
+    private func isCurrentPluginHomeRequest(_ requestID: UUID, site: DramaSource) -> Bool {
+        !Task.isCancelled && pluginHomeRequestID == requestID && tab == .site(site)
+    }
+
+    private func loadPluginHome(_ site: DramaSource, requestID: UUID) async {
+        guard isCurrentPluginHomeRequest(requestID, site: site),
+              let id = site.pluginID, pluginHomeSource != id else { return }
         pluginHomeError = nil
         guard let manifest = PluginStore.snapshot(id)?.manifest,
               manifest.capabilities.contains("home"),
               PluginHomeFeatures.usesCategoryShelves(manifest.homeFeatures),
               let provider = Sites.provider(site) as? JSVideoProvider else {
+            guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
             pluginHomeSource = id
             pluginFeatured = []
             return
         }
         do {
             let data = try await provider.homeData()
+            guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
             pluginFeatured = data.featured
             pluginHomeSource = id
         } catch {
+            guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
             pluginHomeError = error
             pluginHomeSource = nil
         }
     }
 
-    private func resolveFallbackHero(_ site: DramaSource, force: Bool = false) async {
-        guard let id = site.pluginID,
+    private func resolveFallbackHero(_ site: DramaSource, requestID: UUID, force: Bool = false) async {
+        guard isCurrentPluginHomeRequest(requestID, site: site),
+              let id = site.pluginID,
               usesCategoryShelves(site),
               !PluginHomeFeatures.showsFeaturedCarousel(PluginStore.snapshot(id)?.manifest.homeFeatures, itemCount: pluginFeatured.count),
               fallbackHeroSource != id || force else { return }
         fallbackHeroSource = nil
         fallbackHeroBoardID = nil
         let first = await PluginHomeFeatures.firstPopulated(self.boards) { board in
+            guard self.isCurrentPluginHomeRequest(requestID, site: site) else { return false }
             let items = await BoardCache.shared.feed(board).loadFirstPageIfNeeded(force: force)
-            return !items.isEmpty
+            return self.isCurrentPluginHomeRequest(requestID, site: site) && !items.isEmpty
         }
+        guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
         fallbackHeroBoardID = first?.id
         fallbackHeroSource = id
     }
