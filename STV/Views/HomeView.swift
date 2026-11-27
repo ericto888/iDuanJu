@@ -556,7 +556,6 @@ private struct HomeFeedPage: View {
     @State private var legacyError: Error?
     @State private var pluginHomeSource: String?
     @State private var pluginFeatured: [HGSeries] = []
-    @State private var pluginHomeError: Error?
     @State private var featuredIndex = 0
     private let gutter: CGFloat = 16
     /// DEBUG `STV_HOME_SCROLL=bottom` opens the feed scrolled to the end (simulator screenshots).
@@ -585,7 +584,7 @@ private struct HomeFeedPage: View {
         let hasFeatured = !pluginFeatured.isEmpty
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                if source.subs.count > 1 { subChips } else if case .site = source { boardChips(boards) }
+                if source.subs.count > 1 { subChips } else if case .site = source { boardChips(allBoards) }
                 if tab == .actorRank {
                     ActorRankList().padding(.vertical, 16)
                 } else {
@@ -609,7 +608,15 @@ private struct HomeFeedPage: View {
         .accessibilityIdentifier("home.page.\(source.label)")
         .homePageInset()
         .refreshable {
-            if tab == .actorRank { await ActorRankStore.shared.reload() } else { boards.forEach { BoardCache.shared.feed($0).load(force: true) } }
+            if tab == .actorRank {
+                await ActorRankStore.shared.reload()
+            } else {
+                if case .site(let site) = tab, site.pluginID != nil {
+                    pluginHomeSource = nil
+                    await loadPluginHome(site)
+                }
+                boards.forEach { BoardCache.shared.feed($0).load(force: true) }
+            }
         }
         .task(id: tab) {
             if case .site(let site) = tab, site.pluginID != nil {
@@ -627,14 +634,19 @@ private struct HomeFeedPage: View {
 
     private func loadPluginHome(_ site: DramaSource) async {
         guard let id = site.pluginID, pluginHomeSource != id else { return }
-        pluginHomeSource = id
+        guard let manifest = PluginStore.snapshot(id)?.manifest,
+              manifest.capabilities.contains("home"),
+              let provider = Sites.provider(site) as? JSVideoProvider else {
+            pluginHomeSource = id
+            pluginFeatured = []
+            return
+        }
         do {
-            guard let provider = Sites.provider(site) as? JSVideoProvider else { return }
             let data = try await provider.homeData()
             pluginFeatured = data.featured
-            pluginHomeError = nil
+            pluginHomeSource = id
         } catch {
-            pluginHomeError = error
+            pluginHomeSource = nil
         }
     }
 
