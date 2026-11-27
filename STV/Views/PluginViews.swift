@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-private extension UTType {
+extension UTType {
     /// Imported plugin bundles shared through Files use the .idjplugin extension.
     static let idjPlugin = UTType(importedAs: "com.ericto888.idjplugin", conformingTo: .data)
 }
