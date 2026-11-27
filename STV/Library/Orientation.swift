@@ -53,9 +53,21 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
         }
     }
 
-    @MainActor static func unlock() {
+    /// Allow the system to follow physical device rotation. This changes only the supported mask;
+    /// it deliberately does not request a new orientation or force the phone to rotate.
+    @MainActor static func allowDeviceRotation() {
         rotationGeneration += 1
         mask = isPad ? .all : .allButUpsideDown
+        refresh()
+    }
+
+    /// Freeze the current interface orientation while a new episode is loading.
+    /// No geometry request is issued, so the existing player layout is not moved.
+    @MainActor static func freezeCurrentOrientation() {
+        rotationGeneration += 1
+        guard !isPad else { mask = .all; refresh(); return }
+        let orientation = foregroundScene()?.interfaceOrientation
+        mask = orientation?.isLandscape == true ? .landscape : .portrait
         refresh()
     }
     /// Enter fullscreen and keep the iPhone in landscape until the explicit exit button is pressed.
@@ -80,17 +92,14 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
             refresh()
             return
         }
-        // Constrain during the portrait transition, then restore sensor rotation after it settles.
+        // An explicit exit is a user override: return to portrait and keep it there.
+        // Sensor rotation is re-enabled only after the next episode's aspect is known.
         mask = .portrait
         refresh()
         if let scene = foregroundScene() {
             request(.portrait, in: scene, generation: generation)
         } else {
             NSLog("[OrientationGate] no foreground UIWindowScene for portrait request")
-        }
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 650_000_000)
-            if generation == rotationGeneration { mask = .allButUpsideDown; refresh() }
         }
     }
 
