@@ -23,7 +23,8 @@ final class StatusBarGate: ObservableObject {
     }
 }
 
-/// Portrait by default on iPhone; unlock all orientations on iPad and while the player is on screen.
+/// iPhone starts portrait-locked; confirmed landscape episodes opt into device rotation, while
+/// portrait episodes and an explicit fullscreen exit remain portrait-locked. iPad supports all orientations.
 final class OrientationGate: NSObject, UIApplicationDelegate {
     private static var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     static var mask: UIInterfaceOrientationMask = UIDevice.current.userInterfaceIdiom == .pad ? .all : .portrait
