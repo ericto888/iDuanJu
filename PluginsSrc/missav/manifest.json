@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "id": "com.idj.bundled.missav",
+  "name": "MissAV",
+  "version": "1.0.1",
+  "author": {
+    "name": "i短剧"
+  },
+  "description": "MissAV · HLS 1080P/720P/480P（5 镜像自动探测，c.surrit.com 直连播放）",
+  "type": "video",
+  "adult": true,
+  "language": [
+    "zh"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+    "http": [
+      "missav.fans",
+      "missav.media",
+      "missav.ai",
+      "missav.ws",
+      "missav.live",
+      "surrit.mrstcdn.store",
+      "*.mrstcdn.store",
+      "c.surrit.com",
+      "*.surrit.com"
+    ],
+    "media": [
+      "surrit.mrstcdn.store",
+      "fourhoi.mrstcdn.store",
+      "fourhoi.com",
+      "*.mrstcdn.store",
+      "*.fourhoi.com",
+      "*.surrit.com",
+      "c.surrit.com"
+    ],
+    "cloudflare": true,
+    "storage": false,
+    "login": false
+  },
+  "capabilities": [
+    "home",
+    "category",
+    "search",
+    "detail",
+    "play"
+  ],
+  "settings": []
+}

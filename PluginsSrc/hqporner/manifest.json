@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "id": "com.idj.bundled.hqporner",
+  "name": "HQPorner",
+  "version": "1.0.0",
+  "author": {
+    "name": "i短剧"
+  },
+  "description": "HQPorner · MP4 多画质（mydaddy.cc 嵌入页，需代理）",
+  "type": "video",
+  "adult": true,
+  "language": [
+    "en"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+    "http": [
+      "hqporner.com",
+      "*.hqporner.com",
+      "mydaddy.cc",
+      "*.mydaddy.cc"
+    ],
+    "media": [
+      "hqporner.com",
+      "*.hqporner.com",
+      "mydaddy.cc",
+      "*.mydaddy.cc",
+      "*.bigcdn.cc"
+    ],
+    "cloudflare": false,
+    "storage": false,
+    "login": false
+  },
+  "capabilities": [
+    "home",
+    "category",
+    "search",
+    "detail",
+    "play"
+  ],
+  "settings": []
+}

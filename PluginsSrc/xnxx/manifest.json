@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "id": "com.idj.bundled.xnxx",
+  "name": "XNXX",
+  "version": "1.0.0",
+  "author": {
+    "name": "i短剧"
+  },
+  "description": "XNXX · HLS 自适应 + MP4（需代理）",
+  "type": "video",
+  "adult": true,
+  "language": [
+    "en"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+    "http": [
+      "www.xnxx.com",
+      "xnxx.com",
+      "*.xnxx.com"
+    ],
+    "media": [
+      "www.xnxx.com",
+      "*.xnxx.com",
+      "*.xnxx-cdn.com",
+      "*.xvideos-cdn.com"
+    ],
+    "cloudflare": false,
+    "storage": false,
+    "login": false
+  },
+  "capabilities": [
+    "home",
+    "category",
+    "search",
+    "detail",
+    "play"
+  ],
+  "settings": []
+}

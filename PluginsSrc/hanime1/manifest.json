@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "id": "com.idj.bundled.hanime1",
+  "name": "Hanime1",
+  "version": "1.0.0",
+  "author": {
+    "name": "i短剧"
+  },
+  "description": "Hanime1.me · 里番 / 泡面番 / 3DCG（MP4 直链，常需 Cloudflare 验证）",
+  "type": "video",
+  "adult": true,
+  "language": [
+    "zh"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+    "http": [
+      "hanime1.me",
+      "*.hanime1.me"
+    ],
+    "media": [
+      "hanime1.me",
+      "*.hanime1.me",
+      "*.hembed.com",
+      "*.hanime1.com",
+      "*.cloudfront.net",
+      "*.vdownload.hembed.com"
+    ],
+    "cloudflare": true,
+    "storage": false,
+    "login": false
+  },
+  "capabilities": [
+    "home",
+    "category",
+    "search",
+    "detail",
+    "play"
+  ],
+  "settings": []
+}

@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "id": "com.idj.bundled.pornhub",
+  "name": "Pornhub",
+  "version": "1.0.0",
+  "author": {
+    "name": "i短剧"
+  },
+  "description": "Pornhub · HLS 1080P/720P/480P（需代理）",
+  "type": "video",
+  "adult": true,
+  "language": [
+    "en"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+    "http": [
+      "www.pornhub.com",
+      "pornhub.com",
+      "*.pornhub.com"
+    ],
+    "media": [
+      "www.pornhub.com",
+      "*.pornhub.com",
+      "*.phncdn.com"
+    ],
+    "cloudflare": true,
+    "storage": false,
+    "login": false
+  },
+  "capabilities": [
+    "home",
+    "category",
+    "search",
+    "detail",
+    "play"
+  ],
+  "settings": []
+}

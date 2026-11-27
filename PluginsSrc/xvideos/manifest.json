@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "id": "com.idj.bundled.xvideos",
+  "name": "XVideos",
+  "version": "1.0.0",
+  "author": {
+    "name": "i短剧"
+  },
+  "description": "XVideos · HLS 自适应 + MP4（需代理）",
+  "type": "video",
+  "adult": true,
+  "language": [
+    "en"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+    "http": [
+      "www.xvideos.com",
+      "xvideos.com",
+      "*.xvideos.com"
+    ],
+    "media": [
+      "www.xvideos.com",
+      "*.xvideos.com",
+      "*.xvideos-cdn.com"
+    ],
+    "cloudflare": false,
+    "storage": false,
+    "login": false
+  },
+  "capabilities": [
+    "home",
+    "category",
+    "search",
+    "detail",
+    "play"
+  ],
+  "settings": []
+}

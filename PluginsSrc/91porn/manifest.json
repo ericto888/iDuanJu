@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "id": "com.idj.bundled.91porn",
+  "name": "91Porn",
+  "version": "1.0.9",
+  "author": {
+    "name": "syiyi"
+  },
+  "description": "91Porn 视频列表、分类、搜索、详情与播放地址解析。",
+  "type": "video",
+  "adult": true,
+  "language": [
+    "zh"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+    "http": [
+      "91porn.com",
+      "*.91porn.com",
+      "la.btc620.com",
+      "*.btc620.com",
+      "*.91p52.com",
+      "*.killcovid2021.com",
+      "*.rsc.cdn77.org"
+    ],
+    "media": [
+      "91porn.com",
+      "*.91porn.com",
+      "la.btc620.com",
+      "*.btc620.com",
+      "*.91p52.com",
+      "*.killcovid2021.com",
+      "*.rsc.cdn77.org"
+    ],
+    "cloudflare": true,
+    "storage": false,
+    "login": false
+  },
+  "capabilities": [
+    "home",
+    "category",
+    "search",
+    "detail",
+    "play"
+  ],
+  "settings": []
+}

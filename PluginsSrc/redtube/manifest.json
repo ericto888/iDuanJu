@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "id": "com.idj.bundled.redtube",
+  "name": "RedTube",
+  "version": "1.0.0",
+  "author": {
+    "name": "i短剧"
+  },
+  "description": "RedTube · HLS + MP4 多画质（需代理）",
+  "type": "video",
+  "adult": true,
+  "language": [
+    "en"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+    "http": [
+      "www.redtube.com",
+      "redtube.com",
+      "*.redtube.com"
+    ],
+    "media": [
+      "www.redtube.com",
+      "*.redtube.com",
+      "*.rdtcdn.com",
+      "*.phncdn.com"
+    ],
+    "cloudflare": true,
+    "storage": false,
+    "login": false
+  },
+  "capabilities": [
+    "home",
+    "category",
+    "search",
+    "detail",
+    "play"
+  ],
+  "settings": []
+}

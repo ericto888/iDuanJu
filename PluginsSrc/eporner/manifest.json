@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "id": "com.idj.bundled.eporner",
+  "name": "Eporner",
+  "version": "1.0.0",
+  "author": {
+    "name": "i短剧"
+  },
+  "description": "Eporner · 官方公开 API · HLS + MP4 多画质",
+  "type": "video",
+  "adult": true,
+  "language": [
+    "en"
+  ],
+  "minAppVersion": "1.5",
+  "entry": "main.js",
+  "permissions": {
+    "http": [
+      "www.eporner.com",
+      "eporner.com",
+      "*.eporner.com"
+    ],
+    "media": [
+      "www.eporner.com",
+      "eporner.com",
+      "*.eporner.com",
+      "*.eporner.net"
+    ],
+    "cloudflare": false,
+    "storage": false,
+    "login": false
+  },
+  "capabilities": [
+    "home",
+    "category",
+    "search",
+    "detail",
+    "play"
+  ],
+  "settings": []
+}
