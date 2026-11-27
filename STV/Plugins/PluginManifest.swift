@@ -42,7 +42,26 @@ struct PluginManifest: Codable, Hashable {
         /// base64 signature over `PluginManifest.signingPayload`.
         var value: String
     }
-    struct Integrity: Codable, Hashable { var files: [String: String]?; var signature: Signature? }
+    struct Integrity: Codable, Hashable {
+        var files: [String: String]?
+        var signature: Signature?
+        /// Shorthand single-file hash form (`"integrity": "sha256-..."`) used by some third-party plugin packs.
+        var hash: String?
+
+        init(files: [String: String]? = nil, signature: Signature? = nil, hash: String? = nil) {
+            self.files = files; self.signature = signature; self.hash = hash
+        }
+        init(from decoder: Decoder) throws {
+            if let single = try? decoder.singleValueContainer(), let str = try? single.decode(String.self) {
+                files = nil; signature = nil; hash = str
+                return
+            }
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            files = try c.decodeIfPresent([String: String].self, forKey: .files)
+            signature = try c.decodeIfPresent(Signature.self, forKey: .signature)
+            hash = try c.decodeIfPresent(String.self, forKey: .hash)
+        }
+    }
 
     var schema: Int
     var id: String

@@ -216,7 +216,7 @@ final class PluginNet: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
 
     func allowed(_ url: URL) -> Bool { (try? check(url)) != nil }
 
-    static let forbiddenHeaders: Set<String> = ["cookie", "cookie2", "host", "authorization", "proxy-authorization", "connection",
+    static let forbiddenHeaders: Set<String> = ["cookie", "cookie2", "host", "proxy-authorization", "connection",
                                                 "content-length", "transfer-encoding", "te", "upgrade", "proxy-connection", "keep-alive"]
 
     /// Synchronous on purpose: runs on the plugin's own thread while the script waits.

@@ -42,7 +42,9 @@ final class HomeInteractionUITests: XCTestCase {
         fingerTap(el("home.filter"))
         XCTAssertTrue(el("home.channelPanel").waitForExistence(timeout: 5), "filter panel did not open")
         // Choose 黄果 · App 源 from the panel → that source page + sub chip are selected.
-        fingerTap(el("panel.黄果.App 源"))
+        let pick = el("panel.黄果.App 源")
+        for _ in 0..<3 where !(pick.exists && pick.isHittable) { el("home.channelPanel").swipeUp() }
+        fingerTap(pick)
         XCTAssertTrue(el("home.channel.黄果").isSelectedChannel(), "panel pick did not switch source")
         XCTAssertTrue(el("home.sub.App 源").isSelectedChannel(), "panel pick did not switch sub board")
     }
@@ -50,12 +52,11 @@ final class HomeInteractionUITests: XCTestCase {
     func testSourceBarTapAndPagerSwipe() {
         XCTAssertTrue(el("home.hero.page.0").waitForExistence(timeout: 20), "hero not loaded")
         XCTAssertTrue(el("home.channel.红果").isSelectedChannel())
-        // Swipe on the 红果 page below the hero → pages to 黄果. Start on a section header: the 继续观看 row
-        // itself scrolls horizontally once there is watch history, and must keep that gesture.
-        let header = app.staticTexts["继续观看"].firstMatch
-        XCTAssertTrue(header.waitForExistence(timeout: 5))
+        // Swipe on the 红果 page below the hero → pages to 黄果. Start on a non-scrolling section header.
+        let header = app.staticTexts["热播榜"].firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 8))
         let w = app.windows.firstMatch, y = header.frame.midY / max(1, w.frame.height)
-        w.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: y))
+        w.coordinate(withNormalizedOffset: CGVector(dx: 0.72, dy: y))
             .press(forDuration: 0.05, thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: y)))
         XCTAssertTrue(el("home.channel.黄果").isSelectedChannel(), "swipe on 红果 page did not page to 黄果")
         fingerTap(el("home.channel.红果"))
@@ -64,6 +65,19 @@ final class HomeInteractionUITests: XCTestCase {
         fingerTap(el("home.channel.黄果"))
         XCTAssertTrue(el("home.channel.黄果").isSelectedChannel(), "tap did not select 黄果")
         XCTAssertTrue(el("home.sub.视频站").waitForExistence(timeout: 8), "黄果 page content not shown")
+        // Jump across non-adjacent tabs (红果/黄果 → 漫画 → 小说 → 红果) and verify content really switches.
+        for target in ["漫画", "小说"] {
+            let ch = el("home.channel.\(target)")
+            for _ in 0..<3 where !(ch.exists && ch.isHittable) { el("home.channels").swipeLeft() }
+            fingerTap(ch)
+            XCTAssertTrue(ch.isSelectedChannel(), "tap did not select \(target)")
+            XCTAssertFalse(el("home.sub.全部榜单").isHittable, "still stuck on 红果 after tapping \(target)")
+        }
+        let hg = el("home.channel.黄果")
+        for _ in 0..<3 where !(hg.exists && hg.isHittable) { el("home.channels").swipeRight() }
+        fingerTap(hg)
+        XCTAssertTrue(hg.isSelectedChannel(), "tap did not return to 黄果")
+        XCTAssertTrue(el("home.sub.视频站").waitForExistence(timeout: 8), "黄果 page content not shown after jump")
         // Swipe the content area left/right → next/previous source, bar follows.
         var pager = el("home.page.黄果")
         pager.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.75))
@@ -71,8 +85,11 @@ final class HomeInteractionUITests: XCTestCase {
         XCTAssertTrue(el("home.channel.AI剧").isSelectedChannel(), "swipe left did not page to AI剧")
         XCTAssertTrue(el("home.sub.红果 AI剧").waitForExistence(timeout: 8))
         pager = el("home.page.AI剧")
-        pager.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.75))
-            .press(forDuration: 0.05, thenDragTo: pager.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.75)))
+        let aiHeader = app.staticTexts.matching(NSPredicate(format: "label CONTAINS '榜'")).allElementsBoundByIndex
+            .first { $0.frame.minY > 360 && $0.frame.maxY < w.frame.height - 120 }
+        let aiY = aiHeader.map { $0.frame.midY / max(1, w.frame.height) } ?? 0.60
+        w.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: aiY))
+            .press(forDuration: 0.05, thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: aiY)))
         XCTAssertTrue(el("home.channel.黄果").isSelectedChannel(), "swipe right did not page back")
         fingerTap(el("home.channel.红果"))
         XCTAssertTrue(el("home.channel.红果").isSelectedChannel())
@@ -133,19 +150,18 @@ final class HomeInteractionUITests: XCTestCase {
 
     func testTabBarAndOtherRootTops() {
         fingerTap(el("tab.1"))
-        XCTAssertTrue(app.textFields.firstMatch.waitForExistence(timeout: 8), "搜索 tab")
-        fingerTap(app.textFields.firstMatch)
-        app.typeText("总裁")
-        XCTAssertEqual(app.textFields.firstMatch.value as? String, "总裁", "search field at top not tappable")
-        app.typeText("\n")   // submit → keyboard goes away so the tab bar is reachable again
+        XCTAssertTrue(app.buttons["点播"].firstMatch.waitForExistence(timeout: 8) || app.staticTexts["TVBox"].firstMatch.waitForExistence(timeout: 8), "TVBox tab")
+        XCTAssertFalse(el("home.page.红果").isHittable, "still on 首页红果 after switching to TVBox")
         fingerTap(el("tab.2"))
         XCTAssertTrue(app.buttons["榜单"].firstMatch.waitForExistence(timeout: 8), "找剧 tab")
+        XCTAssertFalse(el("home.page.红果").isHittable, "still on 首页红果 after switching to 找剧")
         // Top controls of 找剧 respond (segment + genre pill).
         fingerTap(app.buttons["榜单"].firstMatch)
         let pill = app.buttons["真人剧"].firstMatch
         if pill.waitForExistence(timeout: 5) { fingerTap(pill) }
         fingerTap(el("tab.3"))
         XCTAssertTrue(app.staticTexts["我的"].firstMatch.waitForExistence(timeout: 8), "我的 tab")
+        XCTAssertFalse(el("home.page.红果").isHittable, "still on 首页红果 after switching to 我的")
         fingerTap(el("tab.0"))
         XCTAssertTrue(el("home.search").waitForExistence(timeout: 8), "首页 tab")
         fingerTap(el("home.search"))
@@ -163,7 +179,7 @@ final class HomeSourceBarCenteringUITests: XCTestCase {
         XCTAssertTrue(bar.waitForExistence(timeout: 15))
         for name in ["MissAV", "Jable"] {
             let b = app.descendants(matching: .any)["home.channel.\(name)"].firstMatch
-            for _ in 0..<3 where !b.isHittable { bar.swipeLeft() }
+            for _ in 0..<3 where b.exists && (b.frame.maxX > bar.frame.maxX - 8 || b.frame.minX < bar.frame.minX + 8) { bar.swipeLeft() }
             b.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
             XCTAssertTrue(b.isSelectedChannel(), "\(name) not selected")
             sleep(1)

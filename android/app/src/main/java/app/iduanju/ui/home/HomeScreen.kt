@@ -202,6 +202,19 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
         if (i >= 0) { pager.scrollToPage(i); HomeJump.label = null }
     }
     val scope = rememberCoroutineScope()
+    var tabScrollJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val jumpToPage: (Int) -> Unit = { target ->
+        val clamped = target.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
+        tabScrollJob?.cancel()
+        tabScrollJob = scope.launch {
+            // Direct jump across >1 tab prevents sweeping intermediate plugin tabs and cancelled-animation snap-backs.
+            if (kotlin.math.abs(clamped - pager.currentPage) <= 1) {
+                pager.animateScrollToPage(clamped)
+            } else {
+                pager.scrollToPage(clamped)
+            }
+        }
+    }
     val scrolled = remember { mutableStateMapOf<String, Boolean>() }
     val current by remember { derivedStateOf { pages[pager.currentPage.coerceIn(0, pages.size - 1)] } }
     val density = LocalDensity.current
@@ -260,11 +273,12 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
                     }
                 }
                 Spacer(Modifier.height(10.dp))
-                ChannelBar(pages, pager.currentPage) { scope.launch { pager.animateScrollToPage(it) } }
-                if (HomeChannelSheetOpen.value) ChannelSheet(pages, pager.currentPage, onDismiss = { HomeChannelSheetOpen.value = false }) { page, sub ->
+                val selectedPage = pager.currentPage.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
+                ChannelBar(pages, selectedPage) { jumpToPage(it) }
+                if (HomeChannelSheetOpen.value) ChannelSheet(pages, selectedPage, onDismiss = { HomeChannelSheetOpen.value = false }) { page, sub ->
                     HomeChannelSheetOpen.value = false
                     if (sub != null) HomeSubSel.map[pages[page].label] = sub
-                    scope.launch { pager.animateScrollToPage(page) }
+                    jumpToPage(page)
                 }
             }
             HorizontalPager(

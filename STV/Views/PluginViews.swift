@@ -86,6 +86,7 @@ struct PluginsView: View {
             .padding(.top, 4).padding(.bottom, 32)
         }
         .dsNavigation("插件")
+        .dsToast($message)
         .overlay { if busy == "prepare" { DSBusyOverlay(label: "正在校验插件…") } }
         .animation(DS.panel, value: busy)
         .sheet(item: $pending) { p in
@@ -136,8 +137,9 @@ struct PluginsView: View {
 
     private var hiddenAdult: Int { store.plugins.count - store.visiblePlugins.count }
 
-    /// Bundled plugins offered for install; skip video sites that iOS already ships natively in 片源管理.
+    /// Bundled plugins offered for install; skip sources that iOS already ships natively in 片源管理.
     private static let iosNativeBundledIDs: Set<String> = [
+        "com.iduanju.hongguo", "com.iduanju.huangguo",
         "com.idj.bundled.jable", "com.idj.bundled.missav", "com.idj.bundled.hanime1", "com.idj.bundled.eporner",
         "com.idj.bundled.xvideos", "com.idj.bundled.xnxx", "com.idj.bundled.pornhub", "com.idj.bundled.youporn",
         "com.idj.bundled.redtube", "com.idj.bundled.hqporner",
@@ -198,13 +200,19 @@ struct PluginsView: View {
     }
 
     /// Downloads and validates every missing entry, then asks for consent once for the whole batch.
-    private func installAll(_ entries: [PluginSubscription.Entry], origin: String) {
+    private func resolvedManifestURL(_ manifest: String, base subURL: String?) -> String {
+        guard let subURL, let base = URL(string: subURL), let abs = URL(string: manifest, relativeTo: base)?.absoluteString else { return manifest }
+        return abs
+    }
+
+    private func installAll(_ entries: [PluginSubscription.Entry], subURL: String, origin: String) {
         busy = "prepare"; message = nil
         Task {
             var prepared: [PendingInstall] = []
             var failures: [String] = []
             for e in entries {
-                do { prepared.append(try await Task.detached { try await PluginInstaller.prepare(manifestURL: e.manifest, origin: origin) }.value) }
+                let targetURL = resolvedManifestURL(e.manifest, base: subURL)
+                do { prepared.append(try await Task.detached { try await PluginInstaller.prepare(manifestURL: targetURL, origin: origin) }.value) }
                 catch { failures.append("\(e.name)：\(error.localizedDescription)") }
             }
             busy = nil
@@ -306,25 +314,26 @@ struct PluginsView: View {
             if missing.count > 1 {
                 HStack {
                     Spacer(minLength: 0)
-                    Button { installAll(missing, origin: "订阅：" + s.url) } label: { MiniButtonLabel(title: "全部安装（\(missing.count)）") }
+                    Button { installAll(missing, subURL: s.url, origin: "订阅：" + s.url) } label: { MiniButtonLabel(title: "全部安装（\(missing.count)）") }
                         .buttonStyle(PressScale()).accessibilityIdentifier("plugins.sub.installAll")
                 }
                 .padding(.leading, 44)
             }
             ForEach(s.plugins.filter { !($0.adult ?? true) || gate.unlocked }) { e in
+                let targetURL = resolvedManifestURL(e.manifest, base: s.url)
                 HStack(spacing: 8) {
                     Text(e.name).dsFont(14, relativeTo: .subheadline).foregroundStyle(STVTheme.text)
                     if e.adult ?? true { DSTag(text: "18+") }
                     Spacer(minLength: 0)
                     if let installed = store.plugin(e.id) {
                         if let ver = e.version, PluginManifest.compare(ver, installed.manifest.version) > 0 {
-                            Button { prepare { try await PluginInstaller.prepare(manifestURL: e.manifest, origin: "订阅：" + s.url) } } label: { MiniButtonLabel(title: "更新 \(ver)") }
+                            Button { prepare { try await PluginInstaller.prepare(manifestURL: targetURL, origin: "订阅：" + s.url) } } label: { MiniButtonLabel(title: "更新 \(ver)") }
                                 .buttonStyle(PressScale())
                         } else {
                             Text("已安装").dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary)
                         }
                     } else {
-                        Button { prepare { try await PluginInstaller.prepare(manifestURL: e.manifest, origin: "订阅：" + s.url) } } label: { MiniButtonLabel(title: "安装") }
+                        Button { prepare { try await PluginInstaller.prepare(manifestURL: targetURL, origin: "订阅：" + s.url) } } label: { MiniButtonLabel(title: "安装") }
                             .buttonStyle(PressScale())
                     }
                 }

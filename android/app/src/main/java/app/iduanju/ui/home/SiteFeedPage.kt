@@ -49,11 +49,11 @@ private object FeedGridCache {
         var firstIndex: Int = 0,
         var firstOffset: Int = 0,
     )
-    val categories = HashMap<String, List<Pair<String, String>>>()
-    val selectedTab = HashMap<String, Int>()
-    val buckets = HashMap<String, Bucket>()
+    val categories = java.util.concurrent.ConcurrentHashMap<String, List<Pair<String, String>>>()
+    val selectedTab = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    val buckets = java.util.concurrent.ConcurrentHashMap<String, Bucket>()
 
-    fun bucket(key: String, cat: String): Bucket = buckets.getOrPut("$key|$cat") { Bucket() }
+    fun bucket(key: String, cat: String): Bucket = buckets.computeIfAbsent("$key|$cat") { Bucket() }
 }
 
 /** iOS HomeFeedPage for `.site(cms)`. */
@@ -78,6 +78,7 @@ fun SiteFeedPage(site: CMSSite, onOpen: (String) -> Unit) {
 fun PluginFeedPage(p: app.iduanju.plugin.PluginStore.Installed, onOpen: (String) -> Unit) {
     val cacheKey = "plugin:" + p.id
     var cats by remember(p.id) { mutableStateOf(FeedGridCache.categories[cacheKey] ?: listOf("" to "推荐")) }
+    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
     FeedGrid(cacheKey, cats, { cat, page ->
         val v = IdjApp.instance.plugins.video(p.id)
         try {
@@ -85,7 +86,8 @@ fun PluginFeedPage(p: app.iduanju.plugin.PluginStore.Installed, onOpen: (String)
             if (cat.isEmpty()) v.categories.takeIf { it.isNotEmpty() }?.let { cs ->
                 val list = listOf("" to "推荐") + cs.map { it.id to it.name }
                 FeedGridCache.categories[cacheKey] = list
-                cats = list
+                // Never mutate Compose snapshot state from Dispatchers.IO.
+                mainHandler.post { if (cats != list) cats = list }
             }
             r
         } catch (e: app.iduanju.core.plugin.PluginException) { throw Exception(e.friendly) }
@@ -98,7 +100,8 @@ fun FeedGrid(key: String, cats: List<Pair<String, String>>, load: (String, Int) 
     val c = IdjThemeColors
     val scope = rememberCoroutineScope()
     var sel by remember(key) { mutableIntStateOf((FeedGridCache.selectedTab[key] ?: 0).coerceIn(0, (cats.size - 1).coerceAtLeast(0))) }
-    val activeCat = cats.getOrNull(sel)?.first ?: ""
+    val safeSel = sel.coerceIn(0, (cats.size - 1).coerceAtLeast(0))
+    val activeCat = cats.getOrNull(safeSel)?.first ?: ""
     val bucket = remember(key, activeCat) { FeedGridCache.bucket(key, activeCat) }
     val items = remember(key, activeCat) { mutableStateListOf<HGSeries>().apply { addAll(bucket.items) } }
     var page by remember(key, activeCat) { mutableIntStateOf(bucket.page) }
@@ -173,7 +176,7 @@ fun FeedGrid(key: String, cats: List<Pair<String, String>>, load: (String, Int) 
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = rootBottomInset() + 56.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 if (cats.size > 1) item("chips", full, "chips") {
-                    CategoryChips(cats, sel, chips) { i ->
+                    CategoryChips(cats, safeSel, chips) { i ->
                         sel = i
                         FeedGridCache.selectedTab[key] = i
                     }

@@ -44,6 +44,7 @@ data class PluginManifest(
     val type: PluginType?, val typeRaw: String, val adult: Boolean, val minAppVersion: String, val entry: String,
     val http: List<String>, val media: List<String>?, val cloudflare: Boolean, val storage: Boolean, val login: Boolean,
     val capabilities: List<String>, val settings: List<PluginSetting>, val updateUrl: String?, val signatureAlg: String?,
+    val integrityHash: String? = null,
     val raw: JSONObject,
 ) {
     val httpDomains get() = http
@@ -73,7 +74,7 @@ data class PluginManifest(
     }
 
     companion object {
-        const val APP_VERSION = "1.5.2"
+        const val APP_VERSION = "1.6.45"
 
         fun decode(text: String): PluginManifest {
             val o = try { JSONObject(text) } catch (_: Exception) { throw PluginException.invalidManifest(listOf("manifest 不是合法 JSON")) }
@@ -87,12 +88,16 @@ data class PluginManifest(
             val perms = req("permissions") as? JSONObject ?: throw PluginException.invalidManifest(listOf("manifest 字段类型不对：permissions"))
             val author = req("author") as? JSONObject ?: throw PluginException.invalidManifest(listOf("manifest 字段类型不对：author"))
             val typeRaw = req("type").toString()
+            val entry = req("entry").toString()
+            val integObj = o.optJSONObject("integrity")
+            val integHash = integObj?.optJSONObject("files")?.optString(entry)?.ifEmpty { null }
+                ?: (o.opt("integrity") as? String)?.ifEmpty { null }
             return PluginManifest(
                 schema = (req("schema") as? Number)?.toInt() ?: throw PluginException.invalidManifest(listOf("manifest 字段类型不对：schema")),
                 id = req("id").toString(), name = req("name").toString(), version = req("version").toString(),
                 authorName = author.optString("name"), description = o.optString("description").ifEmpty { null },
                 type = PluginType.entries.firstOrNull { it.name == typeRaw }, typeRaw = typeRaw,
-                adult = (req("adult") as? Boolean) ?: false, minAppVersion = req("minAppVersion").toString(), entry = req("entry").toString(),
+                adult = (req("adult") as? Boolean) ?: false, minAppVersion = req("minAppVersion").toString(), entry = entry,
                 http = strs(perms.optJSONArray("http")), media = perms.optJSONArray("media")?.let { strs(it) },
                 cloudflare = perms.optBoolean("cloudflare"), storage = perms.optBoolean("storage"), login = perms.optBoolean("login"),
                 capabilities = strs(req("capabilities") as? JSONArray),
@@ -101,7 +106,8 @@ data class PluginManifest(
                     PluginSetting(s.optString("key"), s.optString("name"), s.optString("type"), s.optString("default").ifEmpty { null }, strs(s.optJSONArray("options")))
                 },
                 updateUrl = o.optJSONObject("update")?.optString("url"),
-                signatureAlg = o.optJSONObject("integrity")?.optJSONObject("signature")?.optString("alg"),
+                signatureAlg = integObj?.optJSONObject("signature")?.optString("alg")?.ifEmpty { null },
+                integrityHash = integHash,
                 raw = o,
             )
         }
@@ -147,7 +153,13 @@ data class PluginBundle(val manifest: PluginManifest, val files: Map<String, Str
             val m = PluginManifest.decode(o.optJSONObject("manifest") ?: throw PluginException("E_INSTALL", "不是合法的 .idjplugin（需要 {\"manifest\":…, \"files\":{…}}）"))
             val p = m.problems(); if (p.isNotEmpty()) throw PluginException.invalidManifest(p)
             val f = o.optJSONObject("files") ?: JSONObject()
-            return PluginBundle(m, f.keys().asSequence().associateWith { f.optString(it) })
+            val bundle = PluginBundle(m, f.keys().asSequence().associateWith { f.optString(it) })
+            val declared = m.integrityHash
+            if (!declared.isNullOrEmpty() && !declared.contains("<")) {
+                val actual = PluginManifest.fileHash(bundle.source.toByteArray(Charsets.UTF_8))
+                if (declared != actual) throw PluginException("E_INSTALL", "插件校验失败：${m.entry} 的哈希与 manifest 声明不一致")
+            }
+            return bundle
         }
     }
 }

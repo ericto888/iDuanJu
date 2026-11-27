@@ -258,9 +258,22 @@ final class PluginTests: XCTestCase {
         XCTAssertFalse(try m(["capabilities": ["detail"]]).problems(appVersion: "1.5").isEmpty)
         XCTAssertFalse(try m(["minAppVersion": "9.0"]).problems(appVersion: "1.5").isEmpty)
         XCTAssertFalse(try m(["entry": "../x.js"]).problems(appVersion: "1.5").isEmpty)
-        // Integrity mismatch
+        // Integrity mismatch (object form)
         let bad = try m(["integrity": ["files": ["main.js": "sha256-AAAA"]]])
         XCTAssertThrowsError(try PluginInstaller.validate(manifest: bad, source: Data(Self.stub.utf8), origin: "test"))
+        // Shorthand flat-string integrity form (e.g. moytv plugin packs)
+        let goodHash = PluginManifest.fileHash(Data(Self.stub.utf8))
+        let strGood = try m(["integrity": goodHash])
+        XCTAssertEqual(strGood.integrity?.hash, goodHash)
+        XCTAssertNoThrow(try PluginInstaller.validate(manifest: strGood, source: Data(Self.stub.utf8), origin: "test"))
+        let strBad = try m(["integrity": "sha256-AAAA"])
+        XCTAssertThrowsError(try PluginInstaller.validate(manifest: strBad, source: Data(Self.stub.utf8), origin: "test"))
+        // Subscription relative manifest URL resolution
+        var sub = PluginSubscription(url: "https://raw.githubusercontent.com/hoyittvggfh45/moytv/plugins/index.json")
+        let subData = Data(#"{"name":"moytv","plugins":[{"id":"com.idj.ext.porntube","name":"PT","manifest":"porntube/porntube.idjplugin","adult":true}]}"#.utf8)
+        try PluginInstaller.applySubscription(subData, to: &sub)
+        XCTAssertEqual(sub.plugins.first?.manifest, "https://raw.githubusercontent.com/hoyittvggfh45/moytv/plugins/porntube/porntube.idjplugin")
+        XCTAssertFalse(PluginNet.forbiddenHeaders.contains("authorization"))
         // Permission diff
         let v2 = try m(["version": "1.1.0", "permissions": ["http": ["example.com", "new.example.net"], "cloudflare": true]])
         let diff = PermissionDiff(old: try m([:]), new: v2)

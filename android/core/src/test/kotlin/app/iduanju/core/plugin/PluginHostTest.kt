@@ -35,8 +35,16 @@ class PluginHostTest {
         val b = PluginBundle.parse(JSONObject().put("manifest", JSONObject(manifestJSON)).put("files", JSONObject().put("main.js", "export default { home() {} }")).toString())
         assertTrue(PluginGlue.script(b.source).contains("globalThis.__plugin = { home"))
         try { PluginGlue.script("import x from 'y'\nexport default {}"); fail() } catch (_: PluginException) {}
+        // Shorthand flat-string integrity (e.g. moytv plugin packs)
+        val src = "export default { home() {} }"
+        val goodHash = PluginManifest.fileHash(src.toByteArray())
+        val goodStr = JSONObject().put("manifest", JSONObject(manifestJSON).put("integrity", goodHash)).put("files", JSONObject().put("main.js", src)).toString()
+        assertEquals(goodHash, PluginBundle.parse(goodStr).manifest.integrityHash)
+        val badStr = JSONObject().put("manifest", JSONObject(manifestJSON).put("integrity", "sha256-AAAA")).put("files", JSONObject().put("main.js", src)).toString()
+        try { PluginBundle.parse(badStr); fail("mismatched string integrity must fail") } catch (_: PluginException) {}
+        assertFalse("authorization" in PluginHost.FORBIDDEN_HEADERS)
         // every bundled iOS plugin must parse + validate
-        File("../../../priv/STV/Resources/Plugins").takeIf { it.isDirectory }?.listFiles { f -> f.name.endsWith(".idjplugin") }?.forEach {
+        File("../../STV/Resources/Plugins").takeIf { it.isDirectory }?.listFiles { f -> f.name.endsWith(".idjplugin") }?.forEach {
             val pb = PluginBundle.parse(it.readText()); PluginGlue.script(pb.source); println("bundled ok: ${pb.manifest.id} ${pb.manifest.type}")
         }
     }

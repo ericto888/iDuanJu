@@ -212,10 +212,13 @@ class PluginStore(private val ctx: Context,
     /** iOS bundles adult comic plugins under 推荐插件 (never auto-installed). */
     fun bundled(): List<String> = runCatching { ctx.assets.list("plugins")?.filter { it.endsWith(".idjplugin") }?.sorted() ?: emptyList() }.getOrDefault(emptyList())
     fun bundledText(name: String): String = ctx.assets.open("plugins/$name").use { it.readBytes().toString(Charsets.UTF_8) }
-    /** (file, manifest) for 推荐插件; unparsable files are skipped. */
-    fun bundledManifests(): List<Pair<String, PluginManifest>> = bundled().mapNotNull { f -> runCatching { f to PluginBundle.parse(bundledText(f)).manifest }.getOrNull() }
+    /** (file, manifest) for 推荐插件; unparsable files and native built-in duplicates are skipped. */
+    fun bundledManifests(): List<Pair<String, PluginManifest>> = bundled().mapNotNull { f ->
+        runCatching { f to PluginBundle.parse(bundledText(f)).manifest }.getOrNull()
+    }.filterNot { (_, m) -> m.id in NATIVE_BUNDLED_SKIP_IDS }
 
     companion object {
+        private val NATIVE_BUNDLED_SKIP_IDS = setOf("com.iduanju.hongguo", "com.iduanju.huangguo")
         const val KEY = "stv.plugins.index"
         const val SUBS = "stv.plugins.subscriptions"
         private val DANMAKU_EXPORT_RE = Regex("""(?:async\s+)?danmaku\s*(?:\(|:)""")

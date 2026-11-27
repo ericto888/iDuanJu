@@ -302,7 +302,7 @@ class PluginHost(
         const val MAX_BODY = 20 * 1024 * 1024
         const val STORAGE_LIMIT = 1 shl 20
         const val MAX_NODES = 300_000
-        val FORBIDDEN_HEADERS = setOf("cookie", "cookie2", "host", "authorization", "proxy-authorization", "connection",
+        val FORBIDDEN_HEADERS = setOf("cookie", "cookie2", "host", "proxy-authorization", "connection",
             "content-length", "transfer-encoding", "te", "upgrade", "proxy-connection", "keep-alive")
 
         fun fail(m: String) = PluginException("E_INTERNAL", m)

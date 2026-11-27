@@ -218,6 +218,7 @@ struct HomeView: View {
     @ObservedObject private var pluginStore = PluginStore.shared
     @ObservedObject private var cmsStore = CMSStore.shared
     @State private var source: HomeSource
+    @State private var scrollSourceKey: String?
     @State private var subs: [HomeSource: HomeTab]
     /// Cached: building it walks every site, plugin and 采集站, and it used to run several times per body.
     @State private var sources: [HomeSource] = HomeSource.all
@@ -254,6 +255,7 @@ struct HomeView: View {
         if e == "novel" { src = .novel }
         #endif
         _source = State(initialValue: src)
+        _scrollSourceKey = State(initialValue: src.key)
         _subs = State(initialValue: sub)
         _visited = State(initialValue: [src])
     }
@@ -264,25 +266,53 @@ struct HomeView: View {
         return abs(cur - idx) <= 1
     }
 
-    var body: some View {
-        TabView(selection: $source) {
-            ForEach(sources) { s in
-                // `Binding(get:)` reads eagerly, and 频道 / 漫画 / 小说 have no sub boards.
-                Group {
-                    if shouldMount(s) {
-                        HomePage(source: s, tab: Binding(get: { subs[s] ?? s.subs.first ?? .hongguo(.all) }, set: { subs[s] = $0 }))
-                    } else {
-                        Color.clear
+    private func pageCell(_ s: HomeSource) -> some View {
+        HomePageSlot(
+            source: s,
+            mounted: shouldMount(s),
+            tab: Binding(get: { subs[s] ?? s.subs.first ?? .hongguo(.all) }, set: { subs[s] = $0 })
+        )
+        .environment(\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: bottomInset - indicator, onScrolled: { v in
+            guard s == source else { return }
+            if scrolled[s] != v { scrolled[s] = v }
+        }))
+    }
+
+    @ViewBuilder
+    private var pagerContent: some View {
+        if #available(iOS 17.0, *) {
+            // Native ScrollView paging avoids UIPageViewController selection desyncs on iOS 17/18/26
+            // when sources are added, removed, reordered, or mounted lazily.
+            // GeometryReader keeps each page full-bleed (matching TabView(.page) without double safe-area insets),
+            // and scrollPosition(id:) binds directly to ForEach's Identifiable ID type (String = HomeSource.key).
+            GeometryReader { geo in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 0) {
+                        ForEach(sources, id: \.key) { s in
+                            pageCell(s)
+                                .frame(width: geo.size.width, height: geo.size.height)
+                        }
                     }
+                    .scrollTargetLayout()
                 }
-                .environment(\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: bottomInset - indicator, onScrolled: { v in
-                    guard s == source else { return }
-                    if scrolled[s] != v { scrolled[s] = v }
-                }))
-                .tag(s)
+                .scrollTargetBehavior(.paging)
+                .scrollPosition(id: $scrollSourceKey)
+                .scrollIndicators(.hidden)
             }
+        } else {
+            TabView(selection: $source) {
+                ForEach(sources) { s in
+                    pageCell(s)
+                        .tag(s)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .id(sources.map(\.key).joined(separator: "|"))
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
+    }
+
+    var body: some View {
+        pagerContent
         // Pages run under the floating tab bar and dissolve behind its lower edge. The pager stops at the home indicator:
         // iOS 26 centres pages in the UIKit safe region, so overlapping the indicator lifts every page by half its inset.
         .overlay(alignment: .bottom) {
@@ -301,6 +331,20 @@ struct HomeView: View {
         .compatOnChange(of: sourceRevisionToken) { _ in refreshSources() }
         .compatOnChange(of: source) { next in
             if !visited.contains(next) { visited.insert(next) }
+            if scrollSourceKey != next.key {
+                let prevIdx = scrollSourceKey.flatMap { k in sources.firstIndex(where: { $0.key == k }) }
+                let nextIdx = sources.firstIndex(of: next)
+                if let prevIdx, let nextIdx, abs(prevIdx - nextIdx) == 1 {
+                    withAnimation(DS.select) { scrollSourceKey = next.key }
+                } else {
+                    scrollSourceKey = next.key
+                }
+            }
+        }
+        .compatOnChange(of: scrollSourceKey) { nextKey in
+            guard let nextKey, nextKey != source.key, let next = sources.first(where: { $0.key == nextKey }) else { return }
+            if !visited.contains(next) { visited.insert(next) }
+            source = next
         }
         .task {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
@@ -315,6 +359,7 @@ struct HomeView: View {
         if now != sources { sources = now }
         if !now.contains(source), let first = now.first { source = first }
         if !visited.contains(source) { visited.insert(source) }
+        if scrollSourceKey != source.key { scrollSourceKey = source.key }
     }
 
     /// Use the currently visible home source as the initial search provider.
@@ -529,6 +574,23 @@ struct HomeSourceOrderRows: View {
         var copy = sources
         copy.swapAt(idx, target)
         withAnimation(DS.select) { onChange(copy) }
+    }
+}
+
+/// Stable-identity wrapper so lazy mounting never alters the pager cell's outer view type.
+private struct HomePageSlot: View {
+    let source: HomeSource
+    let mounted: Bool
+    @Binding var tab: HomeTab
+    var body: some View {
+        ZStack {
+            if mounted {
+                HomePage(source: source, tab: $tab)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

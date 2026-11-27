@@ -18,12 +18,9 @@ class QuickJSEngine : PluginEngine {
     }
 
     override fun install(hostRaw: (String, String) -> String?) {
-        val g = ctx.globalObject
-        try {
-            g.setProperty("__hostRaw", JSCallFunction { args -> hostRaw(args.getOrNull(0)?.toString() ?: "", args.getOrNull(1)?.toString() ?: "null") })
-        } finally {
-            g.release()
-        }
+        // QuickJSContext caches and owns `globalObject` for its lifetime (released in `ctx.destroy()`).
+        // Never call `release()` on `globalObject`, or the next QuickJS GC sweep frees it and aborts under Scudo.
+        ctx.globalObject.setProperty("__hostRaw", JSCallFunction { args -> hostRaw(args.getOrNull(0)?.toString() ?: "", args.getOrNull(1)?.toString() ?: "null") })
     }
 
     override fun eval(src: String, name: String): Any? {

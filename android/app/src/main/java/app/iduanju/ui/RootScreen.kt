@@ -103,9 +103,14 @@ fun RootScreen(initialRoute: String? = null) {
     var novelImmersive by remember { mutableStateOf(false) }
     val back = nav.currentBackStackEntryAsState().value
     val route = back?.destination?.route ?: "home"
-    LaunchedEffect(route) {
-        when (route) { "home" -> tab = 0; "tvbox" -> tab = 1; "category" -> tab = 2; "profile" -> tab = 3 }
+    val activeTab = when (route) {
+        "home" -> 0
+        "tvbox" -> 1
+        "category" -> 2
+        "profile" -> 3
+        else -> tab
     }
+    LaunchedEffect(activeTab) { tab = activeTab }
     val atRoot = route in RootRoutes
     /** Backdrop for the floating liquid-glass navigation bar: everything the NavHost draws. */
     val bgColor = IdjThemeColors.bg
@@ -178,8 +183,7 @@ fun RootScreen(initialRoute: String? = null) {
             }
         }
         val onSelectTab: (Int) -> Unit = { i ->
-            tab = i
-            val target = tabRoutes[i]
+            val target = tabRoutes.getOrNull(i) ?: "home"
             val cur = nav.currentBackStackEntry?.destination?.route
             if (target == "home") {
                 goHome()
@@ -190,6 +194,9 @@ fun RootScreen(initialRoute: String? = null) {
                     launchSingleTop = true
                     restoreState = true
                 }
+            }
+            tab = when (nav.currentBackStackEntry?.destination?.route) {
+                "home" -> 0; "tvbox" -> 1; "category" -> 2; "profile" -> 3; else -> i
             }
         }
 

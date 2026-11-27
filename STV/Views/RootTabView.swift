@@ -3,12 +3,19 @@ import SwiftUI
 /// 四个根页面 + 窄屏底部悬浮玻璃胶囊 / 平板宽屏左侧悬浮玻璃导航轨（系统 TabBar 隐藏）。
 /// 导航栏只在根页面显示；进入详情 / 播放器等二级页面时隐藏。
 struct RootTabView: View {
-    @State private var tab = Int(ProcessInfo.processInfo.environment["STV_TAB"] ?? "") ?? 0
+    @State private var tab: Int
+    @State private var mountedTabs: Set<Int>
     @State private var paths = [NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath()]
     @State private var tabBarHidden = false
     @State private var restoreTask: Task<Void, Never>?
     static let items: [(String, String)] = [("首页", "house.fill"), ("TVBox", "tv.fill"),
                                             ("找剧", "square.grid.2x2.fill"), ("我的", "person.crop.circle.fill")]
+
+    init() {
+        let initial = Int(ProcessInfo.processInfo.environment["STV_TAB"] ?? "") ?? 0
+        _tab = State(initialValue: initial)
+        _mountedTabs = State(initialValue: [initial])
+    }
     var body: some View {
         GeometryReader { geo in
             let metrics = LayoutMetrics(width: geo.size.width, height: geo.size.height)
@@ -26,13 +33,16 @@ struct RootTabView: View {
                     }
                 }
                 .animation(DS.select, value: showNav && metrics.useRail)
-                TabView(selection: $tab) {
-                    Stack(path: $paths[0], reserveBottomBar: !metrics.useRail) { HomeView() }.tag(0)
-                    Stack(path: $paths[1], reserveBottomBar: !metrics.useRail) { TVBoxHubView() }.tag(1)
-                    Stack(path: $paths[2], reserveBottomBar: !metrics.useRail) { CategoryView() }.tag(2)
-                    Stack(path: $paths[3], reserveBottomBar: !metrics.useRail) { ProfileView() }.tag(3)
-                    Stack(path: $paths[4], reserveBottomBar: !metrics.useRail) { SearchView() }.tag(4)
+                // Deterministic lazy-mounted tab container: avoids UIKit TabView(.toolbar(.hidden)) selection
+                // desyncs on iOS 18/26 while keeping each visited tab's NavigationStack and scroll state alive.
+                ZStack {
+                    tabSlot(0, reserveBottomBar: !metrics.useRail) { HomeView() }
+                    tabSlot(1, reserveBottomBar: !metrics.useRail) { TVBoxHubView() }
+                    tabSlot(2, reserveBottomBar: !metrics.useRail) { CategoryView() }
+                    tabSlot(3, reserveBottomBar: !metrics.useRail) { ProfileView() }
+                    tabSlot(4, reserveBottomBar: !metrics.useRail) { SearchView() }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .tint(STVTheme.accent)
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
@@ -70,7 +80,8 @@ struct RootTabView: View {
                     }
                     .animation(DS.select, value: showBottomBar)
                 }
-                .compatOnChange(of: tab) { _ in
+                .compatOnChange(of: tab) { next in
+                    mountedTabs.insert(next)
                     restoreTask?.cancel()
                     tabBarHidden = false
                 }
@@ -91,6 +102,18 @@ struct RootTabView: View {
         }
         // Cold start: restore a saved TDLib login (no network login, nothing is sent).
         .task { await TDLibService.shared.bootstrap() }
+    }
+
+    @ViewBuilder
+    private func tabSlot<V: View>(_ idx: Int, reserveBottomBar: Bool, @ViewBuilder content: () -> V) -> some View {
+        if mountedTabs.contains(idx) || tab == idx {
+            let active = tab == idx
+            Stack(path: $paths[idx], reserveBottomBar: reserveBottomBar, content: content)
+                .opacity(active ? 1 : 0)
+                .zIndex(active ? 1 : 0)
+                .allowsHitTesting(active)
+                .accessibilityHidden(!active)
+        }
     }
 }
 
@@ -127,6 +150,7 @@ struct GlassTabBar: View {
                 }
                 .padding(6)
                 .liquidGlassCapsule(interactive: true)
+                .animation(DS.select, value: selection)
 
                 if let searchTag {
                     NavSearchButton(on: selection == searchTag, size: 60) { pick(searchTag) }
@@ -139,7 +163,7 @@ struct GlassTabBar: View {
     }
 
     private func pick(_ i: Int) {
-        if i == selection { onReselect(i) } else { withAnimation(DS.select) { selection = i } }
+        if i == selection { onReselect(i) } else { selection = i }
     }
 }
 
@@ -213,6 +237,7 @@ struct GlassNavigationRail: View {
                 }
                 .padding(6)
                 .liquidGlass(corner: 34, interactive: true)
+                .animation(DS.select, value: selection)
                 Spacer()
             }
         }
@@ -222,6 +247,6 @@ struct GlassNavigationRail: View {
     }
 
     private func pick(_ i: Int) {
-        if i == selection { onReselect(i) } else { withAnimation(DS.select) { selection = i } }
+        if i == selection { onReselect(i) } else { selection = i }
     }
 }
