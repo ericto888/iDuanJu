@@ -837,7 +837,7 @@ struct PlayerScreen: View {
 
                 Spacer(minLength: 12)
                 Group {
-                    if showTech, let t = co.tech { PlayerTechStrip(telemetry: co.telemetry, landscape: true).padding(.trailing, 4) }
+                    if showTech, co.tech != nil { PlayerTechStrip(telemetry: co.telemetry, landscape: true).padding(.trailing, 4) }
                     PlayerChip(action: PlayerAction(
                         id: "player.autoNext",
                         a11y: co.autoNext ? "关闭连播" : "开启连播",
