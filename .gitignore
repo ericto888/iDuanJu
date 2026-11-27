@@ -23,3 +23,6 @@ xcuserdata/
 # CPython runtime unpacked by scripts/fetch-ios-python.sh
 /third_party/python-ios/
 /third_party/python-ios.tmp.*
+
+# Local scratch plugin output directory
+/local-plugins/
