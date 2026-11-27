@@ -370,7 +370,6 @@ struct PlayerScreen: View {
             syncEpisodeOrientation()
         }
         .compatOnChange(of: co.videoSize) { _ in
-            updateLastReadyVideoOrientation()
             if co.readyIndex != co.current {
                 // Also covers line changes that reopen the same episode index.
                 orientationEpisode = nil
