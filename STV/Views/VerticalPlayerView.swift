@@ -837,7 +837,7 @@ struct PlayerScreen: View {
 
                 Spacer(minLength: 12)
                 Group {
-                    if showTech, let t = co.tech { PlayerTechStrip(tech: t, landscape: true).padding(.trailing, 4) }
+                    if showTech, let t = co.tech { PlayerTechStrip(telemetry: co.telemetry, landscape: true).padding(.trailing, 4) }
                     PlayerChip(id: "player.autoNext", a11y: co.autoNext ? "关闭连播" : "开启连播", symbol: "repeat",
                                title: "连播", value: co.autoNext ? "开" : "关", on: co.autoNext) {
                         co.autoNext.toggle(); showOSD(co.autoNext ? "连播：开" : "连播：关"); flashChrome()
@@ -931,18 +931,34 @@ struct PlayerScreen: View {
             .accessibilityLabel("下一集")
             .accessibilityIdentifier("player.nextEpisode")
 
-            PlayerChip(id: "player.episodes", a11y: "选集", symbol: "square.grid.2x2", title: "选集", on: panel == .episodes) { toggle(.episodes) }
-            PlayerChip(id: "player.rate", a11y: "播放倍速 " + rate, symbol: "gauge.with.dots.needle.33percent", title: "倍速", value: rate,
-                       on: panel == .rates || co.playbackRate != 1) { toggle(.rates) }
-            PlayerChip(id: "player.quality", a11y: "画质与播放源", symbol: "sparkles.tv", title: "画质",
-                       value: qualityTag == "画质" ? nil : qualityTag, on: panel == .quality) { toggle(.quality) }
-            PlayerChip(id: "player.danmaku", a11y: danmaku.enabled ? "关闭弹幕" : "开启弹幕", symbol: "text.bubble", title: "弹幕",
-                       value: dmOK ? (danmaku.enabled ? "开" : "关") : nil, on: dmOK && danmaku.enabled, dimmed: !dmOK) {
-                guard dmOK else { showOSD("当前片源不支持弹幕"); return }
-                danmaku.enabled.toggle(); flashChrome()
-            }
-            PlayerChip(id: "player.audio", a11y: "音轨与字幕", symbol: "captions.bubble", title: "音轨字幕",
-                       on: panel == .audio || panel == .subtitles) { toggle(.audio) }
+            PlayerChip(action: PlayerAction(
+                id: "player.episodes", a11y: "选集", symbol: "square.grid.2x2", title: "选集",
+                active: panel == .episodes, action: { toggle(.episodes) }
+            ))
+            PlayerChip(action: PlayerAction(
+                id: "player.rate", a11y: "播放倍速 " + rate, symbol: "gauge.with.dots.needle.33percent",
+                title: "倍速", value: rate, active: panel == .rates || co.playbackRate != 1,
+                action: { toggle(.rates) }
+            ))
+            PlayerChip(action: PlayerAction(
+                id: "player.quality", a11y: "画质与播放源", symbol: "sparkles.tv", title: "画质",
+                value: qualityTag == "画质" ? nil : qualityTag, active: panel == .quality,
+                action: { toggle(.quality) }
+            ))
+            PlayerChip(action: PlayerAction(
+                id: "player.danmaku", a11y: danmaku.enabled ? "关闭弹幕" : "开启弹幕",
+                symbol: "text.bubble", title: "弹幕",
+                value: dmOK ? (danmaku.enabled ? "开" : "关") : nil,
+                active: dmOK && danmaku.enabled, dimmed: !dmOK,
+                action: {
+                    guard dmOK else { showOSD("当前片源不支持弹幕"); return }
+                    danmaku.enabled.toggle(); flashChrome()
+                }
+            ))
+            PlayerChip(action: PlayerAction(
+                id: "player.audio", a11y: "音轨与字幕", symbol: "captions.bubble", title: "音轨字幕",
+                active: panel == .audio || panel == .subtitles, action: { toggle(.audio) }
+            ))
         }
     }
 
