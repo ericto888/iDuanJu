@@ -306,7 +306,6 @@ struct HomeView: View {
     /// scrolls it pins with a blurred 80 % page-colour ground and a hairline.
     private var headerInk: Color { STVTheme.text }
     @State private var scrolled: [HomeSource: Bool] = [:]
-    @State private var lastFeedOffset: [HomeSource: CGFloat] = [:]
     @State private var bottomBarBehavior = HomeBottomBarScrollBehavior()
     @State private var homeBottomBarHidden = false
     @State private var headerSpan: VSpan?
@@ -358,10 +357,10 @@ struct HomeView: View {
             .onReceive(Self.sourceChanges) { _ in refreshSources() }
             .onAppear {
                 refreshSources()
-                NotificationCenter.default.post(name: .homeBottomBarVisibilityChanged, object: false)
+                bottomBarBehavior.reset()
+                setBottomBarHidden(false)
             }
             .onReceive(NotificationCenter.default.publisher(for: .homeChromeResetRequested)) { _ in
-                lastFeedOffset.removeAll()
                 bottomBarBehavior.reset()
                 setBottomBarHidden(false)
             }
@@ -369,7 +368,6 @@ struct HomeView: View {
                 NotificationCenter.default.post(name: .homeBottomBarVisibilityChanged, object: false)
             }
             .compatOnChange(of: source) { _ in
-                lastFeedOffset.removeAll()
                 bottomBarBehavior.reset()
                 setBottomBarHidden(false)
             }
@@ -387,7 +385,6 @@ struct HomeView: View {
     /// a fast downward flick reveals it, and returning to the top always restores it.
     private func handleFeedOffset(_ offset: CGFloat, for feedSource: HomeSource) {
         guard feedSource == source else { return }
-        lastFeedOffset[feedSource] = offset
         if let hidden = bottomBarBehavior.update(offset: offset, at: ProcessInfo.processInfo.systemUptime) {
             setBottomBarHidden(hidden)
         }
@@ -644,10 +641,7 @@ private struct HomeFeedPage: View {
         .background(STVTheme.bg.ignoresSafeArea())
         .scrollIndicators(.hidden)
         .coordinateSpace(name: "home.feed.scroll")
-        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
-            if #unavailable(iOS 18.0) { onScrollOffset(offset) }
-        }
-        .compatOnScrollY { onScrollOffset(-$0) }
+        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in onScrollOffset(offset) }
         .compatDefaultScrollAnchor(Self.debugAnchor)
         .accessibilityIdentifier("home.page.\(source.label)")
         .homePageInset()
@@ -945,10 +939,7 @@ private struct DynamicSiteFeed: View {
                 .ignoresSafeArea(.container, edges: .bottom)
                 .scrollIndicators(.hidden)
                 .coordinateSpace(name: "home.feed.scroll")
-                .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
-                    if #unavailable(iOS 18.0) { onScrollOffset(offset) }
-                }
-                .compatOnScrollY { onScrollOffset(-$0) }
+                .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in onScrollOffset(offset) }
                 .accessibilityIdentifier("home.page.\(source.label)")
                 .homePageInset()
                 .refreshable { await refresh() }
