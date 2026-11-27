@@ -306,33 +306,39 @@ struct HomeView: View {
 
     private var header: some View {
         VStack(spacing: 0) {
-            LiquidGlassGroup(spacing: 10) {
-                HStack(spacing: 10) {
-                    NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
-                        DSSearchBarLabel()
+            // Keep the upstream floating channel bar, but collapse only the search/filter row
+            // after the active page scrolls. The measured header span then updates the page inset.
+            if !pinned {
+                LiquidGlassGroup(spacing: 10) {
+                    HStack(spacing: 10) {
+                        NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
+                            DSSearchBarLabel()
+                                .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
+                                .liquidGlassCapsule(interactive: true)
+                        }
+                        .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
+                        Button { showChannels = true } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
+                                Text("筛选").font(.system(size: 14, weight: .medium))
+                            }
+                            .foregroundStyle(STVTheme.text)
                             .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
                             .liquidGlassCapsule(interactive: true)
-                    }
-                    .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
-                    Button { showChannels = true } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
-                            Text("筛选").font(.system(size: 14, weight: .medium))
                         }
-                        .foregroundStyle(STVTheme.text)
-                        .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
-                        .liquidGlassCapsule(interactive: true)
+                        .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
                     }
-                    .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
                 }
+                .padding(.horizontal, 16)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
-            .padding(.horizontal, 16)
             HomeChannelBar(items: sources, selection: $source, label: \.label, ink: STVTheme.text) { showChannels = true }
                 .padding(.leading, 20)
-                .padding(.top, 12)
+                .padding(.top, pinned ? 8 : 12)
         }
         .padding(.top, 8)
         .padding(.bottom, 8)
+        .animation(.easeInOut(duration: 0.22), value: pinned)
         .background { LiquidEdgeFade(visible: pinned) }
         .background { SpanReader(span: $headerSpan) }
     }
