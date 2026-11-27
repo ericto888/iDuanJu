@@ -633,6 +633,11 @@ final class PluginTests: XCTestCase {
         XCTAssertFalse(PluginHomeFeatures.usesNumbering(nil))
         XCTAssertFalse(PluginHomeFeatures.usesNumbering(["categoryShelves"]))
         XCTAssertTrue(PluginHomeFeatures.usesNumbering(["numbered"]))
+
+        let noCategories = JSVideoProvider.visibleCategories(cached: [], features: ["categoryShelves"])
+        XCTAssertTrue(noCategories.isEmpty, "category-shelf plugins must not receive a fabricated 推荐 category")
+        let legacyFallback = JSVideoProvider.visibleCategories(cached: [], features: nil)
+        XCTAssertEqual(legacyFallback.map(\.id), [JSVideoProvider.homeID], "legacy plugins keep the historical home feed")
     }
 
     func testJSVideoHomeResponseParsingAndCategoryCacheSemantics() {
