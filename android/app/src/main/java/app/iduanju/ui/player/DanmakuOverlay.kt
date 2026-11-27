@@ -340,11 +340,22 @@ fun DanmakuOverlay(
     }
 
     var t by remember(player) { mutableDoubleStateOf(player.currentPosition / 1000.0) }
-    // Frame-clocked only while comments really move; a paused video just follows seeks.
-    val moving = playing && raw.isNotEmpty()
-    LaunchedEffect(player, moving) {
+    var resumeEpoch by remember { mutableIntStateOf(0) }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
+            if (ev == androidx.lifecycle.Lifecycle.Event.ON_RESUME) resumeEpoch++
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+    // Frame-clocked while playing (also re-seeded on ON_RESUME / PiP return so the clock never stalls).
+    val moving = (playing || player.isPlaying) && raw.isNotEmpty()
+    LaunchedEffect(player, moving, resumeEpoch) {
+        t = player.currentPosition / 1000.0
         while (isActive) {
-            if (moving) withFrameNanos { } else kotlinx.coroutines.delay(200)
+            val activeNow = moving || (player.isPlaying && raw.isNotEmpty())
+            if (activeNow) withFrameNanos { } else kotlinx.coroutines.delay(180)
             t = player.currentPosition / 1000.0
         }
     }

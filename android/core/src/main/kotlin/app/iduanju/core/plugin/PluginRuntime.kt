@@ -143,12 +143,23 @@ class PluginInstance(val bundle: PluginBundle, val host: PluginHost, engineFacto
         }
     }
 
+    @Volatile private var abandoned = false
+
     private fun <T> run(timeout: Double, f: () -> T): T {
         broken?.let { throw PluginException("E_INTERNAL", it) }
-        val fut = thread.submit(Callable(f))
+        val fut = thread.submit(Callable {
+            try {
+                f()
+            } finally {
+                if (abandoned) {
+                    runCatching { engine?.close() }
+                    engine = null
+                }
+            }
+        })
         return try { fut.get((timeout * 1000).toLong(), TimeUnit.MILLISECONDS) }
         catch (_: TimeoutException) {
-            // QuickJS here has no interrupt hook: abandon this context (the thread is left to finish on its own).
+            abandoned = true
             broken = "插件执行超时，已停用（重新打开 App 后恢复）"; fut.cancel(true); thread.shutdownNow()
             throw PluginException("E_TIMEOUT", "${timeout.toInt()}s")
         } catch (e: java.util.concurrent.ExecutionException) {
@@ -175,5 +186,9 @@ class PluginInstance(val bundle: PluginBundle, val host: PluginHost, engineFacto
         } finally { host.endCall() }
     }
 
-    fun close() { try { thread.submit { engine?.close(); engine = null }.get(2, TimeUnit.SECONDS) } catch (_: Exception) {}; thread.shutdownNow() }
+    fun close() {
+        abandoned = true
+        try { thread.submit { engine?.close(); engine = null }.get(2, TimeUnit.SECONDS) } catch (_: Exception) {}
+        thread.shutdownNow()
+    }
 }

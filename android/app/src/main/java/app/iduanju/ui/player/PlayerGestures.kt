@@ -9,6 +9,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -107,15 +109,61 @@ internal fun systemBrightness(ctx: Context): Float {
  * Live: no seeking and no 2×; the centre swipe changes channel and wraps around.
  */
 @Composable
-internal fun GestureLayer(session: PlayerSession, ui: PlayerUi, hud: GestureHud, nextDrama: NextDramaController, activity: Activity?, inPip: Boolean, modifier: Modifier = Modifier) {
+internal fun GestureLayer(session: PlayerSession, ui: PlayerUi, hud: GestureHud, nextDrama: NextDramaController, activity: Activity?, inPip: Boolean, landscape: Boolean = false, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
     val audio = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val pip by rememberUpdatedState(inPip)
+    val isLandscape by rememberUpdatedState(landscape)
     val settle = remember { arrayOfNulls<Job>(1) }
+    val holdSteps = remember { listOf(1.5f, 2.0f, 2.5f, 3.0f) }
     Box(
         modifier
+            .pointerInput(session) {
+                val stepPx = 56.dp.toPx()
+                val lockUpPx = 68.dp.toPx()
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var anchorX = down.position.x
+                    var anchorY = down.position.y
+                    var wasHolding = false
+                    var lockedNow = false
+                    while (true) {
+                        val ev = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                        val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!ch.pressed) {
+                            if (session.holding && !lockedNow) session.endHold()
+                            break
+                        }
+                        if (session.holding) {
+                            if (!wasHolding) {
+                                wasHolding = true
+                                anchorX = ch.position.x
+                                anchorY = ch.position.y
+                            }
+                            ch.consume()
+                            val dx = ch.position.x - anchorX
+                            val dy = ch.position.y - anchorY
+                            if (!lockedNow && dy < -lockUpPx) {
+                                lockedNow = true
+                                haptics.confirm()
+                                session.lockHold()
+                                break
+                            }
+                            val deltaSteps = (dx / stepPx).toInt()
+                            val next = holdSteps[(1 + deltaSteps).coerceIn(0, holdSteps.lastIndex)]
+                            if (next != session.holdSpeed) {
+                                haptics.tick()
+                                session.updateHoldSpeed(next)
+                            }
+                        } else {
+                            anchorX = ch.position.x
+                            anchorY = ch.position.y
+                        }
+                    }
+                }
+            }
             .pointerInput(session) {
                 detectTapGestures(
                     onTap = {
@@ -137,8 +185,8 @@ internal fun GestureLayer(session: PlayerSession, ui: PlayerUi, hud: GestureHud,
                             else -> session.togglePlay()
                         }
                     },
-                    onPress = { tryAwaitRelease(); session.hold(false) },
-                    onLongPress = { if (!ui.locked && !session.live) { haptics.longPress(); session.hold(true) } },
+                    onPress = { tryAwaitRelease(); if (session.holding) session.endHold() },
+                    onLongPress = { if (!ui.locked && !session.live && ui.panel == null) { haptics.longPress(); session.startHold(2f) } },
                 )
             }
             .pointerInput(session) {
@@ -191,10 +239,11 @@ internal fun GestureLayer(session: PlayerSession, ui: PlayerUi, hud: GestureHud,
                 }
                 detectVerticalDragGestures(
                     onDragStart = { o ->
+                        val edge = if (isLandscape) 0.42f else 0.28f
                         zone = when {
-                            ui.locked || pip || ui.panel != null || ui.channelDrawer -> 0
-                            o.x < size.width * 0.28f -> 1
-                            o.x > size.width * 0.72f -> 2
+                            ui.locked || pip || ui.panel != null || ui.channelDrawer || session.holding -> 0
+                            o.x < size.width * edge -> 1
+                            o.x > size.width * (1f - edge) -> 2
                             committing -> 0
                             else -> 3
                         }
@@ -246,7 +295,7 @@ internal fun GestureLayer(session: PlayerSession, ui: PlayerUi, hud: GestureHud,
                 var on = false
                 fun target(): Long = (start + (acc / size.width * 90_000).toLong()).coerceIn(0, session.clock.dur.coerceAtLeast(0))
                 detectHorizontalDragGestures(
-                    onDragStart = { on = !ui.locked && !session.live && ui.panel == null && session.clock.dur > 0; start = session.player.currentPosition; acc = 0f },
+                    onDragStart = { on = !ui.locked && !session.live && !session.holding && ui.panel == null && session.clock.dur > 0; start = session.player.currentPosition; acc = 0f },
                     onDragEnd = { if (on) session.seekTo(target()); if (on) session.hint = null },
                     onDragCancel = { if (on) session.hint = null },
                 ) { change, d ->

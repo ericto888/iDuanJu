@@ -84,7 +84,11 @@ internal fun PlayerWindowEffects(session: PlayerSession, ui: PlayerUi, enhance: 
             activity?.window?.let { w ->
                 w.colorMode = ActivityInfo.COLOR_MODE_DEFAULT
                 w.attributes = w.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }
-                WindowCompat.getInsetsController(w, w.decorView).show(WindowInsetsCompat.Type.systemBars())
+                val ic = WindowCompat.getInsetsController(w, w.decorView)
+                ic.show(WindowInsetsCompat.Type.systemBars())
+                val sysDark = (ctx.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+                ic.isAppearanceLightStatusBars = !sysDark
+                ic.isAppearanceLightNavigationBars = !sysDark
             }
         }
     }
@@ -95,6 +99,8 @@ internal fun PlayerWindowEffects(session: PlayerSession, ui: PlayerUi, enhance: 
     LaunchedEffect(hideBars) {
         val w = activity?.window ?: return@LaunchedEffect
         val ic = WindowCompat.getInsetsController(w, w.decorView)
+        ic.isAppearanceLightStatusBars = false
+        ic.isAppearanceLightNavigationBars = false
         ic.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         if (hideBars) ic.hide(WindowInsetsCompat.Type.systemBars()) else ic.show(WindowInsetsCompat.Type.systemBars())
     }

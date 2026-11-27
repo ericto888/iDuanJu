@@ -21,12 +21,55 @@ class PluginStore(private val ctx: Context,
 
     private val sp = ctx.getSharedPreferences("idj", Context.MODE_PRIVATE)
     private val root = File(ctx.filesDir, "plugins")
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     val plugins = mutableStateListOf<Installed>()
     private val live = HashMap<String, PluginVideo>()
+    private val danmakuCaps = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
     val logs = HashMap<String, ArrayDeque<String>>()
 
-    init { try { val a = JSONArray(sp.getString(KEY, "[]")); for (i in 0 until a.length()) plugins.add(Installed.of(a.getJSONObject(i))) } catch (_: Exception) {} }
+    init {
+        try { val a = JSONArray(sp.getString(KEY, "[]")); for (i in 0 until a.length()) plugins.add(Installed.of(a.getJSONObject(i))) } catch (_: Exception) {}
+        plugins.forEach { refreshDanmakuCap(it.id) }
+    }
+
+    private fun onMainSync(block: () -> Unit) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) { block(); return }
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var err: Throwable? = null
+        mainHandler.post { try { block() } catch (t: Throwable) { err = t } finally { latch.countDown() } }
+        latch.await()
+        err?.let { throw it }
+    }
+
     private fun save() { sp.edit().putString(KEY, JSONArray(plugins.map { it.toJSON() }).toString()).apply() }
+
+    /** Static capability check (manifest.capabilities or source export) — never blocks QuickJS on the main thread. */
+    fun hasDanmakuCapability(id: String): Boolean = danmakuCaps.getOrPut(id) { detectDanmakuFromDisk(id) }
+
+    private fun refreshDanmakuCap(id: String, bundle: PluginBundle? = null) {
+        val cap = if (bundle != null) {
+            "danmaku" in bundle.manifest.capabilities || DANMAKU_EXPORT_RE.containsMatchIn(bundle.source)
+        } else detectDanmakuFromDisk(id)
+        danmakuCaps[id] = cap
+    }
+
+    private fun detectDanmakuFromDisk(id: String): Boolean = runCatching {
+        val text = File(root, "$id/bundle.idjplugin").takeIf { it.isFile }?.readText() ?: return false
+        val b = PluginBundle.parse(text)
+        "danmaku" in b.manifest.capabilities || DANMAKU_EXPORT_RE.containsMatchIn(b.source)
+    }.getOrDefault(false)
+
+    fun reloadFromDisk() {
+        synchronized(live) { live.values.forEach { runCatching { it.inst.close() } }; live.clear() }
+        danmakuCaps.clear()
+        onMainSync {
+            plugins.clear()
+            runCatching { val a = JSONArray(sp.getString(KEY, "[]")); for (i in 0 until a.length()) plugins.add(Installed.of(a.getJSONObject(i))) }
+            plugins.forEach { refreshDanmakuCap(it.id) }
+            subscriptions.clear()
+            runCatching { val a = JSONArray(sp.getString(SUBS, "[]")); for (i in 0 until a.length()) subscriptions.add(PluginSubscription.fromJSON(a.getJSONObject(i))) }
+        }
+    }
 
     fun log(id: String, m: String) {
         android.util.Log.i("idj-plugin", "[$id] $m")
@@ -41,20 +84,30 @@ class PluginStore(private val ctx: Context,
         probe.close()
         dir.mkdirs(); File(dir, "bundle.idjplugin").writeText(text)
         synchronized(live) { live.remove(b.manifest.id)?.inst?.close() }
+        refreshDanmakuCap(b.manifest.id, b)
         val m = b.manifest
-        val rec = Installed(m.id, m.name, m.typeRaw, m.adult, m.version, plugins.firstOrNull { it.id == m.id }?.enabled ?: true, origin)
-        val i = plugins.indexOfFirst { it.id == m.id }
-        if (i >= 0) plugins[i] = rec else plugins.add(rec)
-        save(); log(m.id, "✓ 已安装 ${m.name} ${m.version}")
-        return rec
+        var rec: Installed? = null
+        onMainSync {
+            val r = Installed(m.id, m.name, m.typeRaw, m.adult, m.version, plugins.firstOrNull { it.id == m.id }?.enabled ?: true, origin)
+            val i = plugins.indexOfFirst { it.id == m.id }
+            if (i >= 0) plugins[i] = r else plugins.add(r)
+            save()
+            rec = r
+        }
+        log(m.id, "✓ 已安装 ${m.name} ${m.version}")
+        return rec!!
     }
 
     fun remove(id: String) {
         synchronized(live) { live.remove(id)?.inst?.close() }
-        File(root, id).deleteRecursively(); plugins.removeAll { it.id == id }; save()
+        danmakuCaps.remove(id)
+        File(root, id).deleteRecursively()
+        onMainSync { plugins.removeAll { it.id == id }; save() }
     }
 
-    fun setEnabled(id: String, on: Boolean) { val i = plugins.indexOfFirst { it.id == id }; if (i >= 0) { plugins[i] = plugins[i].copy(enabled = on); save() } }
+    fun setEnabled(id: String, on: Boolean) {
+        onMainSync { val i = plugins.indexOfFirst { it.id == id }; if (i >= 0) { plugins[i] = plugins[i].copy(enabled = on); save() } }
+    }
 
     fun visible(adultUnlocked: Boolean) = plugins.filter { it.enabled && (!it.adult || adultUnlocked) }
 
@@ -63,6 +116,7 @@ class PluginStore(private val ctx: Context,
         live[id]?.takeIf { it.inst.broken == null }?.let { return it }
         val text = File(root, "$id/bundle.idjplugin").takeIf { it.exists() }?.readText() ?: throw PluginException("E_INTERNAL", "插件未安装")
         val b = PluginBundle.parse(text)
+        refreshDanmakuCap(id, b)
         val host = PluginHost(b.manifest, File(root, id), log = { log(id, it) }).apply {
             onVerifyRequired = { url ->
                 app.iduanju.ui.components.SiteVerifyHost.requestUserVerificationBlocking(b.manifest.name, url) { rawCookies, ua ->
@@ -94,16 +148,22 @@ class PluginStore(private val ctx: Context,
     fun addSubscription(url: String): PluginSubscription {
         val u = url.trim()
         val sub = PluginSubscription.apply(subscriptionLoader(u), u)
-        subscriptions.removeAll { it.url == u }; subscriptions.add(sub); saveSubs(); return sub
+        onMainSync { subscriptions.removeAll { it.url == u }; subscriptions.add(sub); saveSubs() }
+        return sub
     }
     fun refreshSubscriptions() {
-        for (i in subscriptions.indices) {
-            val s = subscriptions[i]
-            subscriptions[i] = runCatching { PluginSubscription.apply(subscriptionLoader(s.url), s.url) }.getOrElse { s.copy(error = (it as? PluginException)?.friendly ?: it.message) }
+        val snap = ArrayList<PluginSubscription>()
+        onMainSync { snap.addAll(subscriptions) }
+        val updated = snap.map { s ->
+            runCatching { PluginSubscription.apply(subscriptionLoader(s.url), s.url) }.getOrElse { s.copy(error = (it as? PluginException)?.friendly ?: it.message) }
         }
-        saveSubs()
+        onMainSync {
+            subscriptions.clear()
+            subscriptions.addAll(updated)
+            saveSubs()
+        }
     }
-    fun removeSubscription(url: String) { subscriptions.removeAll { it.url == url }; saveSubs() }
+    fun removeSubscription(url: String) { onMainSync { subscriptions.removeAll { it.url == url }; saveSubs() } }
 
     sealed class Pasted {
         data class Plugin(val rec: Installed) : Pasted()
@@ -158,6 +218,7 @@ class PluginStore(private val ctx: Context,
     companion object {
         const val KEY = "stv.plugins.index"
         const val SUBS = "stv.plugins.subscriptions"
+        private val DANMAKU_EXPORT_RE = Regex("""(?:async\s+)?danmaku\s*(?:\(|:)""")
         private val http = okhttp3.OkHttpClient.Builder().callTimeout(20, java.util.concurrent.TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
 
         fun checkedDownloadURL(value:String):okhttp3.HttpUrl {

@@ -45,7 +45,7 @@ data class CMSSite(
  */
 object MacCMS {
     const val UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-    private val http = OkHttpClient.Builder().callTimeout(15, TimeUnit.SECONDS).followRedirects(true).build()
+    private val http = OkHttpClient.Builder().callTimeout(15, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
     /** Test hook: url → body. */
     @Volatile var fixture: ((String) -> String?)? = null
 
@@ -82,15 +82,28 @@ object MacCMS {
         val parsed = u.toHttpUrlOrNull()!!
         if (parsed.scheme != "https") throw ProviderException.invalid("采集接口地址无效")
         val body: String = fixture?.invoke(u) ?: run {
-            if (NetGuard.resolvesToBlocked(parsed.host)) throw ProviderException.invalid("采集接口解析到内网地址")
-            http.newCall(Request.Builder().url(u).header("User-Agent", UA).build()).execute().use { r ->
-                if (!r.isSuccessful) throw ProviderException.upstream("采集站 HTTP ${r.code} · ${parsed.host}")
-                val fu = r.request.url.host
-                if (fu != parsed.host && NetGuard.resolvesToBlocked(fu)) throw ProviderException.invalid("跳转到内网地址")
-                val bytes = r.body?.bytes() ?: ByteArray(0)
-                if (bytes.size >= 8 shl 20) throw ProviderException.upstream("采集站返回过大")
-                String(bytes, Charsets.UTF_8)
+            var nextUrl = u
+            var responseBody: String? = null
+            for (hop in 0..5) {
+                val cur = nextUrl.toHttpUrlOrNull() ?: throw ProviderException.invalid("采集接口地址无效")
+                if (cur.scheme != "https" || NetGuard.isIPLiteral(cur.host) || NetGuard.resolvesToBlocked(cur.host)) {
+                    throw ProviderException.invalid("采集接口解析或跳转到内网地址")
+                }
+                http.newCall(Request.Builder().url(cur).header("User-Agent", UA).build()).execute().use { r ->
+                    val loc = r.header("Location")
+                    if (r.code in listOf(301, 302, 303, 307, 308) && loc != null) {
+                        if (hop == 5) throw ProviderException.upstream("采集站重定向过多")
+                        nextUrl = cur.resolve(loc)?.toString() ?: throw ProviderException.invalid("跳转地址无效")
+                    } else {
+                        if (!r.isSuccessful) throw ProviderException.upstream("采集站 HTTP ${r.code} · ${cur.host}")
+                        val bytes = r.body?.bytes() ?: ByteArray(0)
+                        if (bytes.size >= 8 shl 20) throw ProviderException.upstream("采集站返回过大")
+                        responseBody = String(bytes, Charsets.UTF_8)
+                    }
+                }
+                if (responseBody != null) break
             }
+            responseBody ?: throw ProviderException.upstream("采集站重定向过多")
         }
         val result = try { if (body.trimStart().startsWith("<")) MacCMSXml.parse(body) else JSONObject(body) } catch (_: Exception) { throw ProviderException.upstream("采集站没有返回有效的 CMS JSON / XML") }
         if (result.has("code") && s(result.opt("code")) != "1") throw ProviderException.upstream("采集站：" + result.optString("msg", "请求失败"))

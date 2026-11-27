@@ -30,6 +30,58 @@ enum AppBackup {
         var legadoSourcesBase64: String?
         /// Relative path under `Documents/Novels/` -> base64 bytes
         var novelFiles: [String: String] = [:]
+        /// Cross-platform iOS <-> Android smart-merge payload (optional for backward compatibility).
+        var portable: PortableData? = nil
+        /// Android-only prefs blob (preserved untouched if present).
+        var androidPrefsBase64: String? = nil
+    }
+
+    struct PortableData: Codable {
+        struct Progress: Codable {
+            var sid: String
+            var title: String
+            var cover: String
+            var epIndex: Int
+            var ep: Int
+            var sec: Double
+            var dur: Double
+            var updatedAtMs: Int64
+            var epTitle: String? = nil
+            var epGroup: String? = nil
+        }
+        struct Favorite: Codable {
+            var sid: String
+            var title: String
+            var cover: String
+            var updatedAtMs: Int64
+        }
+        struct CMSSiteItem: Codable {
+            var key: String
+            var name: String
+            var api: String
+            var adult: Bool? = nil
+            var enabled: Bool? = nil
+            var origin: String? = nil
+        }
+        struct PluginBundleItem: Codable {
+            var id: String
+            var enabled: Bool? = nil
+            var origin: String? = nil
+            var bundleText: String
+            var storageJson: String? = nil
+        }
+        struct TGChannelItem: Codable {
+            var username: String
+            var title: String? = nil
+            var isAdult: Bool? = nil
+        }
+        var progress: [Progress]? = nil
+        var favorites: [Favorite]? = nil
+        var searchHistory: [String]? = nil
+        var cmsSites: [CMSSiteItem]? = nil
+        var pluginBundles: [PluginBundleItem]? = nil
+        var tgChannels: [TGChannelItem]? = nil
+        var adultUnlocked: Bool? = nil
     }
 
     struct RestoreSummary: Equatable {
@@ -97,9 +149,12 @@ enum AppBackup {
             return "\(s) (\(b))"
         }
 
+        let portableSnap: PortableData = await MainActor.run { buildPortableSnapshot() }
+
         return try await Task.detached(priority: .userInitiated) {
             let fm = FileManager.default
             var archive = Archive(appVersion: appVer)
+            archive.portable = portableSnap
 
             if !defaultsSnap.isEmpty {
                 let plist = try PropertyListSerialization.data(fromPropertyList: defaultsSnap, format: .binary, options: 0)
@@ -298,6 +353,9 @@ enum AppBackup {
                let plistData = Data(base64Encoded: plistB64),
                let incoming = (try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil)) as? [String: Any] {
                 mergeDefaults(incoming, into: UserDefaults.standard)
+            }
+            if let portable = decoded.archive.portable {
+                applyPortable(portable)
             }
             PluginStore.shared.reloadFromDisk()
             CMSStore.shared.reloadFromDefaults()
@@ -542,5 +600,202 @@ enum AppBackup {
     private nonisolated static func isSafeRelativePath(_ rel: String) -> Bool {
         let parts = rel.split(separator: "/", omittingEmptySubsequences: false)
         return !parts.isEmpty && parts.allSatisfy { isSafeSingleName(String($0)) }
+    }
+
+    // MARK: Cross-Platform Portable Bridge (iOS <-> Android)
+
+    private nonisolated static func encodeBase64URL(_ s: String) -> String {
+        Data(s.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private nonisolated static func decodeBase64URL(_ s: String) -> String? {
+        var b = s.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        let rem = b.count % 4
+        if rem > 0 { b += String(repeating: "=", count: 4 - rem) }
+        guard let d = Data(base64Encoded: b) else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
+
+    private nonisolated static func portableSid(for series: HGSeries) -> String {
+        let src = series.source
+        if src == .hongguo { return series.seriesId }
+        if let k = src.cmsKey { return "cms:\(k):\(series.seriesId)" }
+        if let p = src.pluginID { return "plugin:\(p):\(encodeBase64URL(series.seriesId))" }
+        if let u = src.tvboxUID { return "tvb:\(u):\(series.seriesId)" }
+        if let u = src.tvboxLiveUID { return "tvl:\(u)" }
+        if src == .huangguo { return "hg:\(series.seriesId)" }
+        if src == .telegram { return "tg:\(series.seriesId)" }
+        return "\(src.rawValue):\(series.seriesId)"
+    }
+
+    private nonisolated static func parsePortableSid(_ sid: String) -> (DramaSource, String) {
+        if sid.hasPrefix("cms:") {
+            let rest = String(sid.dropFirst(4))
+            if let i = rest.firstIndex(of: ":") {
+                let k = String(rest[..<i])
+                let id = String(rest[rest.index(after: i)...]).components(separatedBy: "#").first ?? ""
+                return (.cms(k), id)
+            }
+        } else if sid.hasPrefix("plugin:") {
+            let parts = sid.split(separator: ":", maxSplits: 2).map(String.init)
+            if parts.count == 3, let decoded = decodeBase64URL(parts[2]) {
+                return (.plugin(parts[1]), decoded)
+            }
+        } else if sid.hasPrefix("tvb:") {
+            let rest = String(sid.dropFirst(4))
+            if let i = rest.firstIndex(of: ":") {
+                return (.tvbox(String(rest[..<i])), String(rest[rest.index(after: i)...]))
+            }
+        } else if sid.hasPrefix("tvl:") {
+            let uid = String(sid.dropFirst(4))
+            return (.tvboxLive(uid), uid)
+        } else if sid.hasPrefix("hg:") {
+            return (.huangguo, String(sid.dropFirst(3)))
+        } else if sid.hasPrefix("tg:") {
+            return (.telegram, String(sid.dropFirst(3)))
+        }
+        return (.hongguo, sid)
+    }
+
+    @MainActor
+    private static func buildPortableSnapshot() -> PortableData {
+        let lib = LibraryStore.shared
+        let progs = lib.progress.values.map { p in
+            PortableData.Progress(
+                sid: portableSid(for: p.series),
+                title: p.series.title,
+                cover: p.series.cover,
+                epIndex: p.episodeIndex,
+                ep: p.episodeNumber,
+                sec: p.seconds,
+                dur: p.duration,
+                updatedAtMs: Int64(p.updatedAt.timeIntervalSince1970 * 1000)
+            )
+        }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let favs = lib.allFavorites.enumerated().map { idx, s in
+            PortableData.Favorite(
+                sid: portableSid(for: s),
+                title: s.title,
+                cover: s.cover,
+                updatedAtMs: nowMs - Int64(idx)
+            )
+        }
+        let cmsList = CMSStore.shared.sites.map { s in
+            PortableData.CMSSiteItem(key: s.key, name: s.name, api: s.api, adult: s.adult, enabled: s.enabled, origin: s.origin)
+        }
+        var bundles: [PortableData.PluginBundleItem] = []
+        let pluginsRoot = PluginPaths.root
+        for p in PluginStore.shared.plugins {
+            let dir = pluginsRoot.appendingPathComponent(p.id, isDirectory: true)
+            let entryURL = dir.appendingPathComponent(p.manifest.entry)
+            if let jsData = try? Data(contentsOf: entryURL),
+               let jsText = String(data: jsData, encoding: .utf8),
+               let bundleData = try? JSONEncoder().encode(PluginBundle(manifest: p.manifest, files: [p.manifest.entry: jsText])),
+               let bundleText = String(data: bundleData, encoding: .utf8) {
+                let storageText = (try? Data(contentsOf: dir.appendingPathComponent("storage.json"))).flatMap { String(data: $0, encoding: .utf8) }
+                bundles.append(PortableData.PluginBundleItem(id: p.id, enabled: p.enabled, origin: p.origin, bundleText: bundleText, storageJson: storageText))
+            }
+        }
+        let tgs = TGStore.shared.channels.map { c in
+            PortableData.TGChannelItem(username: c.username, title: c.title, isAdult: c.isAdult)
+        }
+        return PortableData(
+            progress: progs,
+            favorites: favs,
+            searchHistory: lib.searchHistory,
+            cmsSites: cmsList,
+            pluginBundles: bundles,
+            tgChannels: tgs,
+            adultUnlocked: SourceGate.shared.showHuangguo
+        )
+    }
+
+    @MainActor
+    private static func applyPortable(_ portable: PortableData) {
+        let d = UserDefaults.standard
+        if let incProgs = portable.progress, !incProgs.isEmpty {
+            var map = d.data(forKey: "stv.progress").flatMap { try? JSONDecoder().decode([String: WatchProgress].self, from: $0) } ?? [:]
+            for p in incProgs {
+                let (src, sid) = parsePortableSid(p.sid)
+                let series = HGSeries(source: src, seriesId: sid, title: p.title, cover: p.cover)
+                let wp = WatchProgress(series: series, episodeIndex: p.epIndex, episodeNumber: p.ep, seconds: p.sec, duration: p.dur, updatedAt: Date(timeIntervalSince1970: Double(p.updatedAtMs) / 1000.0))
+                if let cur = map[series.id] {
+                    if wp.updatedAt >= cur.updatedAt { map[series.id] = wp }
+                } else {
+                    map[series.id] = wp
+                }
+            }
+            if let out = try? JSONEncoder().encode(map) { d.set(out, forKey: "stv.progress") }
+        }
+        if let incFavs = portable.favorites, !incFavs.isEmpty {
+            let cur = d.data(forKey: "stv.favorites").flatMap { try? JSONDecoder().decode([HGSeries].self, from: $0) } ?? []
+            let incomingSeries = incFavs.sorted { $0.updatedAtMs > $1.updatedAtMs }.map { f -> HGSeries in
+                let (src, sid) = parsePortableSid(f.sid)
+                return HGSeries(source: src, seriesId: sid, title: f.title, cover: f.cover)
+            }
+            if let out = try? JSONEncoder().encode(unionByID(incomingSeries, cur, id: \.id)) { d.set(out, forKey: "stv.favorites") }
+        }
+        if let incSearch = portable.searchHistory, !incSearch.isEmpty {
+            let cur = d.data(forKey: "stv.searchHistory").flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
+            let merged = Array(unionByID(cur, incSearch, id: { $0 }).prefix(10))
+            if let out = try? JSONEncoder().encode(merged) { d.set(out, forKey: "stv.searchHistory") }
+        }
+        if let incCms = portable.cmsSites, !incCms.isEmpty {
+            let cur = d.data(forKey: "stv.cms.sites").flatMap { try? JSONDecoder().decode([CMSSite].self, from: $0) } ?? []
+            let incSites = incCms.map { CMSSite(key: $0.key, name: $0.name, api: $0.api, adult: $0.adult ?? false, enabled: $0.enabled ?? true, origin: $0.origin ?? "同步") }
+            if let out = try? JSONEncoder().encode(unionByID(incSites, cur, id: \.key)) { d.set(out, forKey: "stv.cms.sites") }
+        }
+        if let incTgs = portable.tgChannels, !incTgs.isEmpty {
+            let cur = d.data(forKey: "stv.tg.channels").flatMap { try? JSONDecoder().decode([TGChannel].self, from: $0) } ?? []
+            let mapped = incTgs.map { TGChannel(username: $0.username, title: $0.title ?? "", isAdult: $0.isAdult ?? false) }
+            if let out = try? JSONEncoder().encode(unionByID(mapped, cur, id: \.id)) { d.set(out, forKey: "stv.tg.channels") }
+        }
+        if let incBundles = portable.pluginBundles, !incBundles.isEmpty {
+            let fm = FileManager.default
+            let pluginsRoot = PluginPaths.root
+            let indexURL = pluginsRoot.appendingPathComponent("index.json")
+            var installed = (try? Data(contentsOf: indexURL)).flatMap { try? JSONDecoder().decode([InstalledPlugin].self, from: $0) } ?? []
+            var changed = false
+            for item in incBundles {
+                guard let bData = item.bundleText.data(using: .utf8),
+                      let bundle = try? JSONDecoder().decode(PluginBundle.self, from: bData),
+                      let js = bundle.files[bundle.manifest.entry] else { continue }
+                let pid = bundle.manifest.id
+                guard isSafeSingleName(pid), isSafeSingleName(bundle.manifest.entry) else { continue }
+                let dir = pluginsRoot.appendingPathComponent(pid, isDirectory: true)
+                try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                let jsData = Data(js.utf8)
+                try? jsData.write(to: dir.appendingPathComponent(bundle.manifest.entry), options: .atomic)
+                if let mData = try? JSONEncoder().encode(bundle.manifest) {
+                    try? mData.write(to: dir.appendingPathComponent("manifest.json"), options: .atomic)
+                }
+                if let st = item.storageJson, !st.isEmpty {
+                    try? Data(st.utf8).write(to: dir.appendingPathComponent("storage.json"), options: .atomic)
+                }
+                let hash = PluginManifest.fileHash(jsData)
+                let rec = InstalledPlugin(
+                    manifest: bundle.manifest,
+                    enabled: item.enabled ?? true,
+                    fileHashes: [bundle.manifest.entry: hash],
+                    origin: item.origin ?? "同步"
+                )
+                if let idx = installed.firstIndex(where: { $0.id == pid }) {
+                    installed[idx] = rec
+                } else {
+                    installed.append(rec)
+                }
+                changed = true
+            }
+            if changed, let out = try? JSONEncoder().encode(installed) {
+                try? out.write(to: indexURL, options: .atomic)
+            }
+        }
+        if portable.adultUnlocked == true {
+            d.set(true, forKey: "stv.sources.huangguo")
+        }
     }
 }

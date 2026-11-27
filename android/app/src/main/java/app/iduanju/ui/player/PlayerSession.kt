@@ -152,6 +152,10 @@ class PlayerSession internal constructor(
         private set
     var holding by mutableStateOf(false)
         private set
+    var holdSpeed by mutableFloatStateOf(2f)
+        private set
+    var holdLocked by mutableStateOf(false)
+        private set
     var muted by mutableStateOf(false)
         private set
     var autoNext by mutableStateOf(PlayerPrefs.getAutoNext(ctx))
@@ -175,6 +179,8 @@ class PlayerSession internal constructor(
     internal var beforePrepare: () -> Unit = {}
     /** False while the video has no surface (screen off, app in the background): no first frame can be rendered then. */
     internal var hasSurface: () -> Boolean = { true }
+    /** False when the Activity is stopped (screen locked / backgrounded) and NOT in PiP: prevents ghost audio after resolve finishes. */
+    internal var inForeground: () -> Boolean = { true }
     /** The last episode ended and nothing follows. */
     internal var onFinalEnded: () -> Unit = {}
     /** The centre transport stays hidden after an episode change until the user taps. */
@@ -506,10 +512,10 @@ class PlayerSession internal constructor(
         val source = PlayerSources.create(ctx, p)
         if (startAt > 0L) player.setMediaSource(source, startAt) else player.setMediaSource(source)
         mediaReady = true
-        player.setPlaybackSpeed(if (live) 1f else speed)
+        player.setPlaybackSpeed(if (live) 1f else if (holding || holdLocked) holdSpeed else speed)
         beforePrepare()
         player.prepare()
-        player.play()
+        if (inForeground()) player.play() else player.playWhenReady = false
         watchFirstFrame()
         prefetch(ep)
         if (channelList) recordProgress(force = true)
@@ -830,14 +836,47 @@ class PlayerSession internal constructor(
 
     fun applySpeed(value: Float) {
         speed = value
+        holdLocked = false
+        holding = false
         PlayerPrefs.setSpeed(ctx, value)
         if (!live) player.setPlaybackSpeed(value)
     }
 
+    fun startHold(initial: Float = 2f) {
+        if (live) return
+        holding = true
+        holdLocked = false
+        holdSpeed = initial
+        player.setPlaybackSpeed(initial)
+    }
+
+    fun updateHoldSpeed(value: Float) {
+        if (live || (!holding && !holdLocked)) return
+        holdSpeed = value
+        player.setPlaybackSpeed(value)
+    }
+
+    fun lockHold() {
+        if (live || !holding) return
+        holdLocked = true
+        holding = false
+        player.setPlaybackSpeed(holdSpeed)
+    }
+
+    fun endHold(force: Boolean = false) {
+        if (force) holdLocked = false
+        if (!holding && !force) return
+        holding = false
+        if (!holdLocked && !live) player.setPlaybackSpeed(speed)
+    }
+
     fun hold(on: Boolean) {
-        if (on == holding || (on && live)) return
-        holding = on
-        player.setPlaybackSpeed(if (on) 2f else speed)
+        if (on) startHold(2f) else endHold(force = false)
+    }
+
+    /** Re-sync Compose playing state with ExoPlayer after Activity resume / PiP transition. */
+    fun syncPlayingState() {
+        playing = player.isPlaying
     }
 
     fun toggleMute() {

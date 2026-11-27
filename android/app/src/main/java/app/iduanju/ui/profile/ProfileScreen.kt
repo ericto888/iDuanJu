@@ -38,12 +38,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import app.iduanju.data.AppBackup
+import app.iduanju.ui.Routes
+import app.iduanju.ui.library.FavoriteManageCell
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
 private class FavoriteItem(val sid: String, val title: String, val cover: String)
 
 /**
- * iOS ProfileView: 我的 · 红果账号 · 继续观看 · 我的收藏, then grouped link rows —
- * (观看历史 / 剧星榜 / 我的收藏) (Telegram 频道 / 漫画 / 下载管理) (片源管理 / 插件 / 开源许可) (maintenance), footer.
- * Settings live on their own pages (片源管理, 插件) instead of being laid out inline.
+ * iOS ProfileView: 我的 · 红果账号 · 继续观看 · 我的收藏 (long-press delete + 管理), then grouped link rows —
+ * (观看历史 / 剧星榜 / 我的收藏) (Telegram 频道 / 漫画 / 小说 / 下载管理) (数据备份与迁移: WebDAV / 导出 / 恢复)
+ * (外观) (片源管理 / 插件 / 开源许可 / 检查更新) (maintenance), footer.
  */
 @Composable
 fun ProfileScreen(onOpenDetail: (String) -> Unit = {}) {
@@ -55,8 +64,39 @@ fun ProfileScreen(onOpenDetail: (String) -> Unit = {}) {
     val scope = rememberCoroutineScope()
     var message by remember { mutableStateOf<String?>(null) }
     var confirmLogout by remember { mutableStateOf(false) }
+    var backupBusy by remember { mutableStateOf(false) }
     // Most rows sit far above the footer that shows the outcome, so it is also announced as a toast.
-    val notify: (String) -> Unit = { message = it; GlassToast.show(it) }
+    val notify: (String) -> Unit = { message = it; GlassToast.show(it, long = true) }
+
+    val exportBackupLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        if (uri == null || backupBusy) return@rememberLauncherForActivityResult
+        backupBusy = true
+        scope.launch {
+            runCatching {
+                val bytes = AppBackup.createBackupData(ctx)
+                withContext(Dispatchers.IO) {
+                    ctx.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: error("无法写入目标文件")
+                }
+                val kb = maxOf(1, bytes.size / 1024)
+                "已导出完整备份（$kb KB）"
+            }.onSuccess(notify).onFailure { notify("备份导出失败：${it.message ?: "未知错误"}") }
+            backupBusy = false
+        }
+    }
+
+    val importBackupLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null || backupBusy) return@rememberLauncherForActivityResult
+        backupBusy = true
+        scope.launch {
+            runCatching {
+                val bytes = withContext(Dispatchers.IO) {
+                    ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("无法读取备份文件")
+                }
+                AppBackup.restore(ctx, bytes).toastText
+            }.onSuccess(notify).onFailure { notify("恢复失败：${it.message ?: "文件无效"}") }
+            backupBusy = false
+        }
+    }
 
     LaunchedEffect(Unit) { ia.hgWebAccount.refreshProfile() }
 
@@ -83,13 +123,33 @@ fun ProfileScreen(onOpenDetail: (String) -> Unit = {}) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("我的收藏", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).semantics { heading() })
-                    Text("全部 ${lib.favorites.size}", color = c.secondary, fontSize = 15.sp, modifier = Modifier.pressClick { go("library/favorites") })
+                    Text(
+                        if (lib.favorites.isEmpty()) "全部 0" else "管理 · 全部 ${lib.favorites.size}",
+                        color = c.secondary,
+                        fontSize = 14.sp,
+                        modifier = Modifier.pressClick { go("library/favorites") },
+                    )
                 }
-                if (favorites.isEmpty()) Text("在播放页右侧点 ♥ 收藏", color = c.secondary, fontSize = 15.sp, modifier = Modifier.padding(horizontal = 16.dp))
+                if (favorites.isEmpty()) Text("在详情页或播放页点 ♥ 收藏 · 长按卡片可移出", color = c.secondary, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp))
                 else Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     favorites.chunked(cols).forEach { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            row.forEach { f -> CoverCell(f.title, f.cover, Modifier.weight(1f)) { onOpenDetail(f.sid) } }
+                            row.forEach { f ->
+                                FavoriteManageCell(
+                                    title = f.title,
+                                    cover = f.cover,
+                                    modifier = Modifier.weight(1f),
+                                    onOpenDetail = { onOpenDetail(f.sid) },
+                                    onPlay = {
+                                        val ep = lib.progress(f.sid)?.episodeNumber ?: 1
+                                        go(Routes.player(f.sid, ep))
+                                    },
+                                    onRemove = {
+                                        lib.removeFavorite(f.sid)
+                                        notify("已移出收藏")
+                                    },
+                                )
+                            }
                             repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
                         }
                     }
@@ -114,6 +174,35 @@ fun ProfileScreen(onOpenDetail: (String) -> Unit = {}) {
                 LinkRow("小说", ProfileIcons.manga, sub = "TXT、阅读书源、搜索与发现") { go("novel") }
                 RowDivider()
                 LinkRow("下载管理", ProfileIcons.download, trailing = "暂未支持") { notify("Android 版暂不支持离线下载") }
+            }
+        }
+        item("backup", "group") {
+            GroupItem("数据备份与迁移") {
+                LinkRow(
+                    "WebDAV 多端同步",
+                    ProfileIcons.cloud,
+                    trailing = ia.webdav.statusBadge ?: "未配置",
+                    sub = "iOS / Android 双向合并进度、收藏与已装插件",
+                ) { go("webdav") }
+                RowDivider()
+                LinkRow(
+                    if (backupBusy) "正在处理备份…" else "导出完整备份（.idjbackup）",
+                    ProfileIcons.backup,
+                    sub = "无损打包插件、采集站、TVBox、进度、收藏与书源",
+                ) {
+                    if (!backupBusy) {
+                        val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
+                        exportBackupLauncher.launch("i短剧备份-$stamp.${AppBackup.FILE_EXTENSION}")
+                    }
+                }
+                RowDivider()
+                LinkRow(
+                    "从备份文件恢复",
+                    ProfileIcons.restore,
+                    sub = "智能合并导入，不覆盖本机更新的观看进度",
+                ) {
+                    if (!backupBusy) importBackupLauncher.launch(arrayOf("*/*"))
+                }
             }
         }
         item("look", "group") { GroupItem("外观") { AppearanceRows() } }

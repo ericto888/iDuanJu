@@ -210,7 +210,12 @@ internal fun GuidePanel(session: PlayerSession, modifier: Modifier, close: () ->
         list = null
         list = try { session.programmes(now + day * 86_400_000L).sortedBy { it.start } } catch (e: CancellationException) { throw e } catch (e: Exception) { emptyList() }
     }
-    val replayable = remember(ep?.vid, list) { list?.firstOrNull { it.end <= now }?.let { session.canReplay(it) } == true }
+    val replayable by produceState(false, ep?.vid, list) {
+        val candidate = list?.firstOrNull { it.end <= now }
+        value = if (candidate == null) false else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { session.canReplay(candidate) }.getOrDefault(false)
+        }
+    }
     val state = rememberLazyListState()
     LaunchedEffect(list) { list?.indexOfFirst { it.end > now }?.takeIf { it > 1 && day == 0 }?.let { state.scrollToItem(it - 1) } }
     Column(modifier) {

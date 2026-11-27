@@ -181,7 +181,17 @@ fun CategoryScreen(onOpenDetail: (String) -> Unit, onSearch: (() -> Unit)? = nul
                         Spacer(Modifier.height(18.dp))
                     }
                 }
-                items(minOf(count, 3), key = { "top" + items[it].seriesId }, contentType = { "poster" }) { i -> PosterCell(items[i], i + 1, onOpen = onOpenDetail) }
+                if (count > 0) {
+                    item("top3", full, "top3") {
+                        val topCount = minOf(count, 3)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            for (i in 0 until topCount) {
+                                Box(Modifier.weight(1f)) { PosterCell(items[i], i + 1, onOpen = onOpenDetail) }
+                            }
+                            repeat(3 - topCount) { Spacer(Modifier.weight(1f)) }
+                        }
+                    }
+                }
                 items((count - 3).coerceAtLeast(0), key = { items[it + 3].seriesId }, span = { full() }, contentType = { "rank" }) { i ->
                     Column(Modifier.padding(top = if (i == 0) 12.dp else 0.dp)) {
                         if (i > 0) Hairline()

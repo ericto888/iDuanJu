@@ -23,14 +23,22 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -212,13 +220,143 @@ private fun ChipScroller(modifier: Modifier, content: @Composable RowScope.() ->
 
 // ── 倍速 / 画质 / 音轨字幕 ────────────────────────────────────────────────────────────────────────────────
 
+/** Rewritten precision speed panel (matches iOS SpeedPopover): live readout + −/calibrated slider/+ + one-row presets. */
 @Composable
 private fun SpeedPanel(session: PlayerSession, close: () -> Unit) {
-    PanelTitle("倍速", "长按画面临时 2×")
-    Spacer(Modifier.height(8.dp))
-    listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f).forEach { s ->
-        PanelRow(if (s == 1f) "1× 正常速度" else "${s}×".replace(".0×", "×"), "", s == session.speed) { session.applySpeed(s); close() }
+    val pc = IdjDarkColors
+    val haptics = app.iduanju.ui.components.rememberHaptics()
+    val allSteps = remember { listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f) }
+    val presets = remember { listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f) }
+    val current = if (session.holdLocked) session.holdSpeed else session.speed
+    val currentIndex = remember(current) { allSteps.indices.minByOrNull { kotlin.math.abs(allSteps[it] - current) } ?: 2 }
+    val isNormal = kotlin.math.abs(current - 1.0f) < 0.01f
+
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("倍速播放", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
+        Text(
+            speedText(current),
+            color = if (isNormal) Color.White else pc.accent,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            style = TextStyle(fontFeatureSettings = "tnum"),
+        )
+        Spacer(Modifier.weight(1f))
+        if (!isNormal) {
+            Box(
+                Modifier.height(28.dp).clip(CircleShape).background(pc.accentSoft)
+                    .pressClick(0.95f, label = "恢复原速") { haptics.tick(); session.applySpeed(1.0f) }
+                    .padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("恢复原速", color = pc.accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        Box(
+            Modifier.size(28.dp).clip(CircleShape).background(Color.White.copy(0.10f))
+                .pressClick(0.92f, label = "关闭") { close() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.Close, null, tint = Color.White.copy(0.78f), modifier = Modifier.size(14.dp))
+        }
     }
+
+    Spacer(Modifier.height(14.dp))
+
+    // Precision − / calibrated tick bar / +
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        val canDec = currentIndex > 0
+        val canInc = currentIndex < allSteps.lastIndex
+        Box(
+            Modifier.size(34.dp).clip(CircleShape).background(Color.White.copy(0.10f))
+                .graphicsLayer { alpha = if (canDec) 1f else 0.3f }
+                .pressClick(0.92f, enabled = canDec, label = "减速") {
+                    haptics.tick()
+                    session.applySpeed(allSteps[(currentIndex - 1).coerceAtLeast(0)])
+                },
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.Filled.Remove, null, tint = Color.White, modifier = Modifier.size(16.dp)) }
+
+        val frac = currentIndex.toFloat() / (allSteps.size - 1).coerceAtLeast(1)
+        val latestCurrent by rememberUpdatedState(current)
+        androidx.compose.foundation.Canvas(
+            Modifier.weight(1f).height(34.dp)
+                .pointerInput(allSteps) {
+                    detectTapGestures { o ->
+                        val ratio = ((o.x - 10.dp.toPx()) / (size.width - 20.dp.toPx()).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        val idx = Math.round(ratio * (allSteps.size - 1)).coerceIn(0, allSteps.lastIndex)
+                        val next = allSteps[idx]
+                        if (kotlin.math.abs(next - latestCurrent) >= 0.01f) { haptics.tick(); session.applySpeed(next) }
+                    }
+                }
+                .pointerInput(allSteps) {
+                    detectHorizontalDragGestures { ch, _ ->
+                        ch.consume()
+                        val ratio = ((ch.position.x - 10.dp.toPx()) / (size.width - 20.dp.toPx()).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        val idx = Math.round(ratio * (allSteps.size - 1)).coerceIn(0, allSteps.lastIndex)
+                        val next = allSteps[idx]
+                        if (kotlin.math.abs(next - latestCurrent) >= 0.01f) { haptics.tick(); session.applySpeed(next) }
+                    }
+                },
+        ) {
+            val pad = 10.dp.toPx()
+            val innerW = (size.width - pad * 2f).coerceAtLeast(1f)
+            val cy = size.height / 2f
+            val h = 5.dp.toPx()
+            val r = androidx.compose.ui.geometry.CornerRadius(h / 2f, h / 2f)
+            drawRoundRect(Color.White.copy(0.16f), androidx.compose.ui.geometry.Offset(pad, cy - h / 2f), androidx.compose.ui.geometry.Size(innerW, h), r)
+            drawRoundRect(pc.accent, androidx.compose.ui.geometry.Offset(pad, cy - h / 2f), androidx.compose.ui.geometry.Size(maxOf(h, innerW * frac), h), r)
+            allSteps.forEachIndexed { i, step ->
+                val x = pad + innerW * (i.toFloat() / (allSteps.size - 1))
+                val isOne = kotlin.math.abs(step - 1.0f) < 0.01f
+                drawCircle(
+                    color = if (i <= currentIndex) Color.White else Color.White.copy(if (isOne) 0.55f else 0.25f),
+                    radius = if (isOne) 2.6.dp.toPx() else 1.8.dp.toPx(),
+                    center = androidx.compose.ui.geometry.Offset(x, cy),
+                )
+            }
+            val thumbX = pad + innerW * frac
+            drawCircle(Color.Black.copy(0.32f), 10.dp.toPx(), androidx.compose.ui.geometry.Offset(thumbX, cy + 1.dp.toPx()))
+            drawCircle(Color.White, 9.dp.toPx(), androidx.compose.ui.geometry.Offset(thumbX, cy))
+        }
+
+        Box(
+            Modifier.size(34.dp).clip(CircleShape).background(Color.White.copy(0.10f))
+                .graphicsLayer { alpha = if (canInc) 1f else 0.3f }
+                .pressClick(0.92f, enabled = canInc, label = "加速") {
+                    haptics.tick()
+                    session.applySpeed(allSteps[(currentIndex + 1).coerceAtMost(allSteps.lastIndex)])
+                },
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.Filled.Add, null, tint = Color.White, modifier = Modifier.size(16.dp)) }
+    }
+
+    Spacer(Modifier.height(14.dp))
+
+    // One-row quick preset capsules
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        presets.forEach { r ->
+            val on = kotlin.math.abs(r - current) < 0.01f
+            Box(
+                Modifier.weight(1f).height(34.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (on) pc.accent else Color.White.copy(0.08f))
+                    .pressClick(0.94f, label = speedText(r)) { haptics.tick(); session.applySpeed(r) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    speedText(r),
+                    color = if (on) pc.onAccent else Color.White.copy(0.88f),
+                    fontSize = 12.5.sp,
+                    fontWeight = if (on) FontWeight.Bold else FontWeight.Medium,
+                    style = TextStyle(fontFeatureSettings = "tnum"),
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+    Text("长按画面任意处即刻 2× 速看，左右滑动微调 · 上滑锁定", color = Color.White.copy(0.48f), fontSize = 11.sp)
 }
 
 /** 线路 (when the title has several) · 画质 · 播放源. Live: the channel's sources. */
@@ -290,6 +428,19 @@ private fun MorePanel(session: PlayerSession, ui: PlayerUi, enhance: EnhanceStat
     }
     PanelTitle("更多设置", sleepNote)
     Spacer(Modifier.height(10.dp))
+    // Quick access to Quality/Lines and Audio/Subtitles (kept off portrait dock for an uncrowded layout).
+    if (!session.live) {
+        val qualitySub = session.quality?.takeIf { it.isNotBlank() } ?: session.tags.res ?: "自动"
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            QuickPill(if (session.multiLine) "画质 / 线路" else "画质 · $qualitySub", Icons.Filled.HighQuality, false, Modifier.weight(1f)) {
+                ui.panel = PlayerPanel.Quality
+            }
+            QuickPill("音轨 / 字幕", Icons.Filled.ClosedCaption, false, Modifier.weight(1f)) {
+                ui.panel = PlayerPanel.Tracks
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+    }
     if (session.danmakuCapable) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 46.dp).clip(RoundedCornerShape(12.dp)).background(Color.White.copy(0.08f))

@@ -190,7 +190,7 @@ class HuangguoClient(private val dir: File? = null, private val prefs: MutableMa
     fun rememberVerifiedUA(ua: String) { if (ua.isNotBlank()) prefs[cfUAKey] = ua; cache.clear() }
     fun clearVerification() { prefs.remove(cfUAKey); cache.clear() }
     private val probeHttp = OkHttpClient.Builder().callTimeout(8, TimeUnit.SECONDS).build()
-    @Volatile private var aiBase: String? = prefs["stv.huangguo.aiBase"]?.takeIf { false }
+    @Volatile private var aiBase: String? = prefs["stv.huangguo.aiBase"]?.takeIf { it.isNotBlank() }
     private val cache = ConcurrentHashMap<String, Pair<Long, String>>()
     @Volatile var fixture: ((String) -> String?)? = null
 

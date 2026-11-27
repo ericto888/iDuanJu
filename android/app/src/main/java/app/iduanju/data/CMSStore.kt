@@ -26,6 +26,36 @@ class CMSStore(ctx: Context) {
         get() = adultState.value
         set(v) { adultState.value = v; sp.edit().putBoolean("gate.adult", v).apply() }
 
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private fun onMainSync(block: () -> Unit) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) { block(); return }
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var err: Throwable? = null
+        mainHandler.post { try { block() } catch (t: Throwable) { err = t } finally { latch.countDown() } }
+        latch.await()
+        err?.let { throw it }
+    }
+
+    fun reloadFromPrefs() {
+        onMainSync {
+            sites.clear()
+            try { val a = JSONArray(sp.getString(KEY, "[]")); for (i in 0 until a.length()) sites.add(CMSSite.fromJSON(a.getJSONObject(i))) } catch (_: Exception) {}
+            adultState.value = sp.getBoolean("gate.adult", false)
+        }
+    }
+
+    fun mergeSites(incoming: List<CMSSite>) {
+        if (incoming.isEmpty()) return
+        onMainSync {
+            val existing = sites.map { it.key }.toHashSet()
+            var changed = false
+            for (s in incoming) {
+                if (existing.add(s.key)) { sites.add(s); changed = true }
+            }
+            if (changed) save()
+        }
+    }
+
     /** Validates by fetching the class list (blocking; call off the main thread), then saves. */
     fun add(name: String, apiRaw: String, adult: Boolean, origin: String = "manual"): CMSSite {
         val api = MacCMS.normalize(apiRaw)
@@ -35,16 +65,23 @@ class CMSStore(ctx: Context) {
 
     fun saveValidated(name: String, api: String, adult: Boolean, origin: String, cats: List<CMSCategory>): CMSSite {
         val host = runCatching { java.net.URI(api).host }.getOrNull() ?: "采集站"
-        var s = CMSSite(CMSSite.key(api), name.ifBlank { host }, api, adult, true, cats, origin)
-        val i = sites.indexOfFirst { it.key == s.key }
-        if (i >= 0) { s = s.copy(enabled = sites[i].enabled); sites[i] = s } else sites.add(s)
-        save(); return s
+        var out: CMSSite? = null
+        onMainSync {
+            var s = CMSSite(CMSSite.key(api), name.ifBlank { host }, api, adult, true, cats, origin)
+            val i = sites.indexOfFirst { it.key == s.key }
+            if (i >= 0) { s = s.copy(enabled = sites[i].enabled); sites[i] = s } else sites.add(s)
+            save()
+            out = s
+        }
+        return out!!
     }
-    fun remove(key: String) { sites.removeAll { it.key == key }; save() }
-    fun setEnabled(key: String, on: Boolean) { val i = sites.indexOfFirst { it.key == key }; if (i >= 0) { sites[i] = sites[i].copy(enabled = on); save() } }
+    fun remove(key: String) { onMainSync { sites.removeAll { it.key == key }; save() } }
+    fun setEnabled(key: String, on: Boolean) { onMainSync { val i = sites.indexOfFirst { it.key == key }; if (i >= 0) { sites[i] = sites[i].copy(enabled = on); save() } } }
     fun cacheCategories(key: String, cats: List<CMSCategory>) {
-        val i = sites.indexOfFirst { it.key == key }; if (i < 0 || sites[i].categories == cats) return
-        sites[i] = sites[i].copy(categories = cats); save()
+        onMainSync {
+            val i = sites.indexOfFirst { it.key == key }; if (i < 0 || sites[i].categories == cats) return@onMainSync
+            sites[i] = sites[i].copy(categories = cats); save()
+        }
     }
 
     companion object { const val KEY = "stv.cms.sites" }

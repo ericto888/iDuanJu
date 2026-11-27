@@ -4,6 +4,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import app.iduanju.ui.components.*
+import dev.chrisbanes.haze.hazeSource
 
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateDpAsState
@@ -233,11 +234,12 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
         drawRect(bgColor)
         drawContent()
     }
+    val haze = remember { dev.chrisbanes.haze.HazeState() }
     Box(Modifier.fillMaxSize().background(c.bg)) {
         Box(Modifier.fillMaxSize().layerBackdrop(homeBackdrop)) { AmbientGlow(visible = !pinned) }
         Column(Modifier.fillMaxSize().then(if (immersive) Modifier else Modifier.statusBarsPadding())) {
             // header: search + filter capsule
-            if (!immersive) Column(Modifier.dsPinned(pinned).padding(top = 6.dp)) {
+            if (!immersive) Column(Modifier.dsPinned(pinned, haze).padding(top = 6.dp)) {
                 Row(
                     Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(IntrinsicSize.Min)
                         // same glass material as the dock / detail chrome (follows 我的 → 玻璃质感)
@@ -258,15 +260,22 @@ fun HomeScreen(onOpenDetail: (String) -> Unit, onSearch: () -> Unit = {}, onPlay
                     }
                 }
                 Spacer(Modifier.height(10.dp))
-                ChannelBar(pages, pager.currentPage, onMore = { HomeChannelSheetOpen.value = true }) { scope.launch { pager.animateScrollToPage(it) } }
+                ChannelBar(pages, pager.currentPage) { scope.launch { pager.animateScrollToPage(it) } }
                 if (HomeChannelSheetOpen.value) ChannelSheet(pages, pager.currentPage, onDismiss = { HomeChannelSheetOpen.value = false }) { page, sub ->
                     HomeChannelSheetOpen.value = false
                     if (sub != null) HomeSubSel.map[pages[page].label] = sub
                     scope.launch { pager.animateScrollToPage(page) }
                 }
             }
-            HorizontalPager(pager, Modifier.fillMaxSize().nestedScroll(feedScrollConnection), userScrollEnabled = !immersive, beyondViewportPageCount = 0,
-                key = { pages.getOrNull(it)?.key ?: it }) { index ->
+            HorizontalPager(
+                pager,
+                Modifier.fillMaxSize()
+                    .then(if (android.os.Build.VERSION.SDK_INT >= 31) Modifier.hazeSource(haze) else Modifier)
+                    .nestedScroll(feedScrollConnection),
+                userScrollEnabled = !immersive,
+                beyondViewportPageCount = 0,
+                key = { pages.getOrNull(it)?.key ?: it },
+            ) { index ->
                 val page = pages.getOrElse(index) { pages.first() }
                 val report = remember(page.key) { { on: Boolean -> if ((scrolled[page.key] == true) != on) scrolled[page.key] = on } }
                 CompositionLocalProvider(LocalFeedScrolled provides report) {
@@ -363,10 +372,9 @@ private fun SheetTile(text: String, on: Boolean, modifier: Modifier, onClick: ()
     }
 }
 
-/** iOS HomeChannelBar: unselected 17 secondary, selected 24 heavy + 26x4 accent capsule; selected auto-centred. */
+/** iOS HomeChannelBar parity: unselected 17 secondary, selected 24 heavy + 26x4 accent capsule; redundant chevron removed. */
 @Composable
-private fun ChannelBar(items: List<HomePageRef>, selected: Int, onMore: () -> Unit, onSelect: (Int) -> Unit) {
-    val c = IdjThemeColors
+private fun ChannelBar(items: List<HomePageRef>, selected: Int, onSelect: (Int) -> Unit) {
     val state = rememberLazyListState()
     LaunchedEffect(selected) {
         val info = state.layoutInfo
@@ -376,25 +384,39 @@ private fun ChannelBar(items: List<HomePageRef>, selected: Int, onMore: () -> Un
             state.animateScrollBy((item.offset + item.size / 2 - center).toFloat(), DS.select())
         } else state.animateScrollToItem(selected)
     }
-    Row(Modifier.fillMaxWidth().padding(bottom = 12.dp, start = 20.dp), verticalAlignment = Alignment.Bottom) {
-        LazyRow(state = state, modifier = Modifier.weight(1f).fadeEnd(0.9f), horizontalArrangement = Arrangement.spacedBy(22.dp), verticalAlignment = Alignment.Bottom) {
-            itemsIndexed(items, key = { _, p -> p.key }, contentType = { _, _ -> "channel" }) { i, page -> ChannelTab(page.label, i == selected) { onSelect(i) } }
-            item("end") { Spacer(Modifier.width(12.dp)) }
+    LazyRow(
+        state = state,
+        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp).fadeEnd(0.92f),
+        contentPadding = PaddingValues(start = 20.dp, end = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(22.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        itemsIndexed(items, key = { _, p -> p.key }, contentType = { _, _ -> "channel" }) { i, page ->
+            ChannelTab(page.label, i == selected) { onSelect(i) }
         }
-        PlainIconButton(Icons.Filled.KeyboardArrowDown, "展开全部频道", tint = c.secondary, iconSize = 24.dp, onClick = onMore)
     }
 }
 
-/** `.ttabs`: selected 24 sp heavy with a 26×4 accent bar under its leading edge. */
+/** `.ttabs`: selected 24 sp heavy with a 26×4 accent bar under its leading edge (never clips CJK glyphs). */
 @Composable
 private fun ChannelTab(label: String, on: Boolean, onClick: () -> Unit) {
     val c = IdjThemeColors
     val bar = animateFloatAsState(if (on) 1f else 0f, DS.select(), label = "channelBar")
-    Box(Modifier.heightIn(min = 44.dp).selectable(on, remember { MutableInteractionSource() }, null, role = Role.Tab, onClick = onClick)
-        .semantics { contentDescription = "home.channel.$label" }, contentAlignment = Alignment.BottomStart) {
-        Text(label, color = if (on) c.text else c.secondary,
-            fontSize = if (on) 24.sp else 17.sp, fontWeight = if (on) FontWeight.ExtraBold else FontWeight.Normal,
-            modifier = Modifier.padding(bottom = 6.dp), maxLines = 1)
+    Box(
+        Modifier.heightIn(min = 44.dp)
+            .selectable(on, remember { MutableInteractionSource() }, null, role = Role.Tab, onClick = onClick)
+            .semantics { contentDescription = "home.channel.$label" },
+        contentAlignment = Alignment.BottomStart,
+    ) {
+        Text(
+            label,
+            color = if (on) c.text else c.secondary,
+            fontSize = if (on) 24.sp else 17.sp,
+            fontWeight = if (on) FontWeight.ExtraBold else FontWeight.Normal,
+            modifier = Modifier.padding(bottom = 6.dp),
+            maxLines = 1,
+            softWrap = false,
+        )
         Box(Modifier.offset(x = 1.dp).size(26.dp, 4.dp).graphicsLayer {
             alpha = bar.value.coerceIn(0f, 1f); scaleX = bar.value.coerceAtLeast(0f); transformOrigin = TransformOrigin(0f, 0.5f)
         }.clip(CircleShape).background(c.accent))

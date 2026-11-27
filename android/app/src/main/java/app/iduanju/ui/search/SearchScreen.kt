@@ -501,7 +501,7 @@ private fun SearchLandingContent(
     val full: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
 
     LazyVerticalGrid(
-        columns = GridCells.Fixed(metrics.wideCardCols),
+        columns = GridCells.Fixed(if (metrics.tier == SizeTier.Compact) 1 else metrics.wideCardCols),
         modifier = Modifier.fillMaxSize(),
         state = grid,
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = topPadding, bottom = bottomPadding),

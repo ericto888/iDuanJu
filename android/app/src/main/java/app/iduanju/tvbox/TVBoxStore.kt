@@ -230,6 +230,24 @@ class TVBoxStore(private val ctx: Context) {
 
     private suspend fun flush() { val snap = state; withContext(disk) { runCatching { writeText(stateFile, snap.toJSON().toString()) } } }
 
+    suspend fun flushForBackup() {
+        ready.await()
+        pending?.cancel()
+        flush()
+    }
+
+    suspend fun reloadFromDisk() {
+        ready.await()
+        val (s, list, _) = withContext(disk) { read() }
+        withContext(Dispatchers.Main.immediate) {
+            state = s
+            repos = list
+            latency.clear()
+            latency.putAll(s.latency)
+            pushEngine()
+        }
+    }
+
     private fun pushEngine() {
         val s = state
         val doh = dohOptions().firstOrNull { it.name == s.doh }

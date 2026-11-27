@@ -26,7 +26,12 @@ class MangaStore(ctx: Context) {
     }
     fun provider(source: String) = providers.firstOrNull { it.source == source } ?: builtins[0]
 
-    init {
+    init { reloadFromPrefs() }
+
+    fun reloadFromPrefs() {
+        favorites.clear()
+        progress.clear()
+        pluginProviders.clear()
         runCatching { val a = JSONArray(sp.getString("stv.manga.favorites", "[]")); for (i in 0 until a.length()) favorites.add(MangaItem.from(a.getJSONObject(i))) }
         runCatching { val a = JSONArray(sp.getString("stv.manga.progress", "[]")); for (i in 0 until a.length()) a.getJSONObject(i).let { o ->
             val it = MangaItem.from(o.getJSONObject("item")); progress[it.id] = Progress(it, o.optString("chapterId"), o.optString("chapterTitle"), o.optInt("page"), o.optInt("pages"), o.optLong("at")) } }

@@ -75,5 +75,14 @@ class TGStore(ctx: Context) {
     fun export(): String = TGFilter.export(TGFilter.Bundle(mode, heuristics, rules.toList()))
     fun verdict(p: TGPost): TGVerdict = TGFilter.verdict(p, rules, heuristics)
 
+    fun reloadFromPrefs() {
+        channels.clear()
+        runCatching { val a = JSONArray(sp.getString(KEY, "[]")); for (i in 0 until a.length()) channels.add(TGChannel.fromJSON(a.getJSONObject(i))) }
+        rules.clear()
+        runCatching { val a = JSONArray(sp.getString(RULES, "[]")); for (i in 0 until a.length()) rules.add(TGRule.fromJSON(a.getJSONObject(i))) }
+        mode = runCatching { TGFilterMode.valueOf(sp.getString(MODE, "fold")!!) }.getOrDefault(TGFilterMode.fold)
+        heuristics = sp.getBoolean(HEUR, true)
+    }
+
     companion object { const val KEY = "stv.tg.channels"; const val RULES = "stv.tg.rules"; const val MODE = "stv.tg.filterMode"; const val HEUR = "stv.tg.heuristics" }
 }

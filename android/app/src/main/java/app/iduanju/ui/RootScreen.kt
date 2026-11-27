@@ -59,6 +59,7 @@ import app.iduanju.ui.profile.ProfileScreen
 import app.iduanju.ui.search.SearchScreen
 import app.iduanju.ui.theme.IdjThemeColors
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /** The four tab pages: they cross-fade, everything else is pushed. */
@@ -76,7 +77,23 @@ fun RootScreen(initialRoute: String? = null) {
         runCatching { nav.navigate(to) }
     }
     val updater = app.iduanju.IdjApp.instance.updater
+    val webdav = app.iduanju.IdjApp.instance.webdav
+    val rootScope = rememberCoroutineScope()
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     LaunchedEffect(Unit) { updater.autoCheck() }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(2_200)
+        webdav.autoSyncIfNeeded()
+    }
+    DisposableEffect(lifecycleOwner, webdav) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                rootScope.launch { webdav.autoSyncIfNeeded() }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     // The first player opens without paying for codec lists and native libraries on the main thread.
     LaunchedEffect(Unit) {
         kotlinx.coroutines.delay(1_500)
@@ -108,26 +125,24 @@ fun RootScreen(initialRoute: String? = null) {
         }
         val showChromeNav = atRoot && !(route == "home" && novelImmersive)
         var dockHidden by remember { mutableStateOf(false) }
-        var scrollTick by remember { mutableIntStateOf(0) }
-        LaunchedEffect(route, showChromeNav) { dockHidden = false }
-        LaunchedEffect(scrollTick, dockHidden) {
-            if (dockHidden) {
-                kotlinx.coroutines.delay(380)
-                dockHidden = false
-            }
+        val dockRestoreJob = remember { arrayOfNulls<kotlinx.coroutines.Job>(1) }
+        LaunchedEffect(route, showChromeNav) {
+            dockRestoreJob[0]?.cancel()
+            dockHidden = false
         }
-        val dockScroll = remember {
+        val dockScroll = remember(rootScope) {
             object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
                 override fun onPostScroll(
                     consumed: androidx.compose.ui.geometry.Offset,
                     available: androidx.compose.ui.geometry.Offset,
                     source: androidx.compose.ui.input.nestedscroll.NestedScrollSource,
                 ): androidx.compose.ui.geometry.Offset {
-                    if (consumed.y < -4f) {
-                        dockHidden = true
-                        scrollTick++
-                    } else if (consumed.y > 4f) {
-                        dockHidden = false
+                    if (consumed.y < -10f) {
+                        if (!dockHidden) dockHidden = true
+                        dockRestoreJob[0]?.cancel()
+                    } else if (consumed.y > 10f) {
+                        dockRestoreJob[0]?.cancel()
+                        if (dockHidden) dockHidden = false
                     }
                     return androidx.compose.ui.geometry.Offset.Zero
                 }
@@ -136,7 +151,13 @@ fun RootScreen(initialRoute: String? = null) {
                     consumed: androidx.compose.ui.unit.Velocity,
                     available: androidx.compose.ui.unit.Velocity,
                 ): androidx.compose.ui.unit.Velocity {
-                    if (dockHidden) scrollTick++
+                    if (dockHidden) {
+                        dockRestoreJob[0]?.cancel()
+                        dockRestoreJob[0] = rootScope.launch {
+                            kotlinx.coroutines.delay(650)
+                            dockHidden = false
+                        }
+                    }
                     return androidx.compose.ui.unit.Velocity.Zero
                 }
             }
@@ -202,9 +223,24 @@ fun RootScreen(initialRoute: String? = null) {
                         startDestination = "home",
                         modifier = Modifier.weight(1f).fillMaxHeight().then(if (showChromeNav) Modifier.layerBackdrop(backdrop) else Modifier),
                         // The library default is a 700 ms cross-fade; back stack and predictive back are untouched.
+                        // Keep underlying page 100% opaque when popping back from dark player / manga reader (eliminates light-mode black flash).
                         enterTransition = { if (targetState.destination.route in RootRoutes) Motion.tabEnter else Motion.pagePushEnter },
-                        exitTransition = { if (targetState.destination.route in RootRoutes) Motion.tabExit else Motion.pagePushExit },
-                        popEnterTransition = { if (initialState.destination.route in RootRoutes) Motion.tabEnter else Motion.pagePopEnter },
+                        exitTransition = {
+                            val to = targetState.destination.route
+                            when {
+                                to in RootRoutes -> Motion.tabExit
+                                to?.startsWith("player/") == true || to?.startsWith("mangaRead/") == true -> androidx.compose.animation.ExitTransition.None
+                                else -> Motion.pagePushExit
+                            }
+                        },
+                        popEnterTransition = {
+                            val from = initialState.destination.route
+                            when {
+                                from in RootRoutes -> Motion.tabEnter
+                                from?.startsWith("player/") == true || from?.startsWith("mangaRead/") == true -> androidx.compose.animation.EnterTransition.None
+                                else -> Motion.pagePopEnter
+                            }
+                        },
                         popExitTransition = { if (initialState.destination.route in RootRoutes) Motion.tabExit else Motion.pagePopExit },
                     ) {
                         composable("home") {
@@ -236,8 +272,16 @@ fun RootScreen(initialRoute: String? = null) {
                                 onSearch = { nav.navigate("search") },
                             )
                         }
-                        composable("library/{kind}") { e -> app.iduanju.ui.library.LibraryListScreen(e.arguments!!.getString("kind")!!, onBack = { nav.popBackStack() }, onOpenDetail = { nav.navigate(Routes.detail(it)) }) }
+                        composable("library/{kind}") { e ->
+                            app.iduanju.ui.library.LibraryListScreen(
+                                kind = e.arguments!!.getString("kind")!!,
+                                onBack = { nav.popBackStack() },
+                                onOpenDetail = { nav.navigate(Routes.detail(it)) },
+                                onPlay = { sid, ep -> nav.navigate(Routes.player(sid, ep)) },
+                            )
+                        }
                         composable("profile") { ProfileScreen(onOpenDetail = { nav.navigate(Routes.detail(it)) }) }
+                        composable("webdav") { app.iduanju.ui.profile.WebDAVSyncScreen(onBack = { nav.popBackStack() }) }
                         composable("hongguo-login") { app.iduanju.ui.profile.HongguoLoginScreen(onBack = { nav.popBackStack() }) }
                         composable("sources") { app.iduanju.ui.profile.SourcesScreen(onBack = { nav.popBackStack() }) }
                         composable("plugins") { app.iduanju.ui.profile.PluginsScreen(onBack = { nav.popBackStack() }) }
@@ -281,7 +325,7 @@ fun RootScreen(initialRoute: String? = null) {
                             ),
                             enterTransition = { androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180)) },
                             exitTransition = { androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160)) },
-                            popEnterTransition = { androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180)) },
+                            popEnterTransition = { androidx.compose.animation.EnterTransition.None },
                             popExitTransition = { androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160)) },
                         ) { e ->
                             PlayerScreen(

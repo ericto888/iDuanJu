@@ -42,16 +42,14 @@ object Catalog {
     fun peekCover(sid: String): String {
         previewHints[sid]?.second?.takeIf { it.isNotEmpty() }?.let { return it }
         detailCache[sid]?.first?.cover?.takeIf { it.isNotEmpty() }?.let { return it }
-        IdjApp.instance.library.progress(sid)?.cover?.takeIf { it.isNotEmpty() }?.let { return it }
-        IdjApp.instance.library.favorites[sid]?.second?.takeIf { it.isNotEmpty() }?.let { return it }
+        IdjApp.instance.library.peekCoverSafe(sid).takeIf { it.isNotEmpty() }?.let { return it }
         return ""
     }
 
     fun peekTitle(sid: String): String {
         previewHints[sid]?.first?.takeIf { it.isNotEmpty() }?.let { return it }
         detailCache[sid]?.first?.title?.takeIf { it.isNotEmpty() }?.let { return it }
-        IdjApp.instance.library.progress(sid)?.title?.takeIf { it.isNotEmpty() }?.let { return it }
-        IdjApp.instance.library.favorites[sid]?.first?.takeIf { it.isNotEmpty() }?.let { return it }
+        IdjApp.instance.library.peekTitleSafe(sid).takeIf { it.isNotEmpty() }?.let { return it }
         return ""
     }
 

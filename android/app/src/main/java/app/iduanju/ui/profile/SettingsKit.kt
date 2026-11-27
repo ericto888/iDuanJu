@@ -211,4 +211,7 @@ internal object ProfileIcons {
     val server = Icons.Outlined.Dns
     val adblock = Icons.Outlined.Block
     val device = Icons.Outlined.PhoneAndroid
+    val cloud = Icons.Outlined.CloudSync
+    val backup = Icons.Outlined.Backup
+    val restore = Icons.Outlined.SettingsBackupRestore
 }

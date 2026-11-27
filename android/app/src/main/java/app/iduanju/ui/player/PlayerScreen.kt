@@ -66,11 +66,16 @@ private fun PlayerContent(seriesId: String, startEp: Int, onBack: () -> Unit, qu
     val seekPreview = remember { SeekPreviewState() }
     val pip = remember(session, activity) { PlayerPip(ctx, activity, session, ui) }
     val switchSeries by rememberUpdatedState(onSwitchSeries)
-    DisposableEffect(session) {
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(session, lifecycleOwner, activity) {
         session.beforePrepare = { enhance.sync(activity); enhance.install() }
         session.onEffectFailure = { enhance.onFailure() }
         session.onFinalEnded = { nextDrama.onFinalEnded() }
         session.hasSurface = { enhance.textureView?.isAvailable == true }
+        session.inForeground = {
+            val pipNow = PipHost.isInPip.value || (activity?.isInPictureInPictureMode == true)
+            pipNow || lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+        }
         nextDrama.onSwitchSeries = { switchSeries(it) }
         session.start()
         onDispose { session.release() }
@@ -83,19 +88,24 @@ private fun PlayerContent(seriesId: String, startEp: Int, onBack: () -> Unit, qu
     }
 
     val label = rememberEpisodeLabel(session, startEp)
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, session, activity) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
-                val pipNow = PipHost.isInPip.value || (activity?.isInPictureInPictureMode == true)
-                if (!pipNow && !session.queued && session.player.isPlaying) {
-                    session.player.pause()
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+                    val pipNow = PipHost.isInPip.value || (activity?.isInPictureInPictureMode == true)
+                    if (!pipNow && !session.queued) {
+                        session.player.playWhenReady = false
+                        session.player.pause()
+                    }
                 }
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> session.syncPlayingState()
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    LaunchedEffect(inPip) { if (!inPip) session.syncPlayingState() }
     PlayerWindowEffects(session, ui, enhance, activity, ctx, dims.landscape)
     PlayerMediaSessionEffects(session, ctx, label)
     pip.Effects(inPip)
@@ -140,11 +150,11 @@ private fun PlayerStage(
             PlayerSurface(session, ui, enhance, aspect, height, nextDrama, Modifier.fillMaxSize())
             DanmakuLayer(session, ui, dims, inPip)
         }
-        GestureLayer(session, ui, hud, nextDrama, activity, inPip, Modifier.fillMaxSize())
+        GestureLayer(session, ui, hud, nextDrama, activity, inPip, dims.landscape, Modifier.fillMaxSize())
         if (inPip) return@BoxWithConstraints
 
         PlayerStatus(session, backdrop)
-        hud.Overlay(true, Modifier.align(Alignment.Center))
+        hud.Overlay(true, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = if (dims.landscape) 54.dp else 62.dp))
 
         val chromeOn = ui.showChrome && !ui.locked
         val fade = animateFloatAsState(if (ui.showChrome || ui.panel != null) 1f else 0f, DS.panel(), label = "chrome")
@@ -175,10 +185,13 @@ private fun PlayerStage(
             }
         }
         val ready = session.status.isEmpty() && session.error == null && session.firstFrame
-        if (session.live) {
-            CenterTransport(session, dims, ui.showChrome && ready && !session.centerSuppressed && !ui.locked && ui.panel == null && !ui.channelDrawer && !nextDrama.countdownOn,
-                backdrop, Modifier.align(Alignment.Center))
-        }
+        CenterTransport(
+            session,
+            dims,
+            ui.showChrome && ready && !session.centerSuppressed && !ui.locked && ui.panel == null && !ui.channelDrawer && !nextDrama.countdownOn && !session.holding,
+            backdrop,
+            Modifier.align(Alignment.Center),
+        )
         // Minimal 2 dp bottom edge progress while the HUD is hidden (no top title blocking portrait short dramas).
         if (!ui.showChrome && ui.panel == null && !session.live) EdgeProgressBar(session.clock, Modifier.align(Alignment.BottomCenter))
         // Floating seek-bar thumbnail above the thumb while scrubbing; draw-only, no touches.

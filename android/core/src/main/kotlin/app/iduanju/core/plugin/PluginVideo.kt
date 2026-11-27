@@ -74,14 +74,18 @@ class PluginVideo(val inst: PluginInstance, private val extraDomains: List<Strin
         val title = PluginOut.s(o.opt("title"), 200)
         val tags = PluginOut.strings(o.opt("tags"))
         if (ContentFilter.isBlocked(listOf(title) + tags)) throw ProviderException.unsupported("该内容已被过滤")
-        val line = PluginOut.objs(o.opt("lines"), 20).firstOrNull()
-        val lineName = PluginOut.s(line?.opt("name"), 40)
-        val eps = PluginOut.objs(line?.opt("episodes"), 3000).mapIndexedNotNull { i, e ->
-            val eid = PluginOut.s(e.opt("id"), 2000); if (eid.isEmpty()) null
-            else HGEpisode(i + 1, epVid(pid, id, eid), e.optInt("duration"), PluginOut.s(e.opt("name"), 80).ifEmpty { "第${i + 1}集" }, page = lineName)
-        }.mapIndexed { i, e -> e.copy(ep = i + 1) }
+        val rawLines = PluginOut.objs(o.opt("lines"), 20)
+        val playLines = rawLines.mapIndexedNotNull { li, line ->
+            val lineName = PluginOut.s(line.opt("name"), 40).ifEmpty { "线路 ${li + 1}" }
+            val lineEps = PluginOut.objs(line.opt("episodes"), 3000).mapIndexedNotNull { i, e ->
+                val eid = PluginOut.s(e.opt("id"), 2000); if (eid.isEmpty()) null
+                else HGEpisode(i + 1, epVid(pid, id, eid), e.optInt("duration"), PluginOut.s(e.opt("name"), 80).ifEmpty { "第${i + 1}集" }, page = lineName)
+            }.mapIndexed { i, e -> e.copy(ep = i + 1) }
+            if (lineEps.isEmpty()) null else HGPlayLine(id = "l$li", name = lineName, episodes = lineEps)
+        }
+        val eps = playLines.firstOrNull()?.episodes.orEmpty()
         return HGSeriesDetail(seriesId = seriesSid, title = title, cover = cover(PluginOut.url(o.opt("cover")), PluginOut.headers(o.opt("coverHeaders"))), desc = org.jsoup.parser.Parser.unescapeEntities(PluginOut.s(o.opt("desc"), 4000), false).replace(Regex("[\\s\\u00a0]+"), " ").trim(),
-            author = PluginOut.s(o.opt("director"), 80), actors = PluginOut.strings(o.opt("actors")), totalEps = eps.size, episodes = eps, tags = tags,
+            author = PluginOut.s(o.opt("director"), 80), actors = PluginOut.strings(o.opt("actors")), totalEps = eps.size, episodes = eps, lines = playLines, tags = tags,
             episodeLabel = if (eps.size > 1) "共${eps.size}集" else "长视频", source = m.name)
     }
 
@@ -111,7 +115,7 @@ class PluginVideo(val inst: PluginInstance, private val extraDomains: List<Strin
             danmaku = PluginOut.url(o.opt("danmaku")).ifEmpty { null })
     }
 
-    fun hasDanmaku(): Boolean = "danmaku" in m.capabilities || runCatching { inst.has("danmaku") }.getOrDefault(false)
+    fun hasDanmaku(): Boolean = "danmaku" in m.capabilities || DANMAKU_EXPORT_RE.containsMatchIn(inst.bundle.source)
 
     /** Official or third-party comments through the plugin's `danmaku` export (docs/plugins/SPEC_ZH.md). Blocking. */
     fun danmaku(episodeVid: String): HGDanmakuResult {
@@ -228,6 +232,7 @@ class PluginVideo(val inst: PluginInstance, private val extraDomains: List<Strin
     }
 
     companion object {
+        private val DANMAKU_EXPORT_RE = Regex("""(?:async\s+)?danmaku\s*(?:\(|:)""")
         private fun b64(s: String) = Base64.getUrlEncoder().withoutPadding().encodeToString(s.toByteArray())
         private fun unb64(s: String) = String(Base64.getUrlDecoder().decode(s))
         fun isPlugin(id: String) = id.startsWith("plugin:")

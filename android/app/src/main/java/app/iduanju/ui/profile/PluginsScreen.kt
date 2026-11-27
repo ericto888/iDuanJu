@@ -90,7 +90,12 @@ fun PluginsScreen(onBack: () -> Unit) {
         if (uris.isNotEmpty()) run {
             if (uris.size == 1) {
                 val uri = uris.first()
-                val text = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: error("读取文件失败")
+                val rawBytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("读取文件失败")
+                if (app.iduanju.data.AppBackup.isBackupData(rawBytes)) {
+                    val summary = app.iduanju.data.AppBackup.restore(ctx, rawBytes)
+                    return@run summary.toastText
+                }
+                val text = rawBytes.toString(Charsets.UTF_8)
                 val name = ctx.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
                 describe(store.interpret(text, "file", name?.substringBeforeLast('.')))
             } else {
@@ -98,9 +103,14 @@ fun PluginsScreen(onBack: () -> Unit) {
                 var failed = 0
                 for (uri in uris) {
                     runCatching {
-                        val text = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: error("读取文件失败")
-                        val name = ctx.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
-                        describe(store.interpret(text, "file", name?.substringBeforeLast('.')))
+                        val rawBytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("读取文件失败")
+                        if (app.iduanju.data.AppBackup.isBackupData(rawBytes)) {
+                            app.iduanju.data.AppBackup.restore(ctx, rawBytes)
+                        } else {
+                            val text = rawBytes.toString(Charsets.UTF_8)
+                            val name = ctx.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+                            describe(store.interpret(text, "file", name?.substringBeforeLast('.')))
+                        }
                     }.onSuccess { ok++ }.onFailure { failed++ }
                 }
                 "批量导入完成：成功 $ok 个" + if (failed > 0) "，失败 $failed 个" else ""
@@ -158,7 +168,7 @@ fun PluginsScreen(onBack: () -> Unit) {
                 Group("添加插件", footer = "插件运行在 QuickJS 沙箱里，只能访问 manifest 声明的域名；未成年相关内容一律过滤。") {
                     LinkRow("从网址添加", ProfileIcons.link) { dialog = "url" }
                     RowDivider()
-                    LinkRow("从文件导入（.idjplugin / .m3u）", ProfileIcons.file, sub = "支持多选 · 插件 / M3U / TVBox JSON") { picker.launch(arrayOf("*/*")) }
+                    LinkRow("从文件导入（.idjplugin / .m3u / .idjbackup）", ProfileIcons.file, sub = "支持多选 · 插件 / M3U / TVBox JSON / 完整备份") { picker.launch(arrayOf("*/*")) }
                     RowDivider()
                     LinkRow("粘贴插件内容", ProfileIcons.paste) { dialog = "paste" }
                     RowDivider()

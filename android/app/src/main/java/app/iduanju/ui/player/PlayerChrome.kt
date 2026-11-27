@@ -127,7 +127,7 @@ internal fun TopBar(
                     } else {
                         val fav = lib.isFavorite(session.seriesId)
                         CircleBtn(if (fav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, if (fav) "取消收藏" else "收藏", enabled, dims.button, dims.buttonIcon,
-                            tint = if (fav) pc.accent else Color.White) { d?.let { lib.toggleFavorite(session.seriesId, it.title, it.cover) } }
+                            tint = if (fav) pc.favorite else Color.White) { d?.let { lib.toggleFavorite(session.seriesId, it.title, it.cover) } }
                     }
                 }
                 if (padSplit) CircleBtn(Icons.Filled.GridView, if (ui.padDrawerOpen) "收起选集" else "展开选集", enabled, dims.button, dims.buttonIcon,
@@ -172,24 +172,33 @@ internal fun BottomConsole(
     alpha: () -> Float, canToggleOrientation: Boolean, onOrientation: () -> Unit, modifier: Modifier = Modifier,
 ) {
     val d = session.detail
-    Column(modifier.navigationBarsPadding().padding(horizontal = dims.pad).padding(bottom = if (dims.wide) 16.dp else 6.dp)
+    Column(modifier.navigationBarsPadding().padding(horizontal = dims.pad).padding(bottom = if (dims.wide) 16.dp else 10.dp)
         .then(if (dims.wide) Modifier.widthIn(max = 860.dp) else Modifier).fillMaxWidth().graphicsLayer { this.alpha = alpha() }) {
         if (d != null && !dims.wide && !session.channelList) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    d.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 19.sp, lineHeight = 24.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f), style = titleShadow,
+                )
+                SkipIntro(session, enabled)
+            }
+            Spacer(Modifier.height(4.dp))
             MetaRow(session, ui, label, enabled)
-            Spacer(Modifier.height(6.dp))
-            Text(d.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 21.sp, lineHeight = 27.sp, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 6.dp), style = titleShadow)
             Spacer(Modifier.height(8.dp))
         }
         if (session.live && !dims.wide) LiveProgramLine(session, Modifier.padding(horizontal = 6.dp).padding(bottom = 10.dp))
         Column(Modifier.fillMaxWidth()
             .then(if (dims.wide) Modifier.glassSurface(RoundedCornerShape(26.dp), backdrop = backdrop, dark = true, base = PlayerGlass, shadowRadius = 16.dp, fallbackAlpha = 0.44f)
-                .padding(horizontal = 16.dp, vertical = 10.dp) else Modifier.padding(horizontal = 6.dp))
+                .padding(horizontal = 16.dp, vertical = 10.dp) else Modifier.padding(horizontal = 4.dp))
             // swallow taps on the console background so they never toggle the HUD underneath
             .pointerInput(Unit) { detectTapGestures { } }) {
             if (session.live) {
                 LiveControls(session, ui, dims, enabled, canToggleOrientation, onOrientation)
-            } else {
+            } else if (dims.wide) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         Modifier.size(36.dp).clip(CircleShape)
@@ -211,33 +220,122 @@ internal fun BottomConsole(
                     }
                 }
                 if (session.channelList) ReplayControls(session, ui, dims, enabled) else VodControls(session, ui, dims, enabled)
+            } else {
+                // Uncrowded portrait cinema layout (matches iOS Build 45): full-width smooth scrubber + airy 44 dp dock.
+                PlayerTimeBar(session.clock, false, seekPreview, Modifier.fillMaxWidth().padding(horizontal = 2.dp)) {
+                    if (!ui.locked) { session.seekTo(it); ui.showChrome = true }
+                }
+                Spacer(Modifier.height(6.dp))
+                if (session.channelList) {
+                    ReplayControls(session, ui, dims, enabled)
+                } else {
+                    PortraitDock(session, ui, enabled, canToggleOrientation, onOrientation)
+                }
             }
         }
     }
 }
 
-/** Playback actions only. 画面比例 / AI 超分 / SDR→HDR / 定时 / 连播 live solely in 更多设置 (top-right ⋯). */
+/** Airy 44 dp portrait dock: Play/Pause + Episode pill on left; Speed pill + Danmaku + Fullscreen on right. */
+@Composable
+private fun PortraitDock(session: PlayerSession, ui: PlayerUi, enabled: Boolean, canToggleOrientation: Boolean, onOrientation: () -> Unit) {
+    val pc = IdjDarkColors
+    val activeSpeed = if (session.holdLocked) session.holdSpeed else session.speed
+    val speedActive = ui.panel == PlayerPanel.Speed || activeSpeed != 1f
+    val dm = session.danmakuCapable
+    val ep = session.episode
+    val total = maxOf(if (session.lines.size > 1) 0 else (session.detail?.totalEps ?: 0), session.episodes.size)
+    val epPillText = when {
+        session.queued -> "章节 ${session.epIndex + 1}/$total"
+        total > 1 && ep != null -> "第 ${ep.ep}/$total 集"
+        else -> "选集"
+    }
+    Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        CircleBtn(
+            icon = if (session.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+            label = if (session.playing) "暂停" else "播放",
+            enabled = enabled,
+            size = 38.dp,
+            iconSize = 22.dp,
+        ) {
+            session.togglePlay()
+            ui.showChrome = true
+        }
+        Row(
+            Modifier.height(36.dp)
+                .clip(CircleShape)
+                .background(if (ui.panel == PlayerPanel.Episodes) pc.accentSoft else Color.Black.copy(0.32f))
+                .border(0.7.dp, if (ui.panel == PlayerPanel.Episodes) pc.accentLine else Color.White.copy(0.14f), CircleShape)
+                .pressClick(0.95f, enabled = enabled, label = epPillText) { ui.toggle(PlayerPanel.Episodes) }
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Icon(Icons.Filled.GridView, null, tint = if (ui.panel == PlayerPanel.Episodes) pc.accent else Color.White.copy(0.9f), modifier = Modifier.size(15.dp))
+            Text(epPillText, color = if (ui.panel == PlayerPanel.Episodes) pc.accent else Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
+        Spacer(Modifier.weight(1f))
+        Row(
+            Modifier.height(36.dp)
+                .clip(CircleShape)
+                .background(if (speedActive) pc.accentSoft else Color.Black.copy(0.32f))
+                .border(0.7.dp, if (speedActive) pc.accentLine else Color.White.copy(0.14f), CircleShape)
+                .pressClick(0.95f, enabled = enabled, label = "倍速 ${speedText(activeSpeed)}") { ui.toggle(PlayerPanel.Speed) }
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                speedText(activeSpeed),
+                color = if (speedActive) pc.accent else Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                style = TextStyle(fontFeatureSettings = "tnum"),
+            )
+        }
+        CircleBtn(
+            icon = Icons.Filled.Subtitles,
+            label = if (ui.danmaku) "关闭弹幕" else "开启弹幕",
+            enabled = enabled && dm,
+            size = 38.dp,
+            iconSize = 19.dp,
+            tint = if (dm && ui.danmaku) pc.accent else Color.White,
+        ) {
+            if (dm) {
+                ui.applyDanmaku(!ui.danmaku)
+                session.hint = if (ui.danmaku) "弹幕：开启" else "弹幕：关闭"
+            }
+        }
+        if (canToggleOrientation) {
+            CircleBtn(
+                icon = Icons.Filled.Fullscreen,
+                label = "横屏全屏",
+                enabled = enabled,
+                size = 38.dp,
+                iconSize = 21.dp,
+                onClick = onOrientation,
+            )
+        }
+    }
+}
+
+/** Landscape / tablet console playback actions. */
 @Composable
 private fun VodControls(session: PlayerSession, ui: PlayerUi, dims: PlayerDimens, enabled: Boolean) {
-    val speed = speedText(session.speed)
+    val activeSpeed = if (session.holdLocked) session.holdSpeed else session.speed
+    val speed = speedText(activeSpeed)
     val quality = session.quality?.takeIf { it.length <= 8 } ?: session.tags.res
     val dm = session.danmakuCapable
     val episodesWord = if (session.queued) "章节" else "选集"
     fun danmaku() { if (dm) { ui.applyDanmaku(!ui.danmaku); session.hint = if (ui.danmaku) "弹幕：开启" else "弹幕：关闭" } }
-    if (dims.landscape) Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         SkipIntro(session, enabled)
         Spacer(Modifier.weight(1f))
         LandChip(Icons.Filled.GridView, episodesWord, null, ui.panel == PlayerPanel.Episodes, enabled) { ui.toggle(PlayerPanel.Episodes) }
-        LandChip(Icons.Filled.Speed, "倍速", speed, ui.panel == PlayerPanel.Speed || session.speed != 1f, enabled) { ui.toggle(PlayerPanel.Speed) }
+        LandChip(Icons.Filled.Speed, "倍速", speed, ui.panel == PlayerPanel.Speed || activeSpeed != 1f, enabled) { ui.toggle(PlayerPanel.Speed) }
         LandChip(Icons.Filled.HighQuality, "画质", quality, ui.panel == PlayerPanel.Quality, enabled) { ui.toggle(PlayerPanel.Quality) }
         LandChip(Icons.Filled.Subtitles, "弹幕", if (dm) (if (ui.danmaku) "开" else "关") else null, dm && ui.danmaku, enabled && dm) { danmaku() }
         LandChip(Icons.Filled.ClosedCaption, "音轨字幕", null, ui.panel == PlayerPanel.Tracks, enabled) { ui.toggle(PlayerPanel.Tracks) }
-    } else Row(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        ActionBtn(Icons.Filled.GridView, episodesWord, null, ui.panel == PlayerPanel.Episodes, false, enabled) { ui.toggle(PlayerPanel.Episodes) }
-        ActionBtn(Icons.Filled.Speed, "倍速", speed, ui.panel == PlayerPanel.Speed, session.speed != 1f, enabled) { ui.toggle(PlayerPanel.Speed) }
-        ActionBtn(Icons.Filled.HighQuality, "画质", quality, ui.panel == PlayerPanel.Quality, false, enabled) { ui.toggle(PlayerPanel.Quality) }
-        ActionBtn(Icons.Filled.Subtitles, "弹幕", if (dm) (if (ui.danmaku) "开" else "关") else null, false, dm && ui.danmaku, enabled && dm) { danmaku() }
-        ActionBtn(Icons.Filled.ClosedCaption, "音轨字幕", null, ui.panel == PlayerPanel.Tracks, false, enabled) { ui.toggle(PlayerPanel.Tracks) }
     }
 }
 
@@ -310,18 +408,39 @@ internal fun BoxScope.PlayerStatus(session: PlayerSession, backdrop: Backdrop?) 
         }
     }
     session.error?.let { ErrorCard(session, it, backdrop, Modifier.align(Alignment.Center)) }
-    if (session.holding) {
+    // Slim top-pinned speed boost pill (never blocks the center of the video, matches iOS PlayerSpeedHUD).
+    AnimatedVisibility(
+        visible = session.holding || session.holdLocked,
+        modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp),
+        enter = Motion.modalEnter,
+        exit = Motion.modalExit,
+    ) {
+        val pc = IdjDarkColors
+        val locked = session.holdLocked && !session.holding
         Row(
-            Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 96.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color(0xFF181A20).copy(alpha = 0.86f))
-                .border(0.5.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
-                .padding(horizontal = 22.dp, vertical = 12.dp),
+            Modifier.height(34.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF14161B).copy(alpha = 0.84f))
+                .border(0.7.dp, if (locked) pc.accent.copy(0.45f) else Color.White.copy(0.14f), CircleShape)
+                .then(if (locked) Modifier.pressClick(0.95f, label = "恢复正常倍速") { session.endHold(force = true) } else Modifier)
+                .padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Icon(Icons.Filled.FastForward, null, tint = Color.White)
-            Spacer(Modifier.width(8.dp))
-            Text("2.0×", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Icon(Icons.Filled.FastForward, null, tint = pc.accent, modifier = Modifier.size(16.dp))
+            Text(
+                speedText(session.holdSpeed),
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                style = TextStyle(fontFeatureSettings = "tnum"),
+            )
+            Text(
+                if (locked) "已锁定 · 点此恢复" else "左右微调 · 上滑锁定",
+                color = Color.White.copy(0.62f),
+                fontSize = 11.sp,
+                maxLines = 1,
+            )
         }
     }
     Hint(session, Modifier.align(Alignment.Center))

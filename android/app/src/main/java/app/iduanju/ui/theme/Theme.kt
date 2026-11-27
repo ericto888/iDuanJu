@@ -52,6 +52,8 @@ data class IdjColors(
     /** Destructive actions, failures and the LIVE dot. */
     val danger: Color,
     val dangerSoft: Color,
+    /** Coral-red heart for favorited dramas (iOS STVTheme.favorite). */
+    val favorite: Color,
 ) {
     fun rankColor(r: Int): Color = when (r) { 1 -> gold; 2 -> silver; 3 -> bronze; else -> tertiary }
 }
@@ -93,6 +95,7 @@ private val Dark = IdjColors(
     ambientCool = listOf(Color(0x574868A8), Color(0x2928385C)),
     danger = Color(0xFFFF6B6B),
     dangerSoft = Color(0x29FF6B6B),
+    favorite = Color(0xFFFF4D6A),
 )
 
 private val Light = IdjColors(
@@ -132,6 +135,7 @@ private val Light = IdjColors(
     ambientCool = listOf(Color(0x26286DEF), Color(0x0D286DEF)),
     danger = Color(0xFFE5484D),
     dangerSoft = Color(0x1AE5484D),
+    favorite = Color(0xFFFF4D6A),
 )
 
 val LocalIdjColors = staticCompositionLocalOf { Dark }

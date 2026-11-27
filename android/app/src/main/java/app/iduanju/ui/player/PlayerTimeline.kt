@@ -102,28 +102,28 @@ private fun ScrubTrack(clock: PlaybackClock, thick: Boolean, preview: SeekPrevie
         val frac = (drag ?: if (d > 0) clock.pos.toFloat() / d else 0f).coerceIn(0f, 1f)
         val buf = (if (d > 0) clock.buffered.toFloat() / d else 0f).coerceIn(0f, 1f)
         val g = grow.value
-        val h = (if (thick) 6.dp.toPx() + 4.dp.toPx() * g else 4.dp.toPx() + 4.dp.toPx() * g)
-        val knob = (if (thick) 8.dp.toPx() + 3.dp.toPx() * g else 7.dp.toPx() + 3.dp.toPx() * g)
+        val h = (if (thick) 4.5.dp.toPx() + 3.5.dp.toPx() * g else 3.5.dp.toPx() + 3.5.dp.toPx() * g)
+        val knob = (if (thick) 6.dp.toPx() + 3.dp.toPx() * g else 5.dp.toPx() + 3.dp.toPx() * g)
         val cy = size.height / 2f
         val r = CornerRadius(h / 2f, h / 2f)
         val top = cy - h / 2f
-        drawRoundRect(Color.White.copy(0.24f), Offset(0f, top), Size(size.width, h), r)
-        if (buf > 0f) drawRoundRect(Color.White.copy(0.30f), Offset(0f, top), Size(size.width * buf, h), r)
-        if (frac > 0f) drawRoundRect(Color.White, Offset(0f, top), Size(size.width * frac, h), r)
-        val x = size.width * frac
+        drawRoundRect(Color.White.copy(0.22f), Offset(0f, top), Size(size.width, h), r)
+        if (buf > 0f) drawRoundRect(Color.White.copy(0.42f), Offset(0f, top), Size(size.width * buf, h), r)
+        if (frac > 0f) drawRoundRect(Color.White, Offset(0f, top), Size(maxOf(h, size.width * frac), h), r)
+        val x = (size.width * frac).coerceIn(knob, (size.width - knob).coerceAtLeast(knob))
         if (g > 0.01f) drawCircle(Color.White.copy(0.18f * g), knob * 2f, Offset(x, cy))
-        drawCircle(Color.Black.copy(0.22f), knob + 1.dp.toPx(), Offset(x, cy + 1.dp.toPx()))
+        drawCircle(Color.Black.copy(0.32f), knob + 1.dp.toPx(), Offset(x, cy + 1.dp.toPx()))
         drawCircle(Color.White, knob, Offset(x, cy))
     }
 }
 
-/** 2 dp always-on edge progress while the HUD is hidden; reads the clock in the draw phase only. */
+/** 2 dp pure white edge progress while the HUD is hidden; reads the clock in the draw phase only. */
 @Composable
 internal fun EdgeProgressBar(clock: PlaybackClock, modifier: Modifier = Modifier) {
     Box(modifier.fillMaxWidth().height(2.dp).drawBehind {
-        drawRect(Color.White.copy(0.18f))
+        drawRect(Color.White.copy(0.16f))
         val d = clock.dur
         val f = if (d > 0) (clock.pos.toFloat() / d).coerceIn(0f, 1f) else 0f
-        if (f > 0f) drawRect(Color.White.copy(0.6f), size = Size(size.width * f, size.height))
+        if (f > 0f) drawRect(Color.White.copy(0.85f), size = Size(size.width * f, size.height))
     })
 }

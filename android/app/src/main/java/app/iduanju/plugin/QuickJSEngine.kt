@@ -19,7 +19,11 @@ class QuickJSEngine : PluginEngine {
 
     override fun install(hostRaw: (String, String) -> String?) {
         val g = ctx.globalObject
-        g.setProperty("__hostRaw", JSCallFunction { args -> hostRaw(args.getOrNull(0)?.toString() ?: "", args.getOrNull(1)?.toString() ?: "null") })
+        try {
+            g.setProperty("__hostRaw", JSCallFunction { args -> hostRaw(args.getOrNull(0)?.toString() ?: "", args.getOrNull(1)?.toString() ?: "null") })
+        } finally {
+            g.release()
+        }
     }
 
     override fun eval(src: String, name: String): Any? {
