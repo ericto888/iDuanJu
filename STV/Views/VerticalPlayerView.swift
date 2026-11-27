@@ -68,6 +68,8 @@ struct PlayerScreen: View {
     @State private var lastConfirmedVideoIsLandscape: Bool?
     @State private var liftFallbackEpisode: Int?
     @State private var liftFallbackIsLandscape: Bool?
+    /// Direction of the outgoing held frame; snapshots use viewport dimensions, not video dimensions.
+    @State private var heldFrameIsLandscape: Bool?
     /// Preserve an already-entered landscape fullscreen session across automatic next-episode transitions.
     @State private var preserveLandscapeForAutoNext = false
     @Environment(\.verticalSizeClass) private var vClass
@@ -97,11 +99,9 @@ struct PlayerScreen: View {
         guard !layoutMetrics.isPad, !landscape, currentVideoIsLandscape else { return 0 }
         return 46
     }
-    /// The outgoing still keeps its own position; it must not follow the incoming episode's size.
-    private func heldFrameLift(_ image: UIImage) -> CGFloat {
-        guard !layoutMetrics.isPad, !landscape,
-              image.size.width > 0, image.size.height > 0,
-              image.size.width / image.size.height > 1.0 else { return 0 }
+    /// The outgoing still keeps its own position; snapshots use the direction captured before the switch.
+    private var heldFrameLift: CGFloat {
+        guard !layoutMetrics.isPad, !landscape, heldFrameIsLandscape == true else { return 0 }
         return 46
     }
     private func rememberConfirmedVideoOrientation() {
@@ -183,7 +183,7 @@ struct PlayerScreen: View {
                         FeedDrift(feed: feed, index: held.index, page: full.height) {
                             Image(uiImage: held.image).resizable().frame(width: area.width, height: area.height)
                         }
-                        .offset(x: area.minX, y: area.minY - heldFrameLift(held.image))
+                        .offset(x: area.minX, y: area.minY - heldFrameLift)
                         .allowsHitTesting(false).accessibilityHidden(true)
                     }
                     Group {
@@ -415,6 +415,7 @@ struct PlayerScreen: View {
             // Keep the outgoing episode's confirmed direction only while the incoming episode loads.
             liftFallbackEpisode = new
             liftFallbackIsLandscape = lastConfirmedVideoIsLandscape
+            heldFrameIsLandscape = lastConfirmedVideoIsLandscape
             // If auto-next starts while the player is already landscape, carry that fullscreen
             // session into the next episode. Loading must not collapse it to portrait.
             if co.lastAdvanceWasAuto && landscape {
