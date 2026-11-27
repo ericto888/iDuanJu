@@ -556,6 +556,7 @@ private struct HomeFeedPage: View {
     @State private var legacyError: Error?
     @State private var pluginHomeSource: String?
     @State private var pluginFeatured: [HGSeries] = []
+    @State private var pluginHomeError: Error?
     @State private var featuredIndex = 0
     private let gutter: CGFloat = 16
     /// DEBUG `STV_HOME_SCROLL=bottom` opens the feed scrolled to the end (simulator screenshots).
@@ -582,10 +583,19 @@ private struct HomeFeedPage: View {
         let categoryShelves = features.contains("categoryShelves")
         let boards = pluginID != nil && !categoryShelves ? Array(allBoards.prefix(1)) : allBoards
         let hasFeatured = !pluginFeatured.isEmpty
+        let loadingPluginHome = pluginID.map { PluginStore.snapshot($0)?.manifest.capabilities.contains("home") == true && pluginHomeSource != $0 } ?? false
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if source.subs.count > 1 { subChips } else if case .site = source { boardChips(allBoards) }
-                if tab == .actorRank {
+                if loadingPluginHome {
+                    if let error = pluginHomeError {
+                        ErrorStateView(error: error) {
+                            if case .site(let site) = source { Task { await loadPluginHome(site) } }
+                        }
+                    } else {
+                        HomeCardsSkeleton(landscape: true).padding(.horizontal, 16).padding(.top, 24)
+                    }
+                } else if tab == .actorRank {
                     ActorRankList().padding(.vertical, 16)
                 } else {
                     // Lazy: boards below the fold are neither built nor requested until they are scrolled to.
@@ -613,6 +623,7 @@ private struct HomeFeedPage: View {
             } else {
                 if case .site(let site) = tab, site.pluginID != nil {
                     pluginHomeSource = nil
+                    pluginHomeError = nil
                     await loadPluginHome(site)
                 }
                 boards.forEach { BoardCache.shared.feed($0).load(force: true) }
@@ -634,6 +645,7 @@ private struct HomeFeedPage: View {
 
     private func loadPluginHome(_ site: DramaSource) async {
         guard let id = site.pluginID, pluginHomeSource != id else { return }
+        pluginHomeError = nil
         guard let manifest = PluginStore.snapshot(id)?.manifest,
               manifest.capabilities.contains("home"),
               let provider = Sites.provider(site) as? JSVideoProvider else {
@@ -646,6 +658,7 @@ private struct HomeFeedPage: View {
             pluginFeatured = data.featured
             pluginHomeSource = id
         } catch {
+            pluginHomeError = error
             pluginHomeSource = nil
         }
     }
