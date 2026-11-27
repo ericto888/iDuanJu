@@ -717,13 +717,11 @@ private struct HomeFeedPage: View {
               fallbackHeroSource != id || force else { return }
         fallbackHeroSource = nil
         fallbackHeroBoardID = nil
-        for board in self.boards {
+        let first = await PluginHomeFeatures.firstPopulated(self.boards) { board in
             let items = await BoardCache.shared.feed(board).loadFirstPageIfNeeded(force: force)
-            if !items.isEmpty {
-                fallbackHeroBoardID = board.id
-                break
-            }
+            return !items.isEmpty
         }
+        fallbackHeroBoardID = first?.id
         fallbackHeroSource = id
     }
 
