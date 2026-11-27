@@ -66,8 +66,6 @@ struct PlayerScreen: View {
     @State private var orientationIsPortrait: Bool?
     /// Preserve an already-entered landscape fullscreen session across automatic next-episode transitions.
     @State private var preserveLandscapeForAutoNext = false
-    /// Keep the last confirmed episode orientation while the next episode is loading.
-    @State private var lastReadyIsLandscapeVideo: Bool?
     @Environment(\.verticalSizeClass) private var vClass
     @Environment(\.layoutMetrics) private var layoutMetrics
     @Environment(\.dismiss) private var dismiss
@@ -75,21 +73,13 @@ struct PlayerScreen: View {
 
     private var landscape: Bool { vClass == .compact || (layoutMetrics.isPad && layoutMetrics.isLandscape) }
     private var isPortraitVideo: Bool { aspect < 1.0 }
-    /// Fixed 46pt physical offset for landscape video on an upright iPhone.
+    /// Fixed 46pt physical offset only after the active episode's real video dimensions are known.
+    /// Never infer the lift from series metadata or a previous episode while the item is loading.
     private var videoLift: CGFloat {
-        guard !layoutMetrics.isPad, !landscape else { return 0 }
-        let isLandscapeVideo: Bool
-        if co.readyIndex == co.current, co.videoSize.width > 0, co.videoSize.height > 0 {
-            isLandscapeVideo = co.videoSize.width / co.videoSize.height > 1.0
-        } else {
-            isLandscapeVideo = lastReadyIsLandscapeVideo ?? (aspect > 1.0)
-        }
-        return isLandscapeVideo ? 46 : 0
-    }
-
-    private func updateLastReadyVideoOrientation() {
-        guard co.readyIndex == co.current, co.videoSize.width > 0, co.videoSize.height > 0 else { return }
-        lastReadyIsLandscapeVideo = co.videoSize.width / co.videoSize.height > 1.0
+        guard !layoutMetrics.isPad, !landscape,
+              co.readyIndex == co.current,
+              co.videoSize.width > 0, co.videoSize.height > 0 else { return 0 }
+        return co.videoSize.width / co.videoSize.height > 1.0 ? 46 : 0
     }
     private var canShowPadSplit: Bool {
         layoutMetrics.isPad && layoutMetrics.isLandscape && layoutMetrics.width >= 840 && aspect < 1.0 && !co.pipActive && !co.episodes.isEmpty
@@ -377,7 +367,6 @@ struct PlayerScreen: View {
             co.notice = nil
         }
         .compatOnChange(of: co.readyIndex) { _ in
-            updateLastReadyVideoOrientation()
             syncEpisodeOrientation()
         }
         .compatOnChange(of: co.videoSize) { _ in
