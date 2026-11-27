@@ -640,6 +640,9 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     func didBecomeActive() {
         guard backgrounded else { return }
         backgrounded = false
+        // Hide the return affordance as soon as the app enters the foreground,
+        // before AVKit's asynchronous PiP-stop delegate callback arrives.
+        if pip?.isPictureInPictureActive == true { pipReturnRequested = true }
         audioSessionActive = false
         continuePiP = false
         if !pipActive { engine.setPiPActive(false) }
