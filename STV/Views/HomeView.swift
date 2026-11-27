@@ -651,10 +651,8 @@ final class SourceHomeCache {
         var featuredIndex: Int
         var shelfItems: [String: [HGSeries]]
         var shelfLoaded: Set<String>
-        var selectedCategoryID: String?
         var heroCover: String?
         var selectedPager: Pager.Snapshot
-        var allPager: Pager.Snapshot
     }
 
     private var values: [String: Snapshot] = [:]
@@ -679,10 +677,6 @@ final class SourceHomeCache {
     func updateSelectedPager(_ snapshot: Pager.Snapshot, for source: DramaSource) {
         values[key(source)]?.selectedPager = snapshot
     }
-
-    func updateAllPager(_ snapshot: Pager.Snapshot, for source: DramaSource) {
-        values[key(source)]?.allPager = snapshot
-    }
 }
 
 /// CMS / JS plugin home: every returned category is a selectable module, and the selected one pages its own list.
@@ -697,7 +691,6 @@ private struct DynamicSiteFeed: View {
     @State private var categories: [SiteCategory] = []
     @State private var selected = ""
     @StateObject private var pager = Pager()
-    @StateObject private var allPager = Pager()
     @State private var featuredItems: [HGSeries] = []
     @State private var featuredIndex = 0
     @State private var shelfItems: [String: [HGSeries]] = [:]
@@ -705,7 +698,6 @@ private struct DynamicSiteFeed: View {
     @State private var shelfLoading: Set<String> = []
     @State private var shelfRequestTokens: [String: UUID] = [:]
     @State private var shelfErrors: [String: Error] = [:]
-    @State private var selectedCategory: SiteCategory?
     @State private var heroCover: String?
     @State private var didLoad = false
     @State private var isRefreshing = false
@@ -723,11 +715,11 @@ private struct DynamicSiteFeed: View {
                     LazyVStack(alignment: .leading, spacing: 18) {
                         Color.clear.frame(height: 0).id("dynamic.top")
 
-                        if selectedCategory == nil && !categories.isEmpty {
+                        if !categories.isEmpty {
                             categoryBar(proxy)
                         }
 
-                        if selectedCategory == nil && !featuredItems.isEmpty {
+                        if !featuredItems.isEmpty {
                             PosterHero(board: source.label, picks: featuredItems, index: $featuredIndex)
                                 .padding(.horizontal, 16)
                                 .padding(.top, 4)
@@ -738,9 +730,7 @@ private struct DynamicSiteFeed: View {
                                 }
                         }
 
-                        if let selectedCategory {
-                            allCategoryView(selectedCategory)
-                        } else if usesCategoryShelves {
+                        if usesCategoryShelves {
                             ForEach(categories) { category in
                                 categoryShelf(category)
                             }
@@ -764,9 +754,6 @@ private struct DynamicSiteFeed: View {
             pager.onSnapshotChanged = { snapshot in
                 SourceHomeCache.shared.updateSelectedPager(snapshot, for: source)
             }
-            allPager.onSnapshotChanged = { snapshot in
-                SourceHomeCache.shared.updateAllPager(snapshot, for: source)
-            }
             guard !didLoad else { return }
             didLoad = true
             if let cached = SourceHomeCache.shared.snapshot(for: source) {
@@ -776,16 +763,9 @@ private struct DynamicSiteFeed: View {
                 featuredIndex = min(cached.featuredIndex, max(0, cached.featuredItems.count - 1))
                 shelfItems = cached.shelfItems
                 shelfLoaded = cached.shelfLoaded
-                selectedCategory = cached.selectedCategoryID.flatMap { id in
-                    cached.categories.first(where: { $0.id == id })
-                }
                 heroCover = cached.heroCover
                 pager.setFetcher(selectedFetcher(for: cached.selected))
                 pager.restore(cached.selectedPager)
-                if let category = selectedCategory {
-                    allPager.setFetcher(allFetcher(for: category))
-                    allPager.restore(cached.allPager)
-                }
                 if let cover = cached.heroCover, !cover.isEmpty { onHero(cover) }
                 return
             }
@@ -793,7 +773,6 @@ private struct DynamicSiteFeed: View {
         }
         .compatOnChange(of: heroCover) { cover in if let cover { onHero(cover) } }
         .compatOnChange(of: selected) { _ in saveMemory() }
-        .compatOnChange(of: selectedCategory?.id) { _ in saveMemory() }
     }
 
     @ViewBuilder
@@ -842,7 +821,7 @@ private struct DynamicSiteFeed: View {
             if !visibleItems.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     DSSectionHeader(title: category.title) {
-                        Button { showAll(category) } label: { MoreLabel() }
+                        NavigationLink(value: Route.board(BoardSpec(kind: .site(source, category)))) { MoreLabel() }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("home.more.\(category.title)")
                     }
@@ -890,35 +869,6 @@ private struct DynamicSiteFeed: View {
         }
     }
 
-    private func allCategoryView(_ category: SiteCategory) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Button {
-                    selectedCategory = nil
-                    allPager.reset { _, _ in HGPage(items: [], hasMore: false, nextOffset: nil) }
-                } label: {
-                    Label("返回首页", systemImage: "chevron.left")
-                        .font(.system(size: 14, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                Spacer()
-                Text(category.title).font(.system(size: 17, weight: .semibold))
-            }
-            .padding(.horizontal, 16)
-            if allPager.items.isEmpty && allPager.isLoading {
-                cardsSkeleton.padding(.horizontal, 16)
-            } else if let error = allPager.error, allPager.items.isEmpty {
-                ErrorStateView(error: error) { reloadAll(category) }
-            } else {
-                NumberedGrid(items: allPager.items, numbered: false,
-                             hasMore: allPager.hasMore, loading: allPager.isLoading) {
-                    allPager.loadMore()
-                }
-            }
-        }
-        .padding(.top, 8)
-    }
-
     @MainActor
     private func loadShelf(_ category: SiteCategory, force: Bool = false) async {
         guard force || (!shelfLoading.contains(category.id) && !shelfLoaded.contains(category.id)) else { return }
@@ -952,7 +902,6 @@ private struct DynamicSiteFeed: View {
         isRefreshing = true
         defer { isRefreshing = false }
 
-        let previousAllCategoryID = selectedCategory?.id
         let previousSelectedID = selected
         let previousLoadedShelves = shelfLoaded
         let home = await Self.loadHome(source)
@@ -970,9 +919,6 @@ private struct DynamicSiteFeed: View {
             ? previousSelectedID
             : (categories.first?.id ?? "")
         selected = id
-        selectedCategory = previousAllCategoryID.flatMap { oldID in
-            categories.first(where: { $0.id == oldID })
-        }
 
         if usesCategoryShelves {
             // Refresh only shelves already visited; the rest remain lazy-loaded as they enter view.
@@ -981,9 +927,7 @@ private struct DynamicSiteFeed: View {
             }
         }
 
-        if let allCategory = selectedCategory {
-            await allPager.refreshPreservingDepth(allFetcher(for: allCategory))
-        } else if !usesCategoryShelves {
+        if !usesCategoryShelves {
             await pager.refreshPreservingDepth(selectedFetcher(for: id))
         }
         saveMemory()
@@ -994,8 +938,7 @@ private struct DynamicSiteFeed: View {
         SourceHomeCache.shared.save(
             .init(categories: categories, selected: selected, featuredItems: featuredItems,
                   featuredIndex: featuredIndex, shelfItems: shelfItems, shelfLoaded: shelfLoaded,
-                  selectedCategoryID: selectedCategory?.id, heroCover: heroCover,
-                  selectedPager: pager.snapshot(), allPager: allPager.snapshot()),
+                  heroCover: heroCover, selectedPager: pager.snapshot()),
             for: source
         )
     }
@@ -1028,31 +971,8 @@ private struct DynamicSiteFeed: View {
         }
     }
 
-    private func allFetcher(for category: SiteCategory) -> (HGPage, [HGSeries]) async throws -> HGPage {
-        let source = source
-        return { previous, _ in
-            guard let provider = Sites.provider(source) else {
-                throw ProviderError.unsupported(source.label)
-            }
-            let pageNumber = max(1, previous.nextOffset ?? 1)
-            return try await provider.list(category, page: pageNumber)
-        }
-    }
-
     private func reload(_ id: String) {
         pager.reset(selectedFetcher(for: id))
-    }
-
-    @MainActor
-    private func showAll(_ category: SiteCategory) {
-        selectedCategory = category
-        saveMemory()
-        reloadAll(category)
-    }
-
-    @MainActor
-    private func reloadAll(_ category: SiteCategory) {
-        allPager.reset(allFetcher(for: category))
     }
 
     private struct DynamicHomeData {
@@ -1490,7 +1410,7 @@ struct BoardListView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 if let e = pager.error, pager.items.isEmpty { ErrorStateView(error: e) { reload() } }
-                else { NumberedGrid(items: pager.items, hasMore: pager.hasMore, loading: pager.isLoading) { pager.loadMore() } }
+                else { NumberedGrid(items: pager.items, numbered: board.isRanked, hasMore: pager.hasMore, loading: pager.isLoading) { pager.loadMore() } }
             }.padding(.vertical, 8)
         }
         .background(STVTheme.bg.ignoresSafeArea())

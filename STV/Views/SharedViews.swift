@@ -50,6 +50,13 @@ struct BoardSpec: Hashable, Identifiable {
         case .site(_, let c): c.title
         }
     }
+    /// 红果/黄果榜单保留名次；原生站点分类沿用原行为；插件货架的分类页不显示序号。
+    var isRanked: Bool {
+        switch kind {
+        case .hongguo, .huangguo: true
+        case .site(let src, _): src.pluginID == nil
+        }
+    }
     func fetch(_ prev: HGPage, _ seen: [HGSeries]) async throws -> HGPage {
         switch kind {
         case .hongguo(let g, let s):
