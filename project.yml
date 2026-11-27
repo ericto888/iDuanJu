@@ -71,6 +71,15 @@ targets:
         NSPhotoLibraryAddUsageDescription: 用于把你下载的图片和视频保存到相册
         NSLocalNetworkUsageDescription: 用于连接同一局域网里配对的设备和局域网片源（包括 TVBox JAR 桥接）
         LSApplicationQueriesSchemes: [tg]
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.ericto888.idjplugin
+            UTTypeDescription: iDuanJu Plugin Bundle
+            UTTypeConformsTo:
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - idjplugin
+              public.mime-type: application/vnd.ericto888.idjplugin
         NSAppTransportSecurity:
           # 「阅读」书源: many novel sites are http-only. (NSAllowsLocalNetworking must not be set alongside:
           # iOS then ignores NSAllowsArbitraryLoads. Arbitrary loads already include the local proxy.)
