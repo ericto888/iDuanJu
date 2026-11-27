@@ -361,7 +361,13 @@ struct PlayerScreen: View {
             syncEpisodeOrientation()
         }
         .compatOnChange(of: co.videoSize) { _ in
-            syncEpisodeOrientation()
+            if co.readyIndex != co.current {
+                // Also covers line changes that reopen the same episode index.
+                orientationEpisode = nil
+                orientationIsPortrait = nil
+            } else {
+                syncEpisodeOrientation()
+            }
         }
         .compatOnChange(of: co.current) { new in
             // Hold the current interface orientation while the next episode is resolving/loading.
