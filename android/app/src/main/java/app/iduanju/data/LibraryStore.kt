@@ -37,6 +37,7 @@ class LibraryStore(ctx: Context) {
 
     val history = mutableStateListOf<WatchProgress>()
     val favorites = mutableStateMapOf<String, Triple<String, String, Long>>()
+    val searchHistory = mutableStateListOf<String>()
     private val lineChoice = LinkedHashMap<String, String>()
     private val qualityChoice = LinkedHashMap<String, String>()
 
@@ -87,7 +88,6 @@ class LibraryStore(ctx: Context) {
     fun peekTitleSafe(sid: String): String = peekCache[sid]?.first.orEmpty()
     fun peekCoverSafe(sid: String): String = peekCache[sid]?.second.orEmpty()
 
-    val searchHistory = mutableStateListOf<String>()
     fun addSearch(q: String) { searchHistory.remove(q); searchHistory.add(0, q); while (searchHistory.size > 20) searchHistory.removeAt(20); saveSearch() }
     fun removeSearch(q: String) { searchHistory.remove(q); saveSearch() }
     fun clearSearch() { searchHistory.clear(); saveSearch() }
