@@ -1985,14 +1985,15 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             return true
         }
 
-        /// Only the vertical brightness/volume pan may hold the feed's paging pan:
-        /// it can begin solely in its designated side regions. Horizontal seeking
-        /// relies on its direction gate in gestureRecognizerShouldBegin, so it does
-        /// not impose a blanket failure dependency on every scroll-view pan.
+        /// Keep horizontal seeking ahead of competing pans. The seek recognizer's
+        /// direction gate rejects vertical movement immediately, allowing feed paging
+        /// to proceed; the adjust pan similarly claims only vertical movement in its
+        /// designated side regions.
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
+            if gestureRecognizer === seekPan, otherGestureRecognizer is UIPanGestureRecognizer { return true }
             guard gestureRecognizer === adjustPan, otherGestureRecognizer !== adjustPan else { return false }
             return otherGestureRecognizer is UIPanGestureRecognizer
         }
