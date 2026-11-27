@@ -120,11 +120,18 @@ final class PluginUITests: XCTestCase {
         if !el("plugins.batch.consent.install").waitForExistence(timeout: 180) { shot("11-batch-prepare-stuck") }
         let install = el("plugins.batch.consent.install")
         XCTAssertTrue(install.exists, "批量同意页出现")
+        // Derive the expected count from the actual prepared batch; subscriptions can change over time.
+        let batchTitle = app.staticTexts.matching(
+            NSPredicate(format: "label MATCHES %@", "安装插件（[0-9]+ 个）")
+        ).firstMatch
+        XCTAssertTrue(batchTitle.exists, "批量授权页应显示待安装数量")
+        let expected = Int(batchTitle.label.filter(\.isNumber)) ?? 0
+        XCTAssertGreaterThan(expected, 0, "订阅中至少有一个插件通过校验")
         shot("12-batch-consent")
         install.tap()
-        XCTAssertTrue(text("已安装 16 个插件").waitForExistence(timeout: 30))
+        XCTAssertTrue(text("已安装 \(expected) 个插件").waitForExistence(timeout: 30))
         shot("13-batch-installed")
-        XCTAssertTrue(text("已安装（16）").waitForExistence(timeout: 10), "16 个插件一次装好")
+        XCTAssertTrue(text("已安装（\(expected)）").waitForExistence(timeout: 10), "实际订阅插件数量应全部安装")
     }
 
     func testPasteRejectsInvalidPlugin() {
