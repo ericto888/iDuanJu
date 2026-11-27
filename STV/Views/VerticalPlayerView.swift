@@ -747,10 +747,8 @@ struct PlayerScreen: View {
     }
 
     private func exitPlayer() {
-        StatusBarGate.shared.setHidden(false)
-        co.teardown()
-        adjuster.restoreBrightness()
-        OrientationGate.lockPortrait()
+        // Let the navigation pop finish before tearing down the render surface or
+        // changing the system status bar / device orientation. Cleanup lives in onDisappear.
         dismiss()
     }
 
