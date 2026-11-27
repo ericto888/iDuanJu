@@ -641,7 +641,10 @@ private struct HomeFeedPage: View {
         .background(STVTheme.bg.ignoresSafeArea())
         .scrollIndicators(.hidden)
         .coordinateSpace(name: "home.feed.scroll")
-        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in onScrollOffset(offset) }
+        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
+            if #unavailable(iOS 18.0) { onScrollOffset(offset) }
+        }
+        .compatOnScrollY { onScrollOffset(-$0) }
         .compatDefaultScrollAnchor(Self.debugAnchor)
         .accessibilityIdentifier("home.page.\(source.label)")
         .homePageInset()
@@ -939,7 +942,10 @@ private struct DynamicSiteFeed: View {
                 .ignoresSafeArea(.container, edges: .bottom)
                 .scrollIndicators(.hidden)
                 .coordinateSpace(name: "home.feed.scroll")
-                .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in onScrollOffset(offset) }
+                .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
+                    if #unavailable(iOS 18.0) { onScrollOffset(offset) }
+                }
+                .compatOnScrollY { onScrollOffset(-$0) }
                 .accessibilityIdentifier("home.page.\(source.label)")
                 .homePageInset()
                 .refreshable { await refresh() }
