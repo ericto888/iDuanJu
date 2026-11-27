@@ -246,6 +246,7 @@ struct PlayerPortraitDock: View {
     let onEpisodes: () -> Void
     let onRateOrGuide: () -> Void
     let onDanmakuOrQuality: () -> Void
+    var showFullscreen: Bool = true
     let onFullscreen: () -> Void
 
     var body: some View {
@@ -320,18 +321,20 @@ struct PlayerPortraitDock: View {
             .accessibilityLabel(isLive ? "线路" : (danmakuEnabled ? "关闭弹幕" : "开启弹幕"))
             .accessibilityIdentifier(isLive ? "player.quality" : "player.danmaku")
 
-            Button(action: onFullscreen) {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(PlayerPalette.ivory)
-                    .frame(width: 36, height: 36)
-                    .background(Color.white.opacity(0.10), in: Circle())
-                    .overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
-                    .contentShape(Circle())
+            if showFullscreen {
+                Button(action: onFullscreen) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(PlayerPalette.ivory)
+                        .frame(width: 36, height: 36)
+                        .background(Color.white.opacity(0.10), in: Circle())
+                        .overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(PressScale())
+                .accessibilityLabel("横屏全屏")
+                .accessibilityIdentifier("player.fullscreen")
             }
-            .buttonStyle(PressScale())
-            .accessibilityLabel("横屏全屏")
-            .accessibilityIdentifier("player.fullscreen")
         }
         .frame(height: 44)
     }
