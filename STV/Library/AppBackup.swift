@@ -417,8 +417,8 @@ enum AppBackup {
 
     private nonisolated static func shouldBackupDefaultsKey(_ k: String) -> Bool {
         guard k.hasPrefix("stv.") || k.hasPrefix("novel.") || k.hasPrefix("legado.") else { return false }
-        // WebKit HttpOnly session cookies cannot be reconstructed from profile display cache alone.
-        if k.hasPrefix("stv.hg.web.") { return false }
+        // WebKit HttpOnly session cookies & private WebDAV server credentials never go into backup archives.
+        if k.hasPrefix("stv.hg.web.") || k.hasPrefix("stv.webdav.") { return false }
         return true
     }
 

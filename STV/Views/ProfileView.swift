@@ -6,6 +6,8 @@ struct ProfileView: View {
     @State private var backupBusy: String?
     @State private var refreshTick = 0
 
+    @ObservedObject private var webdav = WebDAVSync.shared
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -16,9 +18,10 @@ struct ProfileView: View {
                 ProfileLinks(refreshTick: refreshTick)
                 DSSection(
                     "数据备份与迁移",
-                    footer: "换证书自签或换机前可导出备份；退到后台时也会自动保存在系统「文件 → 我的 iPhone → i短剧 → AutoBackup」，即使证书掉签打不开 App 也能从「文件」取出恢复。",
+                    footer: "支持 WebDAV 多端同步进度与插件；换证书自签或换机前也可导出本地备份，退到后台会自动写入系统「文件 → 我的 iPhone → i短剧 → AutoBackup」防掉签。",
                     separatorInset: 58
                 ) {
+                    DSLinkRow("WebDAV 多端同步", route: Route.webdav, icon: "icloud.and.arrow.up", value: webdav.statusBadge)
                     DSRow(
                         backupBusy == "export" ? "正在打包备份…" : "导出全量备份",
                         icon: "square.and.arrow.up",
@@ -142,17 +145,29 @@ private struct HongguoAccountCard: View {
 
 private struct ProfileLibrary: View {
     @ObservedObject private var library = LibraryStore.shared
+    @Environment(\.layoutMetrics) private var layout
     var body: some View {
         let watching = Array(library.continueWatching.prefix(10)), favorites = library.favorites
+        let preview = Array(favorites.prefix(6))
+        let landscape = preview.first?.isLandscapeCover ?? false
+        let cols = landscape ? layout.wideGridItems(spacing: 10) : layout.posterGridItems(spacing: 10)
         if !watching.isEmpty { ContinueRow(items: watching) }
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(title: "我的收藏") {
-                NavigationLink(value: Route.favorites) { MoreLabel(title: "全部 \(favorites.count)") }.buttonStyle(.plain)
+                NavigationLink(value: Route.favorites) { MoreLabel(title: favorites.isEmpty ? "管理" : "管理 · \(favorites.count)") }.buttonStyle(.plain)
             }
             if favorites.isEmpty {
-                Text("在播放页右侧点 ♥ 收藏").dsFont(14, relativeTo: .subheadline).foregroundStyle(STVTheme.secondary).padding(.horizontal, 16)
+                Text("在详情页或播放页点 ♥ 收藏").dsFont(14, relativeTo: .subheadline).foregroundStyle(STVTheme.secondary).padding(.horizontal, 16)
             } else {
-                NumberedGrid(items: Array(favorites.prefix(6)), numbered: false, hasMore: true)
+                LazyVGrid(columns: cols, spacing: 14) {
+                    ForEach(preview) { s in
+                        FavoriteManageCell(series: s, landscape: landscape) {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            withAnimation(DS.select) { library.removeFavorite(s) }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
             }
         }
         DSSection(separatorInset: 58) {

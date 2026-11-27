@@ -229,35 +229,111 @@ struct PlayerAction: Identifiable {
     let action: () -> Void
 }
 
-/// Portrait: a floating glass toolbar with labelled icons.
-struct PlayerActionBar: View {
-    let actions: [PlayerAction]
+/// Uncrowded Direction 1 portrait bottom dock: Play/Pause + Episodes capsule on left, 3 crisp tools on right.
+struct PlayerPortraitDock: View {
+    let paused: Bool
+    let episodeBadge: String
+    let episodesActive: Bool
+    let rateLabel: String
+    let rateAccented: Bool
+    let rateActive: Bool
+    let danmakuAvailable: Bool
+    let danmakuEnabled: Bool
+    var isLive: Bool = false
+    var liveChannelsTitle: String = "频道"
+    var liveGuideActive: Bool = false
+    let onPlayPause: () -> Void
+    let onEpisodes: () -> Void
+    let onRateOrGuide: () -> Void
+    let onDanmakuOrQuality: () -> Void
+    let onFullscreen: () -> Void
+
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(actions) { a in
-                Button(action: a.action) {
-                    VStack(spacing: 4) {
-                        Image(systemName: a.symbol).font(.system(size: 20, weight: .regular)).frame(height: 23)
-                            .foregroundStyle(a.accent ? STVTheme.accent : .white)
-                        (Text(a.title).foregroundColor(.white.opacity(0.78))
-                         + Text(a.value.map { " " + $0 } ?? "").fontWeight(.semibold).foregroundColor(a.accent ? STVTheme.accent : .white))
-                            .font(.system(size: 11)).lineLimit(1).minimumScaleFactor(0.8)
-                    }
-                    .opacity(a.dimmed ? 0.45 : 1)
-                    .frame(maxWidth: .infinity).padding(.top, 8).padding(.bottom, 7)
-                    .background {
-                        if a.active { RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.white.opacity(0.16)) }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(PressScale())
-                .accessibilityLabel(a.a11y).accessibilityIdentifier(a.id)
-                .accessibilityAddTraits(a.active ? .isSelected : [])
+        HStack(spacing: 8) {
+            Button(action: onPlayPause) {
+                Image(systemName: paused ? "play.fill" : "pause.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .offset(x: paused ? 1 : 0)
+                    .foregroundStyle(PlayerPalette.ivory)
+                    .frame(width: 38, height: 38)
+                    .background(Color.white.opacity(0.12), in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+                    .contentShape(Circle())
             }
+            .buttonStyle(PressScale())
+            .accessibilityLabel(paused ? "播放" : "暂停")
+            .accessibilityIdentifier("player.playPause")
+
+            Button(action: onEpisodes) {
+                HStack(spacing: 6) {
+                    Image(systemName: isLive ? "list.bullet" : "square.grid.2x2")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(episodesActive ? PlayerPalette.signal : PlayerPalette.ivory)
+                    Text(isLive ? liveChannelsTitle : episodeBadge)
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(episodesActive ? PlayerPalette.signal : PlayerPalette.ivory)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 13).frame(height: 38)
+                .background(episodesActive ? PlayerPalette.signalSoft : Color.white.opacity(0.11), in: Capsule())
+                .overlay(Capsule().strokeBorder(episodesActive ? PlayerPalette.signal.opacity(0.55) : .white.opacity(0.14), lineWidth: 0.5))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(PressScale())
+            .accessibilityLabel(isLive ? "频道" : "选集")
+            .accessibilityIdentifier("player.episodes")
+
+            Spacer(minLength: 6)
+
+            Button(action: onRateOrGuide) {
+                HStack(spacing: 4) {
+                    if isLive {
+                        Image(systemName: "calendar")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("节目单")
+                            .font(.system(size: 12.5, weight: .semibold))
+                    } else {
+                        Text(rateLabel)
+                            .font(.system(size: 12.5, weight: .bold, design: .monospaced).monospacedDigit())
+                    }
+                }
+                .foregroundStyle((isLive ? liveGuideActive : (rateAccented || rateActive)) ? PlayerPalette.signal : PlayerPalette.ivory)
+                .padding(.horizontal, 11).frame(height: 36)
+                .background((isLive ? liveGuideActive : (rateAccented || rateActive)) ? PlayerPalette.signalSoft : Color.white.opacity(0.10), in: Capsule())
+                .overlay(Capsule().strokeBorder((isLive ? liveGuideActive : (rateAccented || rateActive)) ? PlayerPalette.signal.opacity(0.5) : .white.opacity(0.12), lineWidth: 0.5))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(PressScale())
+            .accessibilityLabel(isLive ? "节目单" : "播放倍速 \(rateLabel)")
+            .accessibilityIdentifier(isLive ? "player.guide" : "player.rate")
+
+            Button(action: onDanmakuOrQuality) {
+                Image(systemName: isLive ? "antenna.radiowaves.left.and.right" : (danmakuEnabled && danmakuAvailable ? "captions.bubble.fill" : "captions.bubble"))
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(isLive ? PlayerPalette.ivory : (danmakuAvailable && danmakuEnabled ? PlayerPalette.signal : .white.opacity(danmakuAvailable ? 0.82 : 0.36)))
+                    .frame(width: 36, height: 36)
+                    .background((!isLive && danmakuAvailable && danmakuEnabled) ? PlayerPalette.signalSoft : Color.white.opacity(0.10), in: Circle())
+                    .overlay(Circle().strokeBorder((!isLive && danmakuAvailable && danmakuEnabled) ? PlayerPalette.signal.opacity(0.5) : .white.opacity(0.12), lineWidth: 0.5))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(PressScale())
+            .accessibilityLabel(isLive ? "线路" : (danmakuEnabled ? "关闭弹幕" : "开启弹幕"))
+            .accessibilityIdentifier(isLive ? "player.quality" : "player.danmaku")
+
+            Button(action: onFullscreen) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(PlayerPalette.ivory)
+                    .frame(width: 36, height: 36)
+                    .background(Color.white.opacity(0.10), in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(PressScale())
+            .accessibilityLabel("横屏全屏")
+            .accessibilityIdentifier("player.fullscreen")
         }
-        .padding(5)
-        .liquidGlass(corner: 24, tone: .clear, interactive: true, onMedia: true)
-        .animation(DS.select, value: actions.map(\.active))
+        .frame(height: 44)
     }
 }
 
@@ -279,10 +355,10 @@ struct PlayerChip: View {
         let on = action.active || action.accent
         Button(action: action.action) {
             HStack(spacing: 6) {
-                Image(systemName: action.symbol).font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(on ? STVTheme.accent : .white)
-                (Text(action.title).foregroundColor(on ? STVTheme.accent : .white.opacity(0.86))
-                 + Text(action.value.map { " " + $0 } ?? "").fontWeight(.semibold).foregroundColor(on ? STVTheme.accent : .white))
+                Image(systemName: action.symbol).font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(on ? PlayerPalette.signal : PlayerPalette.ivory)
+                (Text(action.title).foregroundColor(on ? PlayerPalette.signal : .white.opacity(0.86))
+                 + Text(action.value.map { " " + $0 } ?? "").fontWeight(.semibold).foregroundColor(on ? PlayerPalette.signal : .white))
                     .font(.system(size: 13)).lineLimit(1).fixedSize()
             }
             .padding(.horizontal, 13).frame(height: 36)
@@ -366,9 +442,10 @@ struct PlayerPanelChip: View {
                 if let symbol { Image(systemName: symbol).font(.system(size: 12, weight: .semibold)) }
                 Text(title).font(.system(size: 13, weight: selected ? .semibold : .regular)).lineLimit(1)
             }
-            .foregroundStyle(selected ? STVTheme.accent : .white.opacity(0.88))
+            .foregroundStyle(selected ? PlayerPalette.signal : .white.opacity(0.88))
             .padding(.horizontal, 13).frame(height: height)
-            .background(selected ? Color.white.opacity(0.18) : Color.white.opacity(0.08), in: Capsule())
+            .background(selected ? PlayerPalette.signalSoft : Color.white.opacity(0.08), in: Capsule())
+            .overlay(Capsule().strokeBorder(selected ? PlayerPalette.signal.opacity(0.45) : .clear, lineWidth: 0.5))
             .contentShape(Capsule())
         }
         .buttonStyle(PressScale())
@@ -397,22 +474,164 @@ struct PlayerChipScroller: View {
     }
 }
 
+/// Rewritten Precision Speed Control Panel: live readout + −/+ calibrated tick bar + one-tap preset capsules.
 struct SpeedPopover: View {
     let current: Double
     var landscape = false
     /// Active core's ceiling.
     var maxRate: Double = 3
     let onPick: (Double) -> Void
+    var onClose: () -> Void = {}
+
     static let portraitSteps: [Double] = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
+    private var allSteps: [Double] { PlaybackCoordinator.rateSteps.filter { $0 <= maxRate + 0.001 } }
+    private var presets: [Double] { [0.75, 1.0, 1.25, 1.5, 2.0, 3.0].filter { $0 <= maxRate + 0.001 } }
+    private var currentIndex: Int {
+        allSteps.enumerated().min(by: { abs($0.element - current) < abs($1.element - current) })?.offset ?? 0
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            if !landscape { PlayerSectionTitle(text: "倍速", heading: true, trailing: "长按画面临时 2×") }
-            ForEach((landscape ? Array(Self.portraitSteps.prefix(6)) : Self.portraitSteps).filter { $0 <= maxRate + 0.001 }, id: \.self) { r in
-                PlayerPopoverRow(title: Self.label(r), selected: abs(r - current) < 0.01, id: "player.rate.\(r)", rowHeight: landscape ? 37 : 46) { onPick(r) }
+        let isNormal = abs(current - 1.0) < 0.01
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 10) {
+                Text("倍速播放")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(PlayerPalette.ivory)
+                Text(Self.shortLabel(current))
+                    .font(.system(size: 18, weight: .bold, design: .monospaced).monospacedDigit())
+                    .foregroundStyle(isNormal ? PlayerPalette.ivory : PlayerPalette.signal)
+                Spacer(minLength: 4)
+                if !isNormal {
+                    Button {
+                        DS.tick()
+                        onPick(1.0)
+                    } label: {
+                        Text("恢复原速")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(PlayerPalette.signal)
+                            .padding(.horizontal, 10).frame(height: 28)
+                            .background(PlayerPalette.signalSoft, in: Capsule())
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(PressScale())
+                }
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .frame(width: 28, height: 28)
+                        .background(Color.white.opacity(0.10), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(PressScale())
+                .accessibilityLabel("关闭")
             }
+
+            // Precision − / calibrated tick track / + stepper
+            HStack(spacing: 10) {
+                stepButton("minus", enabled: currentIndex > 0) {
+                    let next = allSteps[max(0, currentIndex - 1)]
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    onPick(next)
+                }
+                calibratedTrack
+                stepButton("plus", enabled: currentIndex < allSteps.count - 1) {
+                    let next = allSteps[min(allSteps.count - 1, currentIndex + 1)]
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    onPick(next)
+                }
+            }
+
+            // Quick preset capsules in one clean row
+            HStack(spacing: 6) {
+                ForEach(presets, id: \.self) { r in
+                    let on = abs(r - current) < 0.01
+                    Button {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        onPick(r)
+                    } label: {
+                        Text(Self.shortLabel(r))
+                            .font(.system(size: 12.5, weight: on ? .bold : .medium, design: .monospaced).monospacedDigit())
+                            .foregroundStyle(on ? .white : PlayerPalette.ivory.opacity(0.86))
+                            .frame(maxWidth: .infinity, minHeight: 34)
+                            .background(on ? PlayerPalette.signal : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(PressScale())
+                    .accessibilityIdentifier("player.rate.\(r)")
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
+
+            Text("长按画面任意处即刻 2× 速看，左右滑动微调 · 上滑锁定")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.48))
         }
-        .padding(.horizontal, 10).padding(.vertical, 9)
+        .padding(.horizontal, 16).padding(.vertical, 14)
+    }
+
+    private func stepButton(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(enabled ? PlayerPalette.ivory : .white.opacity(0.28))
+                .frame(width: 34, height: 34)
+                .background(Color.white.opacity(0.10), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(PressScale())
+        .disabled(!enabled)
+    }
+
+    private var calibratedTrack: some View {
+        let count = max(2, allSteps.count)
+        let frac = CGFloat(currentIndex) / CGFloat(count - 1)
+        return GeometryReader { g in
+            let w = max(1, g.size.width)
+            let needleX = w * frac
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.white.opacity(0.07))
+                    .frame(height: 30)
+                HStack(spacing: 0) {
+                    ForEach(allSteps.indices, id: \.self) { i in
+                        let passed = i <= currentIndex
+                        let isOne = abs(allSteps[i] - 1.0) < 0.01
+                        Rectangle()
+                            .fill(passed ? PlayerPalette.signal.opacity(0.85) : Color.white.opacity(isOne ? 0.55 : 0.24))
+                            .frame(width: isOne ? 2 : 1.2, height: isOne ? 14 : 9)
+                        if i < count - 1 { Spacer(minLength: 0) }
+                    }
+                }
+                .padding(.horizontal, 10)
+                Capsule()
+                    .fill(PlayerPalette.signal)
+                    .frame(width: 4, height: 22)
+                    .shadow(color: PlayerPalette.signal.opacity(0.6), radius: 4)
+                    .offset(x: 8 + (w - 20) * frac)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { v in
+                        let ratio = min(1, max(0, (v.location.x - 10) / max(1, w - 20)))
+                        let idx = Int((ratio * CGFloat(count - 1)).rounded())
+                        let next = allSteps[max(0, min(count - 1, idx))]
+                        if abs(next - current) >= 0.01 {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            onPick(next)
+                        }
+                    }
+            )
+            .accessibilityLabel("拖动调节倍速")
+        }
+        .frame(height: 34)
+    }
+
+    static func shortLabel(_ r: Double) -> String {
+        if abs(r - Double(Int(r))) < 0.01 { return "\(Int(r)).0×" }
+        return String(format: "%g", r) + "×"
     }
 
     static func label(_ r: Double) -> String {
@@ -619,6 +838,9 @@ struct MoreSettingsPopover: View {
     let showDanmaku: Bool
     let danmakuSummary: String
     let prebufferInfo: String?
+    var qualityLabel: String? = nil
+    var onOpenQuality: (() -> Void)? = nil
+    var onOpenAudio: (() -> Void)? = nil
     let onClose: () -> Void
     let onOpenDanmaku: () -> Void
     let onFillScreen: (Bool) -> Void
@@ -659,6 +881,39 @@ struct MoreSettingsPopover: View {
                 }
                 .buttonStyle(PressScale())
                 .accessibilityLabel("关闭")
+            }
+
+            if onOpenQuality != nil || onOpenAudio != nil {
+                HStack(spacing: 8) {
+                    if let onOpenQuality {
+                        Button(action: onOpenQuality) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "sparkles.tv").font(.system(size: 14, weight: .medium))
+                                Text(qualityLabel ?? "画质与线路").font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                            }
+                            .foregroundStyle(PlayerPalette.ivory)
+                            .frame(maxWidth: .infinity, minHeight: 40)
+                            .background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(PressScale())
+                        .accessibilityIdentifier("player.more.quality")
+                    }
+                    if let onOpenAudio {
+                        Button(action: onOpenAudio) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "captions.bubble").font(.system(size: 14, weight: .medium))
+                                Text("音轨与字幕").font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                            }
+                            .foregroundStyle(PlayerPalette.ivory)
+                            .frame(maxWidth: .infinity, minHeight: 40)
+                            .background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(PressScale())
+                        .accessibilityIdentifier("player.more.audio")
+                    }
+                }
             }
 
             if showDanmaku {

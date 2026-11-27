@@ -1,5 +1,14 @@
 import SwiftUI
 
+/// Direction 1 (Filmstrip Calibration) player color tokens:
+/// Warm charcoal surfaces, ivory telemetry, single film-signal orange (#F26419) for playhead & active speed.
+enum PlayerPalette {
+    static let signal = Color(red: 0.949, green: 0.392, blue: 0.098)       // #F26419
+    static let signalSoft = Color(red: 0.949, green: 0.392, blue: 0.098).opacity(0.18)
+    static let ivory = Color(red: 0.937, green: 0.925, blue: 0.902)        // #EFECE6
+    static let hudSurface = Color(red: 0.082, green: 0.078, blue: 0.071).opacity(0.86)
+}
+
 /// Round Liquid Glass button floating over video (40 pt glass, 44 pt hit area).
 struct PlayerIconButton: View {
     let symbol: String
@@ -93,7 +102,7 @@ struct PlayerProgressBar: View {
         self.mini = mini
     }
 
-    private static let thin: CGFloat = 4, thick: CGFloat = 8, miniH: CGFloat = 2
+    private static let thin: CGFloat = 3.5, thick: CGFloat = 18, miniH: CGFloat = 2
 
     var body: some View {
         let sample = clock.sample
@@ -101,21 +110,57 @@ struct PlayerProgressBar: View {
         let played = sample.fraction
         let shown = drag ?? played
         let buffered = duration > 0 ? min(1, max(shown, sample.bufferedUntil / duration)) : 0
-        let h = mini ? Self.miniH : (drag != nil ? Self.thick : Self.thin)
+        let active = !mini && drag != nil
         GeometryReader { g in
-            let w = g.size.width
+            let w = max(1, g.size.width)
+            let needleX = min(max(1.5, w * shown), w - 1.5)
             ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(mini ? 0.16 : 0.22))
-                if !mini { Capsule().fill(.white.opacity(0.40)).frame(width: w * buffered) }
-                Capsule().fill(.white.opacity(mini ? 0.9 : 1)).frame(width: max(h, w * shown))
+                if active {
+                    // Precision dual-tick filmstrip vernier expands cleanly only while scrubbing.
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.black.opacity(0.45))
+                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+                        .frame(height: Self.thick)
+                    Canvas { ctx, size in
+                        let minorStep: CGFloat = 8
+                        let count = Int(size.width / minorStep)
+                        for idx in 1..<count {
+                            let x = CGFloat(idx) * minorStep
+                            let major = idx % 5 == 0
+                            let tickH: CGFloat = major ? 9 : 5
+                            let passed = x <= needleX
+                            let col = passed ? PlayerPalette.ivory.opacity(major ? 0.72 : 0.34) : Color.white.opacity(major ? 0.36 : 0.16)
+                            var p = Path()
+                            p.move(to: CGPoint(x: x, y: size.height - 2))
+                            p.addLine(to: CGPoint(x: x, y: size.height - 2 - tickH))
+                            ctx.stroke(p, with: .color(col), lineWidth: major ? 1.2 : 0.8)
+                        }
+                    }
+                    .frame(height: Self.thick)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    Capsule().fill(PlayerPalette.signal.opacity(0.95))
+                        .frame(width: max(3, needleX), height: 2.5)
+                        .frame(maxHeight: Self.thick, alignment: .bottom)
+                } else {
+                    // Idle state: airy single track + subtle micro-ticks + crisp vertical film-orange playhead needle.
+                    Capsule().fill(.white.opacity(mini ? 0.16 : 0.22))
+                        .frame(height: mini ? Self.miniH : Self.thin)
+                    if !mini {
+                        Capsule().fill(.white.opacity(0.38))
+                            .frame(width: w * buffered, height: Self.thin)
+                    }
+                    Capsule().fill(mini ? PlayerPalette.ivory.opacity(0.9) : PlayerPalette.ivory)
+                        .frame(width: max(mini ? Self.miniH : Self.thin, w * shown), height: mini ? Self.miniH : Self.thin)
+                }
             }
-            .frame(height: h)
             .overlay(alignment: .leading) {
                 if !mini {
-                    let knob: CGFloat = drag != nil ? 20 : 14
-                    Circle().fill(.white).frame(width: knob, height: knob)
-                        .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
-                        .offset(x: w * shown - knob / 2)
+                    let needleH: CGFloat = active ? 22 : 13
+                    Capsule()
+                        .fill(PlayerPalette.signal)
+                        .frame(width: active ? 3.5 : 3, height: needleH)
+                        .shadow(color: PlayerPalette.signal.opacity(0.55), radius: active ? 5 : 2)
+                        .offset(x: needleX - (active ? 1.75 : 1.5))
                 }
             }
             .frame(maxHeight: .infinity)
@@ -124,7 +169,7 @@ struct PlayerProgressBar: View {
                 if let f = drag, duration > 0 {
                     bubble(f * duration, duration, delta: (f - dragStart) * duration)
                         .fixedSize()
-                        .position(x: min(max(w * f, 86), w - 86), y: thumbAvailable ? -82 : -26)
+                        .position(x: min(max(w * f, 86), w - 86), y: thumbAvailable ? -84 : -28)
                         .allowsHitTesting(false)
                         .accessibilityIdentifier("player.progress.bubble")
                 }
@@ -135,7 +180,7 @@ struct PlayerProgressBar: View {
             }
             .onDisappear { cancelInterruptedScrub(animated: false) }
         }
-        .frame(height: mini ? Self.miniH : 22)
+        .frame(height: mini ? Self.miniH : 26)
         .task(id: drag.map { Int($0 * max(1, clock.sample.duration) / PlayerThumbnailer.bucket) }) {
             guard let f = drag, clock.sample.duration > 0, co.thumbnails.available else { return }
             let t = f * clock.sample.duration
@@ -225,16 +270,19 @@ struct PlayerProgressBar: View {
                     .padding(.bottom, 4)
                     .accessibilityIdentifier("player.progress.thumb")
             }
-            (Text(Fmt.clock(Int(t))).foregroundColor(.white) + Text(" / " + Fmt.clock(Int(d))).foregroundColor(.white.opacity(0.7)))
-                .font(.system(size: 17, weight: .bold).monospacedDigit())
+            (Text(Fmt.clock(Int(t))).foregroundColor(PlayerPalette.ivory) + Text(" / " + Fmt.clock(Int(d))).foregroundColor(.white.opacity(0.62)))
+                .font(.system(size: 16, weight: .bold, design: .monospaced).monospacedDigit())
             Text(abs(delta) >= 1 ? (delta > 0 ? "+" : "−") + Fmt.clock(Int(abs(delta))) : " ")
-                .font(.system(size: 12, weight: .semibold).monospacedDigit()).foregroundStyle(STVTheme.accent)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced).monospacedDigit()).foregroundStyle(PlayerPalette.signal)
         }
-        .shadow(color: .black.opacity(0.55), radius: 4)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(PlayerPalette.hudSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.55), radius: 8, y: 4)
     }
 }
 
-/// Progress bar with its times. Portrait: times inline, 全屏 closes the row. Landscape: times inline only.
+/// Full-width precision timeline row: current timecode | filmstrip scrubber | duration (no duplicate buttons crowding the bar).
 struct PlayerTimelineV3: View {
     @ObservedObject var co: PlaybackCoordinator
     @ObservedObject private var clock: PlaybackClock
@@ -253,23 +301,16 @@ struct PlayerTimelineV3: View {
     var body: some View {
         let t = clock.scrubPreview ?? clock.sample.time
         HStack(spacing: 10) {
-            Button { co.togglePause(); onInteract() } label: {
-                Image(systemName: co.paused ? "play.fill" : "pause.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(PressScale())
-            .accessibilityLabel(co.paused ? "播放" : "暂停")
-            .accessibilityIdentifier("player.playPause")
-            Text(Fmt.clock(Int(t))).accessibilityIdentifier("player.time")
+            Text(Fmt.clock(Int(t)))
+                .foregroundStyle(PlayerPalette.ivory)
+                .accessibilityIdentifier("player.time")
             PlayerProgressBar(co: co, scrubbing: $scrubbing, onInteract: onInteract)
-            Text("−" + Fmt.clock(Int(max(0, clock.sample.duration - t)))).accessibilityIdentifier("player.remaining")
+            Text(Fmt.clock(Int(max(0, clock.sample.duration))))
+                .foregroundStyle(.white.opacity(0.62))
+                .accessibilityIdentifier("player.remaining")
             if let onFullscreen { PlayerFullscreenButton(action: onFullscreen).padding(.leading, 2) }
         }
-        .font(.system(size: 12, weight: .medium).monospacedDigit())
-        .foregroundStyle(.white.opacity(0.8))
+        .font(.system(size: 11.5, weight: .medium, design: .monospaced).monospacedDigit())
     }
 }
 
@@ -277,22 +318,26 @@ struct PlayerFullscreenButton: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white).frame(width: 30, height: 30).contentShape(Rectangle())
+            Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(PlayerPalette.ivory).frame(width: 30, height: 30).contentShape(Rectangle())
         }
         .buttonStyle(PressScale())
         .accessibilityLabel("横屏全屏").accessibilityIdentifier("player.fullscreen")
     }
 }
 
-/// 2 pt progress line while the chrome is hidden.
+/// 2 pt progress line while the chrome is hidden, tipped with film-signal orange.
 struct PlayerCompactProgress: View {
     @ObservedObject var clock: PlaybackClock
     var body: some View {
         GeometryReader { g in
+            let w = g.size.width * clock.sample.fraction
             ZStack(alignment: .leading) {
-                Color.white.opacity(0.18)
-                Color.white.opacity(0.6).frame(width: g.size.width * clock.sample.fraction)
+                Color.white.opacity(0.14)
+                PlayerPalette.ivory.opacity(0.55).frame(width: w)
+                if w > 3 {
+                    PlayerPalette.signal.frame(width: 3).offset(x: max(0, w - 3))
+                }
             }
         }
         .frame(height: 2)
@@ -342,47 +387,65 @@ struct PlayerClockValue: ViewModifier {
     }
 }
 
-/// On-screen speed-control HUD while long-pressing.
+/// Ultra-compact top-edge speed pill while long-pressing (never blocks the center video frame).
 struct PlayerSpeedHUD: View {
     var rate: Double
     var pendingLock: Bool
     var pendingCancel: Bool
     var hasLockedRate: Bool
+    @State private var pulse = false
 
-    private var hint: String {
-        if pendingCancel { return "松开取消锁定 · 恢复 1x" }
-        if pendingLock { return "松开后锁定此倍速" }
-        if hasLockedRate { return "← → 调速 · ↑ 改锁定 · ↓ 取消锁定" }
-        return "← → 调速 · ↑ 锁定 · ↓ 取消"
+    private var statusTag: String {
+        if pendingCancel { return "松手恢复 1×" }
+        if pendingLock { return "松手锁定" }
+        return "倍速播放中"
+    }
+
+    private var tint: Color {
+        if pendingCancel { return Color(red: 1, green: 0.38, blue: 0.36) }
+        return PlayerPalette.signal
     }
 
     var body: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: pendingCancel ? "xmark.circle.fill"
-                      : (pendingLock || hasLockedRate ? "lock.fill" : "gauge.with.dots.needle.67percent"))
-                    .font(.system(size: 18, weight: .semibold))
-                Text(PlaybackCoordinator.formatRate(rate))
-                    .font(.system(size: 28, weight: .bold, design: .rounded).monospacedDigit())
+        HStack(spacing: 8) {
+            if pendingCancel {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(tint)
+            } else if pendingLock {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(tint)
+            } else {
+                HStack(spacing: -2) {
+                    Image(systemName: "play.fill").opacity(pulse ? 0.35 : 1)
+                    Image(systemName: "play.fill").opacity(pulse ? 1 : 0.45)
+                }
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(tint)
             }
-            .foregroundStyle(pendingCancel ? Color.orange : (pendingLock ? STVTheme.accent : .white))
 
-            Text(hint)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.white.opacity(0.72))
-                .multilineTextAlignment(.center)
+            Text(SpeedPopover.shortLabel(rate))
+                .font(.system(size: 14, weight: .bold, design: .monospaced).monospacedDigit())
+                .foregroundStyle(PlayerPalette.ivory)
 
-            HStack(spacing: 14) {
-                Label("减慢", systemImage: "chevron.left")
-                Label("加快", systemImage: "chevron.right")
-            }
-            .font(.caption2)
-            .foregroundStyle(.white.opacity(0.45))
-            .labelStyle(.titleAndIcon)
+            Rectangle()
+                .fill(.white.opacity(0.18))
+                .frame(width: 1, height: 11)
+
+            Text(statusTag)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.76))
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 16)
-        .liquidGlass(corner: 22, tone: .panel, onMedia: true)
+        .padding(.horizontal, 14)
+        .frame(height: 34)
+        .background(PlayerPalette.hudSurface, in: Capsule())
+        .overlay(Capsule().strokeBorder(tint.opacity(pendingLock || pendingCancel ? 0.7 : 0.32), lineWidth: 0.8))
+        .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) { pulse = true }
+        }
+        .onDisappear { pulse = false }
     }
 }
 

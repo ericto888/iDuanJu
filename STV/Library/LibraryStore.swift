@@ -110,6 +110,24 @@ final class LibraryStore: ObservableObject {
         save(allFavorites, "stv.favorites")
     }
 
+    func removeFavorite(_ s: HGSeries) {
+        allFavorites.removeAll { $0.id == s.id }
+        save(allFavorites, "stv.favorites")
+    }
+
+    func removeFavorites(_ ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        allFavorites.removeAll { ids.contains($0.id) }
+        save(allFavorites, "stv.favorites")
+    }
+
+    func clearFavorites() {
+        let visibleIDs = Set(favorites.map(\.id))
+        guard !visibleIDs.isEmpty else { return }
+        allFavorites.removeAll { visibleIDs.contains($0.id) }
+        save(allFavorites, "stv.favorites")
+    }
+
     func addSearch(_ q: String) {
         let t = q.trimmingCharacters(in: .whitespaces); guard !t.isEmpty else { return }
         searchHistory.removeAll { $0 == t }; searchHistory.insert(t, at: 0)

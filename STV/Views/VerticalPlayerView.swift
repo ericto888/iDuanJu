@@ -213,14 +213,19 @@ struct PlayerScreen: View {
                     }
                     if let h = adjuster.hud, !speedMode {
                         PlayerAdjustHUD(side: h.side, value: h.value)
-                            .position(x: full.width / 2, y: (landscape ? 24 : ins.top + 64) + 30)
+                            .position(x: full.width / 2, y: (landscape ? 24 : ins.top + 10) + 18)
                             .transition(.opacity).allowsHitTesting(false)
                     }
-                    HiddenVolumeView(adjuster: adjuster).frame(width: 1, height: 1).allowsHitTesting(false)
+                    HiddenVolumeView(adjuster: adjuster)
+                        .frame(width: 160, height: 36)
+                        .offset(x: -3000, y: -3000)
+                        .allowsHitTesting(false)
                     if speedMode {
                         PlayerSpeedHUD(rate: previewRate, pendingLock: pendingLock, pendingCancel: pendingCancel,
                                        hasLockedRate: co.lockedRate != nil)
-                            .position(x: full.width / 2, y: full.height / 2).allowsHitTesting(false)
+                            .position(x: full.width / 2, y: (landscape ? 20 : ins.top + 10) + 18)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            .allowsHitTesting(false)
                     }
                     if canShowPadSplit && !padDrawerOpen && controlsVisible {
                         Button { withAnimation(.compatSnappy) { padDrawerOpen = true } } label: {
@@ -407,7 +412,7 @@ struct PlayerScreen: View {
 
     @ViewBuilder
     private var episodeFeed: some View {
-        let isScrollDisabled = locked || speedMode || scrubbing || co.pipActive || panel != nil
+        let isScrollDisabled = locked || speedMode || scrubbing || co.pipActive || panel != nil || adjuster.hud != nil
         if #available(iOS 18.0, *) {
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
@@ -438,7 +443,9 @@ struct PlayerScreen: View {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 24)
                         .onChanged { val in
-                            guard !isScrollDisabled, abs(val.translation.height) > abs(val.translation.width) else { return }
+                            guard !isScrollDisabled,
+                                  PlayerAdjuster.zone(x: val.startLocation.x, width: geo.size.width, landscape: landscape, edge: edgeBackWidth) == nil,
+                                  abs(val.translation.height) > abs(val.translation.width) else { return }
                             feedSettled = false
                             feed.y = CGFloat(co.current ?? 0) * pageH - val.translation.height
                         }
@@ -640,7 +647,7 @@ struct PlayerScreen: View {
                             .disabled(!co.pipPossible).opacity(co.pipPossible ? 1 : 0.5)
                             .accessibilityIdentifier("player.pip")
                         if suppliedDetail == nil { favoriteIcon }
-                        PlayerClusterIcon(symbol: "ellipsis", label: "更多", tint: panel == .more ? STVTheme.accent : .white) { toggle(.more) }
+                        PlayerClusterIcon(symbol: "ellipsis", label: "更多", tint: panel == .more ? PlayerPalette.signal : .white) { toggle(.more) }
                             .accessibilityIdentifier("player.more")
                     }
                 }
@@ -653,44 +660,100 @@ struct PlayerScreen: View {
             }
             Spacer(minLength: 0)
             if let i = co.current, co.episodes.indices.contains(i) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Group {
-                        meta(i, skip: true).padding(.bottom, 8).opacity(scrubbing ? 0 : 1).modifier(ChromeFade(on: chrome, keepAccessible: true))
-                        Text(mainTitle(i))
-                            .font(.system(size: 21, weight: .bold)).lineLimit(1)
-                            .shadow(color: .black.opacity(chrome ? 0 : 0.7), radius: 3)
-                            .accessibilityIdentifier("player.title")
-                            .accessibilityValue("第\(co.episodes[i].ep)集")
-                            .padding(.bottom, 10)
-                    }
-                    .opacity(panel != nil ? 0.35 : 1)
-                    if co.isLive {
-                        HStack(spacing: 10) {
-                            PlayerProgramLine(series: series, channel: co.episodes[i])
-                            Spacer(minLength: 8)
-                            PlayerFullscreenButton { OrientationGate.enterLandscape(); flashChrome() }
+                let e = co.episodes[i]
+                let epBadge = co.episodes.count > 1 ? "第 \(e.ep)/\(co.episodes.count) 集" : "选集"
+                VStack(alignment: .leading, spacing: 8) {
+                    // Single airy title + inline skip-intro row (no redundant stacked metadata bars crowding the bottom)
+                    HStack(alignment: .bottom, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(mainTitle(i))
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundStyle(PlayerPalette.ivory)
+                                .lineLimit(1)
+                                .shadow(color: .black.opacity(chrome ? 0.35 : 0.7), radius: 3)
+                                .accessibilityIdentifier("player.title")
+                                .accessibilityValue("第\(e.ep)集")
+                            Text(portraitSubline(i))
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.66))
+                                .lineLimit(1)
+                                .accessibilityIdentifier("player.episodeInfo")
+                                .accessibilityValue("第\(e.ep)集")
                         }
-                        .frame(height: 30)
-                        .opacity(panel != nil ? 0.35 : 1)
-                        .allowsHitTesting(interactive)
+                        Spacer(minLength: 8)
+                        if co.channelList { PlayerLiveBadge(replay: co.replay != nil) }
+                        else { skipIntroButton }
+                    }
+                    .opacity(scrubbing ? 0 : (panel != nil ? 0.35 : 1))
+                    .modifier(ChromeFade(on: chrome, keepAccessible: true))
+
+                    if co.isLive {
+                        PlayerProgramLine(series: series, channel: e)
+                            .frame(height: 26)
+                            .opacity(panel != nil ? 0.35 : 1)
+                            .allowsHitTesting(interactive)
                     } else {
-                        PlayerTimelineV3(co: co, scrubbing: $scrubbing, onInteract: flashChrome,
-                                         onFullscreen: { OrientationGate.enterLandscape(); flashChrome() }).id(i)
+                        PlayerTimelineV3(co: co, scrubbing: $scrubbing, onInteract: flashChrome).id(i)
                             .opacity(panel != nil ? 0.35 : 1)
                             .shadow(color: .black.opacity(chrome ? 0 : 0.6), radius: 2)
                             .allowsHitTesting(interactive && co.readyIndex == i)
                     }
-                }
-                .padding(.horizontal, 20)
-                PlayerActionBar(actions: actions(i)).padding(.horizontal, 12).padding(.top, 12)
-                    .padding(.bottom, max(8, ins.bottom - 4))
+
+                    PlayerPortraitDock(
+                        paused: co.paused,
+                        episodeBadge: epBadge,
+                        episodesActive: panel == .episodes,
+                        rateLabel: SpeedPopover.shortLabel(co.playbackRate),
+                        rateAccented: abs(co.playbackRate - 1.0) >= 0.01,
+                        rateActive: panel == .rates,
+                        danmakuAvailable: danmakuAvailable,
+                        danmakuEnabled: danmaku.enabled,
+                        isLive: co.isLive,
+                        liveChannelsTitle: "频道",
+                        liveGuideActive: panel == .guide,
+                        onPlayPause: { co.togglePause(); flashChrome() },
+                        onEpisodes: { toggle(.episodes) },
+                        onRateOrGuide: {
+                            if co.isLive { toggle(.guide) }
+                            else { toggle(.rates) }
+                        },
+                        onDanmakuOrQuality: {
+                            if co.isLive { toggle(.quality) }
+                            else {
+                                guard danmakuAvailable else { showOSD("当前片源不支持弹幕"); return }
+                                danmaku.enabled.toggle(); flashChrome()
+                            }
+                        },
+                        onFullscreen: { OrientationGate.enterLandscape(); flashChrome() }
+                    )
                     .opacity(dim)
                     .modifier(ChromeFade(on: chrome))
+                }
+                .padding(.horizontal, 18)
+                .padding(.bottom, max(10, ins.bottom))
             }
         }
         .foregroundStyle(.white)
         .frame(width: full.width, height: full.height)
         .modifier(ChromeFade(on: chrome))
+    }
+
+    private func portraitSubline(_ i: Int) -> String {
+        let e = co.episodes[i]
+        if co.channelList {
+            return [e.page ?? "", liveSourceLabel(i)].filter { !$0.isEmpty }.joined(separator: " · ")
+        }
+        if suppliedDetail != nil { return "第 \(e.ep) 章 · " + e.title }
+        var parts: [String] = []
+        if !shortFixture { parts.append(series.source.label) }
+        if !lineName.isEmpty { parts.append(lineName) }
+        if let tag = seasonTag { parts.append(tag) }
+        if co.episodes.count > 1 {
+            parts.append(e.title.isEmpty ? "第 \(e.ep) 集 / 共 \(co.episodes.count) 集" : e.title)
+        } else if let q = qualityTag {
+            parts.append(q)
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func mainTitle(_ i: Int) -> String {
@@ -711,7 +774,7 @@ struct PlayerScreen: View {
             }
         } else {
             let on = library.isFavorite(series)
-            PlayerClusterIcon(symbol: on ? "heart.fill" : "heart", label: on ? "取消收藏" : "收藏") {
+            PlayerClusterIcon(symbol: on ? "heart.fill" : "heart", label: on ? "取消收藏" : "收藏", tint: on ? STVTheme.favorite : .white) {
                 library.toggleFavorite(series); flashChrome()
             }
         }
@@ -777,7 +840,20 @@ struct PlayerScreen: View {
                             .shadow(color: .black.opacity(chrome ? 0 : 0.6), radius: 2)
                             .allowsHitTesting(interactive && co.readyIndex == i)
                     }
-                    HStack(spacing: 8) {
+                    HStack(spacing: 10) {
+                        Button { co.togglePause(); flashChrome() } label: {
+                            Image(systemName: co.paused ? "play.fill" : "pause.fill")
+                                .font(.system(size: 15, weight: .semibold))
+                                .offset(x: co.paused ? 1 : 0)
+                                .foregroundStyle(PlayerPalette.ivory)
+                                .frame(width: 36, height: 36)
+                                .background(Color.white.opacity(0.12), in: Circle())
+                                .overlay(Circle().strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(PressScale())
+                        .accessibilityLabel(co.paused ? "播放" : "暂停")
+                        .accessibilityIdentifier("player.playPause")
                         if co.channelList { PlayerLiveBadge(replay: co.replay != nil) } else { skipIntroButton }
                         Spacer(minLength: 8)
                         PlayerActionChips(actions: actions(i))
@@ -828,6 +904,9 @@ struct PlayerScreen: View {
                 showDanmaku: danmakuAvailable,
                 danmakuSummary: danmaku.summary,
                 prebufferInfo: info,
+                qualityLabel: co.lines.count > 1 ? "线路 · \(lineName.isEmpty ? "默认" : lineName)" : (qualityTag.map { "画质 · \($0)" } ?? "画质与线路"),
+                onOpenQuality: { withAnimation(DS.panel) { panel = .quality }; flashChrome() },
+                onOpenAudio: { withAnimation(DS.panel) { panel = .audio }; flashChrome() },
                 onClose: { closePanel() },
                 onOpenDanmaku: { withAnimation(DS.panel) { panel = .danmaku }; flashChrome() },
                 onFillScreen: { fill in
@@ -1028,7 +1107,7 @@ struct PlayerScreen: View {
             switch p {
             case .episodes, .guide: return landscape ? (tall ? 340 : 380) : full.width - 24
             case .danmaku, .more: return landscape ? 356 : min(500, full.width - 24)
-            case .rates: return landscape ? 230 : full.width - 24
+            case .rates: return landscape ? 340 : full.width - 24
             default: return landscape ? 290 : full.width - 24
             }
         }()
@@ -1068,7 +1147,7 @@ struct PlayerScreen: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.bottom, p == .danmaku ? max(14, ins.bottom) : (max(8, ins.bottom - 4) + 72 + 10))
+            .padding(.bottom, p == .danmaku ? max(14, ins.bottom) : (max(10, ins.bottom) + 52 + 10))
             .frame(width: full.width, height: full.height)
         }
     }
@@ -1077,7 +1156,10 @@ struct PlayerScreen: View {
         let i = co.current ?? 0
         switch p {
         case .rates:
-            SpeedPopover(current: co.playbackRate, landscape: landscape, maxRate: co.engine.maxRate) { r in co.lockRate(r); closePanel() }
+            SpeedPopover(current: co.playbackRate, landscape: landscape, maxRate: co.engine.maxRate, onPick: { r in
+                co.lockRate(r)
+                flashChrome()
+            }, onClose: { closePanel() })
         case .quality:
             ScrollView {
                 QualityPopover(streams: co.streams[i] ?? [], chosen: co.chosen[i], sources: sourceRows,
@@ -1220,13 +1302,15 @@ struct PlayerScreen: View {
 
     private func enterSpeedMode() {
         let base = co.lockedRate ?? co.playbackRate
-        previewRate = base
-        speedBaseIndex = PlaybackCoordinator.stepIndex(of: base)
+        // Instant 2.0× boost on long-press when watching at normal/sub-2× rate; slide left/right to fine-tune.
+        let boosted = base < 2.0 ? min(2.0, co.engine.maxRate) : base
+        previewRate = boosted
+        speedBaseIndex = PlaybackCoordinator.stepIndex(of: boosted)
         lastStepOffset = 0
         pendingLock = false
         pendingCancel = false
-        speedMode = true
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) { speedMode = true }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         if co.paused { co.togglePause() }
         co.applyRate(previewRate)
     }
@@ -1708,8 +1792,8 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            gestureRecognizer === adjustPan && otherGestureRecognizer.view is UIScrollView
-                && otherGestureRecognizer is UIPanGestureRecognizer
+            guard gestureRecognizer === adjustPan, otherGestureRecognizer !== adjustPan else { return false }
+            return otherGestureRecognizer is UIPanGestureRecognizer
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {

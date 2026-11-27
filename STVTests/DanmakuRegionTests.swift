@@ -157,4 +157,31 @@ final class DanmakuRegionTests: XCTestCase {
         XCTAssertEqual(lib.progress(for: s1)?.episodeNumber, 5)
         XCTAssertGreaterThanOrEqual(summary.plugins, 1)
     }
+
+    @MainActor
+    func testFavoritesBatchManagementAndWebDAVTargetAndVolumeZones() throws {
+        let lib = LibraryStore.shared
+        let a = HGSeries(seriesId: "fav_ut_a", title: "收藏A", cover: "", episodeCount: 10)
+        let b = HGSeries(seriesId: "fav_ut_b", title: "收藏B", cover: "", episodeCount: 10)
+        defer { lib.removeFavorites([a.id, b.id]) }
+
+        if !lib.isFavorite(a) { lib.toggleFavorite(a) }
+        if !lib.isFavorite(b) { lib.toggleFavorite(b) }
+        XCTAssertTrue(lib.isFavorite(a) && lib.isFavorite(b))
+        lib.removeFavorite(a)
+        XCTAssertFalse(lib.isFavorite(a))
+        XCTAssertTrue(lib.isFavorite(b))
+        lib.removeFavorites([b.id])
+        XCTAssertFalse(lib.isFavorite(b))
+
+        let t = try WebDAVSync.buildTarget(serverURL: "https://dav.jianguoyun.com/dav", folder: "/iDuanJu/sync/", username: "u", password: "p")
+        XCTAssertEqual(t.folder, "iDuanJu/sync")
+        XCTAssertEqual(t.fileURL.absoluteString, "https://dav.jianguoyun.com/dav/iDuanJu/sync/sync.idjbackup")
+        XCTAssertTrue(t.authHeader.hasPrefix("Basic "))
+
+        XCTAssertEqual(PlayerAdjuster.zone(x: 90, width: 393, landscape: false, edge: 36), .brightness)
+        XCTAssertEqual(PlayerAdjuster.zone(x: 310, width: 393, landscape: false, edge: 36), .volume)
+        XCTAssertNil(PlayerAdjuster.zone(x: 200, width: 393, landscape: false, edge: 36))
+        XCTAssertEqual(PlayerAdjuster.zone(x: 520, width: 852, landscape: true, edge: 36), .volume)
+    }
 }

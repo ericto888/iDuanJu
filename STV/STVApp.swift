@@ -50,6 +50,8 @@ struct STVApp: App {
             .statusBarHidden(statusBar.hidden)
             .task {
                 await CFCookies.restoreFromWebKit()
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                await WebDAVSync.shared.autoSyncIfNeeded()
                 #if DEBUG
                 // `STV_CF_SELFTEST=<url>`: run the silent solver against a public CF JS-challenge page and
                 // re-request it with URLSession (synced cookie + learned UA); results go to 站点诊断日志.
@@ -68,7 +70,10 @@ struct STVApp: App {
                 #endif
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                Task { await AppBackup.writeAutoBackupIfNeeded() }
+                Task {
+                    await AppBackup.writeAutoBackupIfNeeded()
+                    await WebDAVSync.shared.autoSyncIfNeeded()
+                }
             }
             .background(STVTheme.bg)
         }
