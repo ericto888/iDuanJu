@@ -622,6 +622,8 @@ private struct HomeFeedPage: View {
                         ErrorStateView(error: error) {
                             if case .site(let site) = source {
                                 Task {
+                                    fallbackHeroSource = nil
+                                    fallbackHeroBoardID = nil
                                     await loadPluginHome(site)
                                     await resolveFallbackHero(site)
                                 }
