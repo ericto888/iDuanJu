@@ -258,6 +258,10 @@ final class PluginTests: XCTestCase {
         XCTAssertFalse(try m(["capabilities": ["detail"]]).problems(appVersion: "1.5").isEmpty)
         XCTAssertFalse(try m(["minAppVersion": "9.0"]).problems(appVersion: "1.5").isEmpty)
         XCTAssertFalse(try m(["entry": "../x.js"]).problems(appVersion: "1.5").isEmpty)
+        XCTAssertEqual(try m(["capabilities": ["detail", "pages", "home"], "homeFeatures": ["featured", "categoryShelves", "numbered"]]).problems(appVersion: "1.5"), [])
+        XCTAssertFalse(try m(["homeFeatures": ["featured"]]).problems(appVersion: "1.5").isEmpty, "homeFeatures requires the home capability")
+        XCTAssertFalse(try m(["capabilities": ["detail", "pages", "home"], "homeFeatures": ["featured", "featured"]]).problems(appVersion: "1.5").isEmpty, "homeFeatures must be unique")
+        XCTAssertFalse(try m(["capabilities": ["detail", "pages", "home"], "homeFeatures": ["unknown"]]).problems(appVersion: "1.5").isEmpty, "unknown homeFeatures are rejected")
         // Integrity mismatch
         let bad = try m(["integrity": ["files": ["main.js": "sha256-AAAA"]]])
         XCTAssertThrowsError(try PluginInstaller.validate(manifest: bad, source: Data(Self.stub.utf8), origin: "test"))
