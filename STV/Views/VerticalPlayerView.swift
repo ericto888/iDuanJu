@@ -328,7 +328,6 @@ struct PlayerScreen: View {
         .background(InteractivePopEnabler())
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        .statusBarHidden(landscape || !controlsVisible || panel == .danmaku)
         // Keep the dark appearance local to the player subtree. preferredColorScheme is a
         // presentation-level preference and can darken the hosting NavigationStack; popping
         // the player then causes the underlying light pages to flash black before turning white.
