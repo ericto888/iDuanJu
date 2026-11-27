@@ -619,7 +619,12 @@ private struct HomeFeedPage: View {
                 if loadingPluginHome {
                     if let error = pluginHomeError {
                         ErrorStateView(error: error) {
-                            if case .site(let site) = source { Task { await loadPluginHome(site) } }
+                            if case .site(let site) = source {
+                                Task {
+                                    await loadPluginHome(site)
+                                    await resolveFallbackHero(site)
+                                }
+                            }
                         }
                     } else {
                         HomeCardsSkeleton(landscape: true).padding(.horizontal, 16).padding(.top, 24)
@@ -663,8 +668,10 @@ private struct HomeFeedPage: View {
                     await loadPluginHome(site)
                     await resolveFallbackHero(site, force: true)
                 }
-                // Recompute after home() may have refreshed the category cache.
-                self.boards.forEach { BoardCache.shared.feed($0).load(force: true) }
+                // Recompute after home() may have refreshed the category cache. The selected
+                // fallback feed was already force-loaded while locating the first populated shelf.
+                let heroID = fallbackHeroBoardID
+                self.boards.filter { $0.id != heroID }.forEach { BoardCache.shared.feed($0).load(force: true) }
             }
         }
         .task(id: tab) {
