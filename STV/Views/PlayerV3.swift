@@ -390,6 +390,9 @@ struct PlayerActionChips: View {
 
 struct PlayerChip: View {
     let action: PlayerAction
+    /// The landscape bottom tool row can use a clean, background-free treatment.
+    var glassBackground = true
+
     var body: some View {
         let on = action.active || action.accent
         Button(action: action.action) {
@@ -401,7 +404,7 @@ struct PlayerChip: View {
                     .font(.system(size: 13)).lineLimit(1).fixedSize()
             }
             .padding(.horizontal, 13).frame(height: 36)
-            .liquidGlassCapsule(tone: .clear, interactive: true, onMedia: true)
+            .modifier(PlayerChipGlassBackground(enabled: glassBackground))
             .opacity(action.dimmed ? 0.45 : 1)
             .contentShape(Capsule())
             .animation(DS.select, value: on)
@@ -409,6 +412,19 @@ struct PlayerChip: View {
         .buttonStyle(PressScale())
         .accessibilityLabel(action.a11y).accessibilityIdentifier(action.id)
         .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
+private struct PlayerChipGlassBackground: ViewModifier {
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.liquidGlassCapsule(tone: .clear, interactive: true, onMedia: true)
+        } else {
+            content
+        }
     }
 }
 
