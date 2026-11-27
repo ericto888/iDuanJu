@@ -967,12 +967,12 @@ struct PlayerScreen: View {
                             .allowsHitTesting(interactive && co.readyIndex == i)
                     }
 
-                    HStack(spacing: 10) {
+                    // Keep transport, timestamps and episode/tools in one continuous row.
+                    HStack(spacing: 8) {
                         PlayerCompactTimeControls(co: co, onInteract: flashChrome)
-                        .foregroundStyle(.white.opacity(0.85))
-                        .opacity(dim).modifier(ChromeFade(on: chrome))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .opacity(dim).modifier(ChromeFade(on: chrome))
 
-                        Spacer(minLength: 8)
                         landChips(i)
                             .opacity(dim).modifier(ChromeFade(on: chrome))
                     }
@@ -999,7 +999,7 @@ struct PlayerScreen: View {
     private func landChips(_ i: Int) -> some View {
         let dmOK = series.source == .hongguo
         let rate = co.playbackRate == 1 ? "1.0×" : SpeedPopover.label(co.playbackRate)
-        return HStack(spacing: 8) {
+        return HStack(spacing: 6) {
             Button { if let current = co.current { co.select(current - 1) }; flashChrome() } label: {
                 Image(systemName: "backward.end.fill")
                     .font(.system(size: 14, weight: .medium))
