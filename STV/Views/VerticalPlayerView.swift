@@ -57,8 +57,6 @@ struct PlayerScreen: View {
     @State private var favoriteTick = 0
     /// Feed content offset: the shared video layer rides along with the page.
     @State private var feed = FeedOffset()
-    /// Physical orientation is tracked separately from SwiftUI size class so upright wide clips can be lifted.
-    @State private var displayOrientation = UIDevice.current.orientation
     /// Running double-tap seek (+10/+20/… s) and which side it is on; drives the side bubble.
     @State private var seekRun: (total: Int, at: Date)?
     @Environment(\.verticalSizeClass) private var vClass
@@ -71,8 +69,7 @@ struct PlayerScreen: View {
     /// Wide video in an upright handset is shifted upward without moving controls or subtitles.
     private var videoLift: CGFloat {
         guard !layoutMetrics.isPad, aspect > 1.0 else { return 0 }
-        let upright = displayOrientation.isPortrait || (!displayOrientation.isLandscape && !landscape)
-        return upright ? 46 : 0
+        return landscape ? 0 : 46
     }
     private var canShowPadSplit: Bool {
         layoutMetrics.isPad && layoutMetrics.isLandscape && layoutMetrics.width >= 840 && aspect < 1.0 && !co.pipActive && !co.episodes.isEmpty
@@ -262,13 +259,6 @@ struct PlayerScreen: View {
                     }
                 }
                 .frame(width: full.width, height: full.height)
-                // On a cold start at a non-zero episode, the feed's initial scroll position and
-                // the shared video layer's offset can be out of sync. Align them before revealing
-                // the renderer; while the user is actively paging, let scroll geometry drive it.
-                .compatOnChange(of: co.current) { index in
-                    guard feedSettled, let index else { return }
-                    feed.y = CGFloat(index) * full.height
-                }
             }
             // GeometryReader can receive an unspecified width from the iPad drawer HStack.
             // Keep the player viewport at the available width when the drawer is absent.
@@ -295,14 +285,9 @@ struct PlayerScreen: View {
             nextDramaPick = await NextDramaRecommender.shared.pickNextDrama(current: d, seasons: seasons, watched: watched)
         }
         .task {
-            if !isPortraitVideo { OrientationGate.unlock() }
+            OrientationGate.unlock()
             co.start()
             if co.current == nil { await load() }
-        }
-        // Portrait-format video is fixed upright; wide video can rotate with the device.
-        .task(id: isPortraitVideo) {
-            if isPortraitVideo { OrientationGate.lockPortrait() }
-            else { OrientationGate.unlock() }
         }
         .task { await screenshotHooks() }
         .task(id: lastInteraction) {
@@ -320,28 +305,16 @@ struct PlayerScreen: View {
             co.didBecomeActive()
             flashChrome()
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            let orientation = UIDevice.current.orientation
-            if orientation.isPortrait || orientation.isLandscape { displayOrientation = orientation }
-        }
         .dsDialog("画中画暂不可用", isPresented: Binding(get: { co.pipError != nil }, set: { if !$0 { co.pipError = nil } }), message: co.pipError) {
             [.primary("好") { co.pipError = nil }]
         }
         .onAppear {
-            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-            let orientation = UIDevice.current.orientation
-            if orientation.isPortrait || orientation.isLandscape {
-                displayOrientation = orientation
-            } else {
-                displayOrientation = landscape ? .landscapeLeft : .portrait
-            }
             StatusBarGate.shared.setHidden(landscape || !controlsVisible || panel == .danmaku, animated: false)
         }
         .compatOnChange(of: landscape || !controlsVisible || panel == .danmaku) { hideBar in
             StatusBarGate.shared.setHidden(hideBar)
         }
         .onDisappear {
-            UIDevice.current.endGeneratingDeviceOrientationNotifications()
             StatusBarGate.shared.setHidden(false)
             co.teardown()
             adjuster.restoreBrightness()
@@ -776,8 +749,8 @@ struct PlayerScreen: View {
                                 danmaku.enabled.toggle(); flashChrome()
                             }
                         },
-                        showFullscreen: !isPortraitVideo,
-                        onFullscreen: { if !isPortraitVideo { OrientationGate.enterLandscape(); flashChrome() } }
+                        showFullscreen: true,
+                        onFullscreen: { OrientationGate.enterLandscape(); flashChrome() }
                     )
                     .opacity(dim)
                     .modifier(ChromeFade(on: chrome))
