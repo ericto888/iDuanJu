@@ -30,6 +30,19 @@ import AVKit
         XCTFail("episode \(index) never became ready")
     }
 
+    func testTeardownIsIdempotentButAllowsANewPlaybackLifecycle() async throws {
+        let e = TestPlayerEngine(); let co = coordinator(e)
+        defer { co.teardown() }
+        co.select(0); try await ready(co, 0)
+        co.teardown()
+        co.teardown()
+        XCTAssertEqual(e.stopCount, 1, "exit and onDisappear must not stop the same engine twice")
+
+        co.start()
+        co.teardown()
+        XCTAssertEqual(e.stopCount, 2, "a later mounted lifecycle must still clean up")
+    }
+
     func testInternalPauseDuringEpisodeReplacementDoesNotCancelAutoplay() async throws {
         let e = TestPlayerEngine(); let co = coordinator(e)
         defer { co.teardown() }
