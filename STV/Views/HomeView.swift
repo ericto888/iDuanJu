@@ -396,9 +396,6 @@ private struct HomeFeedPage: View {
     let bottomBarHidden: Bool
     @Binding var tab: HomeTab
     var onHero: (String) -> Void
-    var onScrollOffset: (CGFloat) -> Void = { _ in }
-    var onScrollInteraction: (Bool) -> Void = { _ in }
-    var onScrollMetrics: (CompatScrollMetrics) -> Void = { _ in }
     @State private var legacyChannels: [HuangguoChannel] = []
     @State private var legacyError: Error?
     @State private var heroIndex = 0
@@ -414,9 +411,7 @@ private struct HomeFeedPage: View {
 
     var body: some View {
         if case .site(let source) = tab, source.cmsKey != nil || source.pluginID != nil {
-            DynamicSiteFeed(source: source, bottomBarHidden: bottomBarHidden, onHero: onHero,
-                            onScrollOffset: onScrollOffset, onScrollInteraction: onScrollInteraction,
-                            onScrollMetrics: onScrollMetrics)
+            DynamicSiteFeed(source: source, bottomBarHidden: bottomBarHidden, onHero: onHero)
         } else {
             rankFeed
         }
@@ -694,9 +689,6 @@ private struct DynamicSiteFeed: View {
     let source: DramaSource
     let bottomBarHidden: Bool
     var onHero: (String) -> Void
-    var onScrollOffset: (CGFloat) -> Void = { _ in }
-    var onScrollInteraction: (Bool) -> Void = { _ in }
-    var onScrollMetrics: (CompatScrollMetrics) -> Void = { _ in }
 
     @State private var categories: [SiteCategory] = []
     @State private var selected = ""
