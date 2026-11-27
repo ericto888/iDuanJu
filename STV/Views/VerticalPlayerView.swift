@@ -262,6 +262,13 @@ struct PlayerScreen: View {
                     }
                 }
                 .frame(width: full.width, height: full.height)
+                // On a cold start at a non-zero episode, the feed's initial scroll position and
+                // the shared video layer's offset can be out of sync. Align them before revealing
+                // the renderer; while the user is actively paging, let scroll geometry drive it.
+                .compatOnChange(of: co.current) { index in
+                    guard feedSettled, let index else { return }
+                    feed.y = CGFloat(index) * full.height
+                }
             }
             // GeometryReader can receive an unspecified width from the iPad drawer HStack.
             // Keep the player viewport at the available width when the drawer is absent.
