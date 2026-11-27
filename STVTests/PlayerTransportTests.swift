@@ -88,6 +88,62 @@ import AVKit
         XCTAssertFalse(e.pictureIsActive,"foreground inline playback no longer needs the handover flag")
     }
 
+    func testRestoringPiPKeepsPlaybackRunningAcrossForegroundCallbacks() async throws {
+        let e = TestPlayerEngine()
+        let co = coordinator(e); defer { co.teardown() }
+        co.select(0); try await ready(co, 0)
+
+        // Path 1: User taps the PiP window's restore button (restoreUserInterface -> didBecomeActive -> didStop)
+        co.handlePiPWillStart()
+        co.didEnterBackground()
+        XCTAssertTrue(co.handlePiPRestoreUI())
+        // Simulate AVKit pausing the player transiently and didBecomeActive arriving before didStop.
+        e.isPaused = true
+        co.didBecomeActive()
+        co.handlePiPDidStop()
+        XCTAssertFalse(co.paused, "restoring from PiP must not pause playback")
+        XCTAssertFalse(e.isPaused, "engine must resume when returning from PiP")
+        // Even a stray late AVKit rate=0 callback right after didStop must not pause playback.
+        e.isPaused = true
+        e.onPlaybackRequested?(false)
+        XCTAssertFalse(co.paused, "late AVKit pause right after PiP restore must be ignored")
+        XCTAssertFalse(e.isPaused)
+
+        // Path 2: User returns to app via icon / app switcher (willEnterForeground -> didBecomeActive -> didStop)
+        co.handlePiPWillStart()
+        co.didEnterBackground()
+        co.willEnterForeground()
+        co.didBecomeActive()
+        e.isPaused = true
+        co.handlePiPDidStop()
+        XCTAssertFalse(co.paused, "foregrounding app from active PiP must keep playback running")
+        XCTAssertFalse(e.isPaused)
+
+        // Path 3: User paused inside PiP, then restores to app -> must stay paused.
+        co.handlePiPWillStart()
+        co.didEnterBackground()
+        e.onPlaybackRequested?(false)
+        XCTAssertTrue(co.paused)
+        XCTAssertTrue(co.handlePiPRestoreUI())
+        co.didBecomeActive()
+        co.handlePiPDidStop()
+        XCTAssertTrue(co.paused, "restoring a PiP window that the user paused must stay paused")
+        XCTAssertTrue(e.isPaused)
+
+        // Path 4: didEnterBackground arrives 1 tick before automatic PiP WillStart -> recovers playback.
+        co.togglePause()
+        XCTAssertFalse(co.paused)
+        co.didEnterBackground()
+        co.handlePiPWillStart()
+        XCTAssertFalse(co.paused, "automatic PiP starting right after backgrounding must resume playback")
+        XCTAssertFalse(e.isPaused)
+
+        // Path 5: User taps X close button on PiP while backgrounded (no restoreUserInterface / willEnterForeground)
+        co.handlePiPDidStop()
+        XCTAssertTrue(co.paused, "closing PiP with X button must pause playback")
+        XCTAssertTrue(e.isPaused)
+    }
+
     func testInterruptedIconShowsPausedAndOneExplicitPlayRecovers() async throws {
         let e = TestPlayerEngine(); let co = coordinator(e)
         defer { co.teardown() }
