@@ -96,9 +96,15 @@ class PluginVideo(val inst: PluginInstance, private val extraDomains: List<Strin
                 inst.host.log("✕ 丢弃未授权/非 https 的流地址 ${host ?: u.take(40)}"); return@mapIndexedNotNull null
             }
             val fmt = st.optString("format").ifEmpty { if (u.contains(".m3u8")) "hls" else "mp4" }
+            val key = PluginOut.s(st.opt("key"), 64)
+            val kind = when {
+                key.isNotEmpty() || fmt == "cenc" -> HGStreamKind.mp4Cenc
+                fmt == "hls" -> HGStreamKind.hls
+                else -> HGStreamKind.mp4Clear
+            }
             val h = PluginOut.headers(st.opt("headers")).toMutableMap()
             if (h.keys.none { it.equals("user-agent", true) }) h["User-Agent"] = inst.host.learnedUA ?: PluginHost.DEFAULT_UA
-            HGStream("p$i", PluginOut.s(st.opt("name"), 40).ifEmpty { host }, u, kind = if (fmt == "hls") HGStreamKind.hls else HGStreamKind.mp4Clear, headers = h)
+            HGStream("p$i", PluginOut.s(st.opt("name"), 40).ifEmpty { host }, u, key = key, kind = kind, headers = h)
         }
         val first = streams.firstOrNull() ?: throw ProviderException.upstream("插件没有返回可播放的地址（需 https 且在 media 白名单内）")
         return HGResolvedVideo(ep.vid, first.url, streams = streams, expiresAt = o.optLong("expiresAt"))

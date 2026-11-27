@@ -377,10 +377,11 @@ struct JSVideoProvider: SiteProvider {
             let blocked = await Task.detached { NetGuard.resolvesToBlocked(host) }.value
             if blocked { PluginLog.add(pluginID,"✕ 丢弃解析到内网的媒体地址");continue }
             let fmt = (st["format"] as? String) ?? (u.contains(".m3u8") ? "hls" : "mp4")
+            let key = PluginOut.s(st["key"], max: 64)
             var h = PluginOut.headers(st["headers"])
             if h["User-Agent"] == nil { h["User-Agent"] = rec.learnedUA ?? PluginHostContext.defaultUA }
-            streams.append(HGStream(streamId: "p\(i)", quality: PluginOut.s(st["name"], max: 40).nonEmptyOr(host), url: u, key: "",
-                                    kind: fmt == "hls" ? .hls : .mp4Clear, headers: h))
+            streams.append(HGStream(streamId: "p\(i)", quality: PluginOut.s(st["name"], max: 40).nonEmptyOr(host), url: u, key: key,
+                                    kind: (!key.isEmpty || fmt == "cenc") ? .mp4Cenc : (fmt == "hls" ? .hls : .mp4Clear), headers: h))
         }
         guard let first = streams.first else { throw ProviderError.upstream("插件没有返回可播放的地址（需 https 且在 media 白名单内）") }
         return HGResolvedVideo(vid: ep.vid, url: first.url, key: nil, duration: nil, expiresAt: (o["expiresAt"] as? Int), err: nil, streams: streams)
