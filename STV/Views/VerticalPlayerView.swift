@@ -640,8 +640,12 @@ struct PlayerScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Wide video in an upright handset keeps the portrait dock and playback information visible.
+    /// Portrait-format video and landscape fullscreen retain the original auto-hide behavior.
+    private var keepsChromeVisible: Bool { !landscape && !isPortraitVideo }
+
     private var controlsVisible: Bool {
-        !speedMode && (showChrome || scrubbing || panel != nil || voiceOver)
+        !speedMode && (keepsChromeVisible || showChrome || scrubbing || panel != nil || voiceOver)
     }
 
     // MARK: Chrome
@@ -827,80 +831,56 @@ struct PlayerScreen: View {
     private func landscapeControls(_ full: CGSize, ins: EdgeInsets, chrome: Bool, interactive: Bool) -> some View {
         let side = max(ins.leading, ins.trailing, 64) + 2
         return VStack(spacing: 0) {
-            LiquidGlassGroup(spacing: 10) {
-                HStack(spacing: 10) {
-                    PlayerIconButton(symbol: "chevron.left", label: "返回") { exitPlayer() }
-                        .opacity(dim).modifier(ChromeFade(on: chrome))
-                    if let i = co.current, co.episodes.indices.contains(i) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(mainTitle(i))
-                                .font(.system(size: 16, weight: .bold)).lineLimit(1)
-                                .accessibilityIdentifier("player.title")
-                                .accessibilityValue("第\(co.episodes[i].ep)集")
-                            Group {
-                                if co.isLive { PlayerProgramLine(series: series, channel: co.episodes[i]) }
-                                else { Text(landSubline(i)).font(.system(size: 12)).foregroundStyle(.white.opacity(0.7)).lineLimit(1) }
-                            }
-                            .accessibilityIdentifier("player.episodeInfo")
-                            .accessibilityValue("第\(co.episodes[i].ep)集")
-                        }
-                        .shadow(color: .black.opacity(chrome ? 0 : 0.7), radius: 3)
-                        .opacity(scrubbing ? 0.28 : 1)
-                        .padding(.leading, 4)
-                        .layoutPriority(1)
-                    }
-                    Spacer(minLength: 12)
-                    Group {
-                        if showTech { PlayerTechStrip(telemetry: co.telemetry, landscape: true).padding(.trailing, 4) }
-                        if !co.isLive {
-                            PlayerChip(action: PlayerAction(id: "player.autoNext", a11y: co.autoNext ? "关闭连播" : "开启连播", symbol: "repeat",
-                                                            title: "连播", value: co.autoNext ? "开" : "关", accent: co.autoNext) {
-                                co.autoNext.toggle(); showOSD(co.autoNext ? "连播：开" : "连播：关"); flashChrome()
-                            })
-                        }
-                        PlayerIconCluster {
-                            if co.channelList, suppliedDetail == nil { favoriteIcon }
-                            PlayerClusterIcon(symbol: "lock.open", label: "锁屏") { locked = true; panel = nil; flashChrome() }
-                                .accessibilityIdentifier("player.lock")
-                            PlayerClusterIcon(symbol: "ellipsis", label: "更多", tint: panel == .more ? STVTheme.accent : .white) { toggle(.more) }
-                                .accessibilityIdentifier("player.more")
-                            PlayerClusterIcon(symbol: "arrow.down.right.and.arrow.up.left", label: "退出横屏") { OrientationGate.exitLandscape(); flashChrome() }
-                                .accessibilityIdentifier("player.exitFullscreen")
-                        }
-                    }
+            HStack(spacing: 10) {
+                PlayerIconButton(symbol: "chevron.left", label: "返回") { exitPlayer() }
                     .opacity(dim).modifier(ChromeFade(on: chrome))
+
+                Spacer(minLength: 12)
+                Group {
+                    if showTech, let t = co.tech { PlayerTechStrip(tech: t, landscape: true).padding(.trailing, 4) }
+                    PlayerChip(id: "player.autoNext", a11y: co.autoNext ? "关闭连播" : "开启连播", symbol: "repeat",
+                               title: "连播", value: co.autoNext ? "开" : "关", on: co.autoNext) {
+                        co.autoNext.toggle(); showOSD(co.autoNext ? "连播：开" : "连播：关"); flashChrome()
+                    }
+                    PlayerIconButton(symbol: "lock.open", label: "锁屏") { locked = true; panel = nil; flashChrome() }
+                        .accessibilityIdentifier("player.lock")
+                    PlayerIconButton(symbol: "ellipsis", label: "更多", tint: panel == .more ? STVTheme.accent : .white) {
+                        toggle(.more)
+                    }
+                    .accessibilityIdentifier("player.more")
+                    PlayerIconButton(symbol: "arrow.down.right.and.arrow.up.left", label: "退出横屏") {
+                        OrientationGate.exitLandscape(); flashChrome()
+                    }
+                    .accessibilityIdentifier("player.exitFullscreen")
                 }
+                .opacity(dim).modifier(ChromeFade(on: chrome))
             }
             .frame(height: 44)
             .padding(.horizontal, side).padding(.top, 16)
             Spacer(minLength: 0)
             if let i = co.current, co.episodes.indices.contains(i) {
-                VStack(spacing: 12) {
-                    if !co.isLive {
-                        PlayerTimelineV3(co: co, scrubbing: $scrubbing, onInteract: flashChrome).id(i)
+                VStack(spacing: 7) {
+                    // Landscape: progress occupies its own row above the transport/tool controls.
+                    if co.channelList {
+                        PlayerProgramLine(series: series, channel: co.episodes[i])
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        PlayerProgressBar(co: co, scrubbing: $scrubbing, onInteract: flashChrome)
+                            .frame(maxWidth: .infinity)
                             .opacity(panel != nil ? 0.35 : 1)
                             .shadow(color: .black.opacity(chrome ? 0 : 0.6), radius: 2)
                             .allowsHitTesting(interactive && co.readyIndex == i)
                     }
+
                     HStack(spacing: 10) {
-                        Button { co.togglePause(); flashChrome() } label: {
-                            Image(systemName: co.paused ? "play.fill" : "pause.fill")
-                                .font(.system(size: 15, weight: .semibold))
-                                .offset(x: co.paused ? 1 : 0)
-                                .foregroundStyle(PlayerPalette.ivory)
-                                .frame(width: 36, height: 36)
-                                .background(Color.white.opacity(0.12), in: Circle())
-                                .overlay(Circle().strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
-                                .contentShape(Circle())
-                        }
-                        .buttonStyle(PressScale())
-                        .accessibilityLabel(co.paused ? "播放" : "暂停")
-                        .accessibilityIdentifier("player.playPause")
-                        if co.channelList { PlayerLiveBadge(replay: co.replay != nil) } else { skipIntroButton }
+                        PlayerCompactTimeControls(co: co, onInteract: flashChrome)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .opacity(dim).modifier(ChromeFade(on: chrome))
+
                         Spacer(minLength: 8)
-                        PlayerActionChips(actions: actions(i))
+                        landChips(i)
+                            .opacity(dim).modifier(ChromeFade(on: chrome))
                     }
-                    .opacity(dim).modifier(ChromeFade(on: chrome))
                 }
                 .padding(.horizontal, side)
                 .padding(.bottom, max(ins.bottom, 8) + 4)
@@ -919,6 +899,51 @@ struct PlayerScreen: View {
             return co.episodes.count > 1 ? "S1:E\(e.ep)" + (e.title.isEmpty ? "" : " · " + e.title) : (series.subtitle ?? Fmt.meta(series))
         }
         return (seasonTag.map { $0 + " · " } ?? "") + "第 \(e.ep) 集 / 共 \(co.episodes.count) 集"
+    }
+
+    private func landChips(_ i: Int) -> some View {
+        let dmOK = series.source == .hongguo
+        let rate = co.playbackRate == 1 ? "1.0×" : SpeedPopover.label(co.playbackRate)
+        return HStack(spacing: 8) {
+            Button { if let current = co.current { co.select(current - 1) }; flashChrome() } label: {
+                Image(systemName: "backward.end.fill")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScale())
+            .disabled((co.current ?? 0) <= 0)
+            .opacity((co.current ?? 0) > 0 ? 1 : 0.35)
+            .accessibilityLabel("上一集")
+            .accessibilityIdentifier("player.previousEpisode")
+
+            Button { if let current = co.current { co.select(current + 1) }; flashChrome() } label: {
+                Image(systemName: "forward.end.fill")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScale())
+            .disabled((co.current ?? 0) >= co.episodes.count - 1)
+            .opacity((co.current ?? 0) < co.episodes.count - 1 ? 1 : 0.35)
+            .accessibilityLabel("下一集")
+            .accessibilityIdentifier("player.nextEpisode")
+
+            PlayerChip(id: "player.episodes", a11y: "选集", symbol: "square.grid.2x2", title: "选集", on: panel == .episodes) { toggle(.episodes) }
+            PlayerChip(id: "player.rate", a11y: "播放倍速 " + rate, symbol: "gauge.with.dots.needle.33percent", title: "倍速", value: rate,
+                       on: panel == .rates || co.playbackRate != 1) { toggle(.rates) }
+            PlayerChip(id: "player.quality", a11y: "画质与播放源", symbol: "sparkles.tv", title: "画质",
+                       value: qualityTag == "画质" ? nil : qualityTag, on: panel == .quality) { toggle(.quality) }
+            PlayerChip(id: "player.danmaku", a11y: danmaku.enabled ? "关闭弹幕" : "开启弹幕", symbol: "text.bubble", title: "弹幕",
+                       value: dmOK ? (danmaku.enabled ? "开" : "关") : nil, on: dmOK && danmaku.enabled, dimmed: !dmOK) {
+                guard dmOK else { showOSD("当前片源不支持弹幕"); return }
+                danmaku.enabled.toggle(); flashChrome()
+            }
+            PlayerChip(id: "player.audio", a11y: "音轨与字幕", symbol: "captions.bubble", title: "音轨字幕",
+                       on: panel == .audio || panel == .subtitles) { toggle(.audio) }
+        }
     }
 
     private var lineName: String { co.lines.indices.contains(co.lineIndex) && co.lines.count > 1 ? co.lines[co.lineIndex].name : "" }
