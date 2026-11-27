@@ -1,10 +1,17 @@
 import XCTest
 import UIKit
+import UniformTypeIdentifiers
 @testable import STV
 
 /// 1.5 plugin runtime: sandbox isolation, host API, manifest validation, bundled comic plugins (offline fixtures),
 /// JM stripe unscramble, 苹果 CMS parsing and the minors content filter.
 final class PluginTests: XCTestCase {
+
+    func testIDJPluginFileTypeIsRegisteredAndAcceptedAsData() {
+        let type = UTType.idjPlugin
+        XCTAssertEqual(type.preferredFilenameExtension, "idjplugin")
+        XCTAssertTrue(type.conforms(to: .data))
+    }
 
     // MARK: helpers
 
