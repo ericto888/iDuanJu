@@ -220,6 +220,20 @@ final class PluginTests: XCTestCase {
         XCTAssertEqual(r?[13] as? String, "111")
     }
 
+    func testMediaTransformDeclarationValidation() throws {
+        let aes: [String: Any] = [
+            "type": "aes", "key": "f5d965df75336270", "iv": "97b60394abc2fbe1",
+            "keyEncoding": "utf8", "mode": "cbc", "padding": "pkcs7"
+        ]
+        let accepted = try XCTUnwrap(PluginOut.mediaTransform(aes))
+        XCTAssertEqual(accepted["type"] as? String, "aes")
+        XCTAssertEqual(accepted["key"] as? String, "f5d965df75336270")
+        XCTAssertEqual(accepted["iv"] as? String, "97b60394abc2fbe1")
+        XCTAssertEqual(PluginOut.mediaTransform(["type": "stripes", "segments": 10])?["segments"] as? Int, 10)
+        XCTAssertNil(PluginOut.mediaTransform(["type": "unknown"]))
+        XCTAssertNil(PluginOut.mediaTransform("aes"))
+    }
+
     func testCryptoAndCodec() async throws {
         let p = try instance()
         defer { p.shutdown() }
