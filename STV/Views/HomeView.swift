@@ -97,41 +97,64 @@ final class BoardFeed: ObservableObject {
     let board: BoardSpec
     @Published private(set) var state: State = .idle
     private var loading = false
+    /// Waiters joining the current request (ordinary shelf/hero reads).
     private var waiters: [CheckedContinuation<[HGSeries], Never>] = []
+    /// Explicit refreshes arriving during a request are coalesced into one follow-up fetch.
+    private var refreshWaiters: [CheckedContinuation<[HGSeries], Never>] = []
 
     init(_ b: BoardSpec) { board = b }
 
     var items: [HGSeries] { if case .loaded(let i) = state { return i }; return [] }
     var error: Error? { if case .failed(let e) = state { return e }; return nil }
-    var hasAttemptedLoad: Bool { if case .idle = state { return false }; return true }
+    var hasAttemptedLoad: Bool {
+        if loading { return true }
+        if case .idle = state { return false }
+        return true
+    }
 
-    /// Await the shared first-page cache. Concurrent shelf/hero requests share one in-flight fetch.
+    /// Await the shared first-page cache. Concurrent reads share one request; a refresh
+    /// arriving during that request is coalesced into exactly one subsequent fetch.
     func loadFirstPageIfNeeded(force: Bool = false) async -> [HGSeries] {
         if !force, case .loaded = state { return items }
-        if loading {
-            return await withCheckedContinuation { waiters.append($0) }
-        }
-        loading = true
-        do {
-            let result = try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items
-            state = .loaded(result)
-            loading = false
-            let pending = waiters; waiters.removeAll()
-            pending.forEach { $0.resume(returning: result) }
-            return result
-        } catch {
-            // A failed refresh keeps what is already on screen.
-            if items.isEmpty { state = .failed(error) }
-            loading = false
-            let current = items
-            let pending = waiters; waiters.removeAll()
-            pending.forEach { $0.resume(returning: current) }
-            return current
+        return await withCheckedContinuation { continuation in
+            if loading {
+                if force { refreshWaiters.append(continuation) }
+                else { waiters.append(continuation) }
+                return
+            }
+            loading = true
+            waiters.append(continuation)
+            Task { await performFirstPageLoad() }
         }
     }
 
+    private func performFirstPageLoad() async {
+        do {
+            let result = try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items
+            state = .loaded(result)
+            finishFirstPageLoad(with: result)
+        } catch {
+            // A failed refresh keeps what is already on screen.
+            if items.isEmpty { state = .failed(error) }
+            finishFirstPageLoad(with: items)
+        }
+    }
+
+    private func finishFirstPageLoad(with result: [HGSeries]) {
+        let completed = waiters
+        waiters.removeAll()
+        if refreshWaiters.isEmpty {
+            loading = false
+        } else {
+            // All refresh callers waiting on the previous request share this one fresh fetch.
+            waiters = refreshWaiters
+            refreshWaiters.removeAll()
+            Task { await performFirstPageLoad() }
+        }
+        completed.forEach { $0.resume(returning: result) }
+    }
+
     func load(force: Bool = false) {
-        if loading { return }
         if case .loaded = state, !force { return }
         Task { _ = await loadFirstPageIfNeeded(force: force) }
     }
