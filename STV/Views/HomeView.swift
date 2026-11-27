@@ -38,6 +38,10 @@ struct HomeBottomBarScrollBehavior {
     private mutating func setHidden(_ hidden: Bool) -> Bool? {
         guard isHidden != hidden else { return nil }
         isHidden = hidden
+        // The bar transition changes the feed's bottom inset. Discard the old sample so
+        // that this layout adjustment cannot be mistaken for the user's next scroll gesture.
+        previousOffset = nil
+        previousTime = nil
         return hidden
     }
 }
@@ -608,7 +612,7 @@ private struct HomeFeedPage: View {
             // Fixed scroll tail keeps the last card reachable above the floating tab bar.
             // It does not alter the viewport when the bar is shown or hidden.
             .padding(.bottom, bottomBarHidden ? 0 : 96)
-            .animation(.easeOut(duration: 0.25), value: bottomBarHidden)
+            // Keep scroll-content geometry stable during the floating bar transition.
             .animation(.easeOut(duration: 0.25), value: heroPicks.isEmpty)
         }
         // CategoryView's scroll view runs to the physical bottom edge; the paged host above
