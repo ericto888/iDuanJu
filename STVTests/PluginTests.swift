@@ -673,6 +673,8 @@ final class PluginTests: XCTestCase {
         // A missing categories key means "not supplied" (preserve cached values), not "clear cache".
         let omitted = provider.parseHomeResponse(["items": []], features: ["featured"])
         XCTAssertNil(omitted.categories)
+        let malformed = provider.parseHomeResponse(["categories": "not-an-array"], features: ["categoryShelves"])
+        XCTAssertNil(malformed.categories, "malformed category payloads must not clear the last valid cache")
 
         // An explicitly empty categories array means the site currently has no real categories.
         let empty = provider.parseHomeResponse(["categories": []], features: ["categoryShelves"])
