@@ -303,6 +303,11 @@ struct JSVideoProvider: SiteProvider {
 
     var categories: [SiteCategory] {
         let cached = (PluginStore.snapshot(pluginID)?.cachedCategories ?? []).map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }
+        // Category-shelf plugins must expose only real site categories. Legacy plugins retain
+        // the historical __home entry so DynamicSiteFeed can keep using home() as its feed.
+        if PluginHomeFeatures.usesCategoryShelves(PluginStore.snapshot(pluginID)?.manifest.homeFeatures) {
+            return cached
+        }
         return cached.isEmpty ? [SiteCategory(id: Self.homeID, title: "推荐", path: Self.homeID)] : cached
     }
 
@@ -322,27 +327,41 @@ struct JSVideoProvider: SiteProvider {
         return HGPage(items: items, hasMore: (o["hasMore"] as? Bool ?? false) && !items.isEmpty, nextOffset: p + 1)
     }
 
+    /// Parse home() without conflating an omitted categories field with an explicitly empty list.
+    /// A missing field preserves the last known categories; an explicit [] clears them.
+    func parseHomeResponse(_ response: [String: Any]) -> (categories: [PluginCategory]?, featured: [HGSeries]) {
+        let categories = response.keys.contains("categories") ? PluginOut.categories(response["categories"]) : nil
+        let features = PluginStore.snapshot(pluginID)?.manifest.homeFeatures
+        let featured = PluginHomeFeatures.has("featured", in: features)
+            ? PluginOut.unique(((response["items"] as? [[String: Any]]) ?? []).prefix(100).compactMap(series)) { $0.id }
+            : []
+        return (categories, featured)
+    }
+
     /// Load homepage data for the shared native HomeFeedPage / HomeShelf presentation.
     /// Featured items are opt-in; category items remain in their own shelves.
     func homeData() async throws -> (categories: [SiteCategory], featured: [HGSeries]) {
         let response = try await PluginRuntime.call(pluginID, "home", [:]) as? [String: Any] ?? [:]
-        let pluginCategories = PluginOut.categories(response["categories"])
-        await MainActor.run { PluginStore.shared.cacheCategories(pluginID, pluginCategories) }
-        let features = PluginStore.snapshot(pluginID)?.manifest.homeFeatures ?? []
-        let featured = features.contains("featured")
-            ? PluginOut.unique(((response["items"] as? [[String: Any]]) ?? []).prefix(100).compactMap(series)) { $0.id }
-            : []
-        return (pluginCategories.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }, featured)
+        let parsed = parseHomeResponse(response)
+        if let categories = parsed.categories {
+            await MainActor.run { PluginStore.shared.cacheCategories(pluginID, categories) }
+        }
+        let categories = parsed.categories ?? PluginStore.snapshot(pluginID)?.cachedCategories ?? []
+        return (categories.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }, parsed.featured)
     }
 
     func list(_ c: SiteCategory, page p: Int) async throws -> HGPage {
         if c.id == Self.homeID || c.id.isEmpty {
             if p > 1 { return HGPage(items: [], hasMore: false) }
             let r = try await PluginRuntime.call(pluginID, "home", [:])
-            let cats = PluginOut.categories((r as? [String: Any])?["categories"])
-            let id = pluginID
-            await MainActor.run { PluginStore.shared.cacheCategories(id, cats) }
-            if let items = (r as? [String: Any])?["items"] as? [Any], !items.isEmpty { return page(r, 1) }
+            let response = r as? [String: Any] ?? [:]
+            let parsed = parseHomeResponse(response)
+            if let cats = parsed.categories {
+                let id = pluginID
+                await MainActor.run { PluginStore.shared.cacheCategories(id, cats) }
+            }
+            if let items = response["items"] as? [Any], !items.isEmpty { return page(r, 1) }
+            let cats = parsed.categories ?? PluginStore.snapshot(pluginID)?.cachedCategories ?? []
             guard let first = cats.first else { return HGPage(items: [], hasMore: false) }
             return page(try await PluginRuntime.call(pluginID, "category", ["id": first.id, "page": 1, "filters": [String: String]()]), 1)
         }
