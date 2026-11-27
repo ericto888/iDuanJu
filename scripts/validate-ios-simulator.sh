@@ -55,6 +55,8 @@ xcodebuild -project STV.xcodeproj -scheme STV -configuration Debug \
   -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO ARCHS="$SIM_ARCH" ONLY_ACTIVE_ARCH=YES ENABLE_TESTABILITY=YES \
   -parallel-testing-enabled NO \
   -only-testing:STVTests/LegadoTests \
+  -only-testing:STVTests/PlayerTransportTests \
+  -only-testing:STVTests/DanmakuRegionTests \
   -only-testing:STVTests/PluginTests/testCMSCategoryRequestsKeepFullCategoryList \
   -only-testing:STVTests/PluginTests/testMacCMSParsing \
   -only-testing:STVTests/PluginTests/testManifestValidation \
