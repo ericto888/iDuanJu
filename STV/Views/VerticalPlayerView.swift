@@ -866,8 +866,6 @@ struct PlayerScreen: View {
                         liveChannelsTitle: "频道",
                         liveGuideActive: panel == .guide,
                         onPlayPause: { co.togglePause(); flashChrome() },
-                        onSeekBackward: { co.seek(by: -10); flashChrome() },
-                        onSeekForward: { co.seek(by: 10); flashChrome() },
                         onEpisodes: { toggle(.episodes) },
                         onRateOrGuide: {
                             if co.isLive { toggle(.guide) }
@@ -880,7 +878,6 @@ struct PlayerScreen: View {
                                 danmaku.enabled.toggle(); flashChrome()
                             }
                         },
-                        showFullscreen: true,
                         onFullscreen: { OrientationGate.enterLandscape(); flashChrome() }
                     )
                     .opacity(dim)
