@@ -201,6 +201,12 @@ enum PluginOut {
         }
         return out
     }
+    /// 插件声明的图片处理（封面 coverTransform / 章节图片 transform）。
+    /// 只接受宿主原生支持的 stripes（横条重排）与 aes（整包解密）。
+    static func mediaTransform(_ v: Any?) -> [String: Any]? {
+        guard let t = v as? [String: Any], ["stripes", "aes"].contains(t["type"] as? String ?? "") else { return nil }
+        return t
+    }
     static func categories(_ v: Any?) -> [PluginCategory] {
         let all = ((v as? [[String: Any]]) ?? []).prefix(60).compactMap { c -> PluginCategory? in
             let id = s(c["id"]), name = s(c["name"], max: 40)
@@ -230,7 +236,8 @@ struct JSComicProvider: MangaProvider {
         guard !ContentFilter.isBlocked([title] + tags) else { return nil }
         let cover = PluginOut.url(o["cover"])
         return MangaItem(source: source, mangaId: id, title: title,
-                         cover: PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"])),
+                         cover: PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"]),
+                                                transform: PluginOut.mediaTransform(o["coverTransform"])) ,
                          author: PluginOut.s(o["author"], max: 80), tags: tags, latest: PluginOut.s(o["remarks"], max: 40))
     }
 
@@ -264,7 +271,8 @@ struct JSComicProvider: MangaProvider {
         let title = PluginOut.s(o["title"], max: 200)
         if !title.isEmpty { item.title = title }
         let cover = PluginOut.url(o["cover"])
-        if !cover.isEmpty { item.cover = PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"])) }
+        if !cover.isEmpty { item.cover = PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"]),
+                                                        transform: PluginOut.mediaTransform(o["coverTransform"])) }
         let tags = PluginOut.strings(o["tags"])
         if !tags.isEmpty { item.tags = tags }
         let author = PluginOut.s(o["author"], max: 80)
@@ -285,9 +293,7 @@ struct JSComicProvider: MangaProvider {
             let u = PluginOut.url(i["url"])
             guard !u.isEmpty else { return nil }
             let h = common.merging(PluginOut.headers(i["headers"])) { _, b in b }
-            var t = i["transform"] as? [String: Any]
-            if let tt = t, !["stripes", "aes"].contains(tt["type"] as? String ?? "") { t = nil }
-            return PluginMedia.ref(plugin: pluginID, url: u, headers: h, transform: t)
+            return PluginMedia.ref(plugin: pluginID, url: u, headers: h, transform: PluginOut.mediaTransform(i["transform"]))
         }
         guard !imgs.isEmpty else { throw ProviderError.upstream("插件没有返回图片") }
         return imgs
@@ -321,7 +327,8 @@ struct JSVideoProvider: SiteProvider {
         guard !id.isEmpty, !title.isEmpty else { return nil }
         let tags = PluginOut.strings(o["tags"]) + PluginOut.strings(o["badges"])
         guard !ContentFilter.isBlocked([title] + tags) else { return nil }
-        let cover = PluginMedia.ref(plugin: pluginID, url: PluginOut.url(o["cover"]), headers: PluginOut.headers(o["coverHeaders"]))
+        let cover = PluginMedia.ref(plugin: pluginID, url: PluginOut.url(o["cover"]), headers: PluginOut.headers(o["coverHeaders"]),
+                                    transform: PluginOut.mediaTransform(o["coverTransform"]))
         return HGSeries(source: source, seriesId: id, title: title, cover: cover, subtitle: PluginOut.s(o["remarks"], max: 40).nilIfEmpty,
                         actors: PluginOut.strings(o["actors"]), orientation: (o["orientation"] as? String) == "portrait" ? "portrait" : nil, tags: tags)
     }
@@ -395,7 +402,8 @@ struct JSVideoProvider: SiteProvider {
         }
         let cover = PluginOut.url(o["cover"])
         return HGSeriesDetail(source: source, seriesId: s.seriesId, title: title,
-                              cover: cover.isEmpty ? s.cover : PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"])),
+                              cover: cover.isEmpty ? s.cover : PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"]),
+                                                                                transform: PluginOut.mediaTransform(o["coverTransform"])),
                               desc: PluginOut.s(o["desc"], max: 4000), author: PluginOut.s(o["director"], max: 80).nilIfEmpty,
                               actors: PluginOut.strings(o["actors"]), onlineTime: 0, totalEps: eps.count, episodes: eps, tags: tags,
                               episodeLabel: eps.count > 1 ? "共\(eps.count)集" : "长视频")
