@@ -640,6 +640,14 @@ final class PluginTests: XCTestCase {
         XCTAssertEqual(legacyFallback.map(\.id), [JSVideoProvider.homeID], "legacy plugins keep the historical home feed")
     }
 
+    func testFallbackHeroChoosesFirstCategoryWithContentInSiteOrder() async {
+        let categories = ["empty-first", "has-content", "also-has-content"]
+        let selected = await PluginHomeFeatures.firstPopulated(categories) { category in
+            category != "empty-first"
+        }
+        XCTAssertEqual(selected, "has-content")
+    }
+
     func testJSVideoHomeResponseParsingAndCategoryCacheSemantics() {
         let provider = JSVideoProvider(source: .plugin("com.test.video"))
         let response: [String: Any] = [
