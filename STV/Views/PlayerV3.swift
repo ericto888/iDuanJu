@@ -25,6 +25,13 @@ struct PlayerCompactTimeControls: View {
 
     var body: some View {
         HStack(spacing: 7) {
+            if !co.isLive {
+                Button { co.seek(by: -10); onInteract() } label: {
+                    Image(systemName: "gobackward.10").font(.system(size: 13, weight: .medium))
+                        .frame(width: 26, height: 34).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).accessibilityLabel("快退10秒").accessibilityIdentifier("player.back10")
+            }
             Button { co.togglePause(); onInteract() } label: {
                 Image(systemName: co.paused ? "play.fill" : "pause.fill")
                     .font(.system(size: 15, weight: .semibold))
@@ -42,6 +49,13 @@ struct PlayerCompactTimeControls: View {
             Text("−" + Fmt.clock(Int(max(0, clock.sample.duration - time))))
                 .font(.system(size: 12, weight: .medium).monospacedDigit())
                 .accessibilityIdentifier("player.remaining")
+            if !co.isLive {
+                Button { co.seek(by: 10); onInteract() } label: {
+                    Image(systemName: "goforward.10").font(.system(size: 13, weight: .medium))
+                        .frame(width: 26, height: 34).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).accessibilityLabel("快进10秒").accessibilityIdentifier("player.fwd10")
+            }
         }
         .foregroundStyle(.white.opacity(0.85))
     }
@@ -279,6 +293,8 @@ struct PlayerPortraitDock: View {
     var liveChannelsTitle: String = "频道"
     var liveGuideActive: Bool = false
     let onPlayPause: () -> Void
+    let onSeekBackward: () -> Void
+    let onSeekForward: () -> Void
     let onEpisodes: () -> Void
     let onRateOrGuide: () -> Void
     let onDanmakuOrQuality: () -> Void
@@ -286,7 +302,7 @@ struct PlayerPortraitDock: View {
     let onFullscreen: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Button(action: onPlayPause) {
                 Image(systemName: paused ? "play.fill" : "pause.fill")
                     .font(.system(size: 15, weight: .semibold))
@@ -300,6 +316,21 @@ struct PlayerPortraitDock: View {
             .buttonStyle(PressScale())
             .accessibilityLabel(paused ? "播放" : "暂停")
             .accessibilityIdentifier("player.playPause")
+
+            if !isLive {
+                Button(action: onSeekBackward) {
+                    Image(systemName: "gobackward.10").font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(PlayerPalette.ivory).frame(width: 32, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PressScale()).accessibilityLabel("快退10秒").accessibilityIdentifier("player.back10")
+                Button(action: onSeekForward) {
+                    Image(systemName: "goforward.10").font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(PlayerPalette.ivory).frame(width: 32, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PressScale()).accessibilityLabel("快进10秒").accessibilityIdentifier("player.fwd10")
+            }
 
             Button(action: onEpisodes) {
                 HStack(spacing: 6) {
