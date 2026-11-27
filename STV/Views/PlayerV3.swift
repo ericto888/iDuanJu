@@ -389,9 +389,9 @@ struct PlayerActionChips: View {
 }
 
 struct PlayerChip: View {
-    let action: PlayerAction
     /// The landscape bottom tool row can use a clean, background-free treatment.
     var glassBackground = true
+    let action: PlayerAction
 
     var body: some View {
         let on = action.active || action.accent
