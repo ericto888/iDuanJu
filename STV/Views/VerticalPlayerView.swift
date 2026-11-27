@@ -59,8 +59,9 @@ struct PlayerScreen: View {
     @State private var feed = FeedOffset()
     /// Running double-tap seek (+10/+20/… s) and which side it is on; drives the side bubble.
     @State private var seekRun: (total: Int, at: Date)?
-    /// Preview-only horizontal seek delta; playback is committed once when the gesture ends.
-    @State private var seekPreviewDelta: Double?
+    /// Horizontal drag seek preview, committed once when the gesture ends.
+    @State private var horizontalSeekStart: Double?
+    @State private var horizontalSeekTarget: Double?
     /// Orientation decisions are made once the current episode is ready, never while it is loading.
     @State private var orientationEpisode: Int?
     @State private var orientationIsPortrait: Bool?
@@ -277,15 +278,20 @@ struct PlayerScreen: View {
                     if let p = panel, !locked {
                         popover(p, full: full, ins: ins)
                     }
-                    if let delta = seekPreviewDelta {
-                        let target = max(0, min(max(0, co.duration - 0.5), co.clock.sample.time + delta))
-                        Label("\(delta >= 0 ? "快进" : "快退") · \(Fmt.clock(Int(target)))", systemImage: delta >= 0 ? "forward.fill" : "backward.fill")
-                            .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
-                            .padding(.horizontal, 16).padding(.vertical, 10)
-                            .liquidGlassCapsule(tone: .clear, onMedia: true)
-                            .position(x: full.width / 2, y: landscape ? full.height / 2 - 70 : rect.midY - 70)
-                            .transition(.opacity).allowsHitTesting(false)
-                            .accessibilityIdentifier("player.seekPreview")
+                    if let target = horizontalSeekTarget, co.duration > 0 {
+                        VStack(spacing: 4) {
+                            Text("\(Fmt.clock(Int(target))) / \(Fmt.clock(Int(co.duration)))")
+                                .font(.system(size: 20, weight: .bold).monospacedDigit())
+                            let delta = target - (horizontalSeekStart ?? co.clock.sample.time)
+                            Text(abs(delta) >= 1 ? (delta > 0 ? "+" : "−") + Fmt.clock(Int(abs(delta))) : "松开跳转")
+                                .font(.system(size: 12, weight: .semibold)).foregroundStyle(STVTheme.accent)
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .liquidGlass(corner: 12, tone: .panel, onMedia: true)
+                        .position(x: full.width / 2, y: landscape ? full.height / 2 - 92 : rect.midY - 92)
+                        .transition(.opacity).allowsHitTesting(false)
+                        .accessibilityIdentifier("player.horizontalSeek")
                     }
                     if let run = seekRun {
                         Label("\(run.total > 0 ? "+" : "−")\(abs(run.total)) 秒", systemImage: run.total > 0 ? "forward.fill" : "backward.fill")
@@ -708,21 +714,10 @@ struct PlayerScreen: View {
                 onSpeedBegan: enterSpeedMode,
                 onSpeedChanged: handleSpeedTranslation,
                 onSpeedEnded: endSpeedMode,
-                onSeekChanged: { delta in seekPreviewDelta = delta },
-                onSeekEnded: { delta in
-                    seekPreviewDelta = nil
-                    guard abs(delta) >= 1.5 else { return }
-                    co.seek(by: delta)
-                    let now = Date()
-                    withAnimation(.easeOut(duration: 0.12)) { seekRun = (Int(delta.rounded()), now) }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    flashChrome()
-                    Task {
-                        try? await Task.sleep(for: .seconds(1.2))
-                        if seekRun?.at == now { withAnimation(.easeIn(duration: 0.2)) { seekRun = nil } }
-                    }
-                },
-                onSeekCancelled: { seekPreviewDelta = nil },
+                onSeekBegan: { beginHorizontalSeek() },
+                onSeekChanged: { translation, width in updateHorizontalSeek(translation: translation, width: width) },
+                onSeekEnded: { commitHorizontalSeek() },
+                onSeekCancelled: { cancelHorizontalSeek() },
                 landscape: landscape,
                 onAdjustBegan: { adjuster.begin($0) },
                 onAdjustChanged: { adjuster.change($0, fraction: $1) },
@@ -1456,6 +1451,42 @@ struct PlayerScreen: View {
         altSources = Array(found.prefix(1))
     }
 
+    // MARK: Horizontal seek gesture
+
+    private func beginHorizontalSeek() {
+        guard !locked, !speedMode, co.readyIndex == co.current, co.duration > 0 else { return }
+        horizontalSeekStart = co.time
+        horizontalSeekTarget = co.time
+        co.clock.scrubPreview = co.time
+        scrubbing = true
+        flashChrome()
+    }
+
+    private func updateHorizontalSeek(translation: CGFloat, width: CGFloat) {
+        guard let start = horizontalSeekStart, co.duration > 0, width > 0 else { return }
+        let span = min(co.duration, 120)
+        let target = max(0, min(co.duration, start + Double(translation / width) * span))
+        horizontalSeekTarget = target
+        co.clock.scrubPreview = target
+    }
+
+    private func commitHorizontalSeek() {
+        guard let target = horizontalSeekTarget, co.duration > 0 else { cancelHorizontalSeek(); return }
+        co.seek(fraction: max(0, min(1, target / co.duration)))
+        horizontalSeekStart = nil
+        horizontalSeekTarget = nil
+        co.clock.scrubPreview = nil
+        scrubbing = false
+        flashChrome()
+    }
+
+    private func cancelHorizontalSeek() {
+        horizontalSeekStart = nil
+        horizontalSeekTarget = nil
+        co.clock.scrubPreview = nil
+        scrubbing = false
+    }
+
     // MARK: Taps
 
     private func handleTap() {
@@ -1789,8 +1820,9 @@ struct PlayerTouchCatcher: UIViewRepresentable {
     var onSpeedBegan: () -> Void
     var onSpeedChanged: (CGSize) -> Void
     var onSpeedEnded: () -> Void
-    var onSeekChanged: (Double) -> Void = { _ in }
-    var onSeekEnded: (Double) -> Void = { _ in }
+    var onSeekBegan: () -> Void = {}
+    var onSeekChanged: (CGFloat, CGFloat) -> Void = { _, _ in }
+    var onSeekEnded: () -> Void = {}
     var onSeekCancelled: () -> Void = {}
     var landscape: Bool = false
     var onAdjustBegan: (AdjustSide) -> Void = { _ in }
@@ -1818,6 +1850,7 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         c.onSpeedBegan = onSpeedBegan
         c.onSpeedChanged = onSpeedChanged
         c.onSpeedEnded = onSpeedEnded
+        c.onSeekBegan = onSeekBegan
         c.onSeekChanged = onSeekChanged
         c.onSeekEnded = onSeekEnded
         c.onSeekCancelled = onSeekCancelled
@@ -1831,7 +1864,7 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         // While speed HUD is up, keep catcher receiving the finger; chrome is hit-disabled.
         uiView.isUserInteractionEnabled = true
         c.longPress.isEnabled = playbackReady && !locked && speedEnabled
-        c.seekPan.isEnabled = playbackReady && !locked && !speedMode && speedEnabled
+        c.seekPan.isEnabled = playbackReady && !locked && !speedMode
         c.adjustPan.isEnabled = !locked
         c.doubleTapEnabled = playbackReady && !speedMode && !locked
         c.tap.isEnabled = !speedMode
@@ -1848,8 +1881,9 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         var onSpeedBegan: () -> Void = {}
         var onSpeedChanged: (CGSize) -> Void = { _ in }
         var onSpeedEnded: () -> Void = {}
-        var onSeekChanged: (Double) -> Void = { _ in }
-        var onSeekEnded: (Double) -> Void = { _ in }
+        var onSeekBegan: () -> Void = {}
+        var onSeekChanged: (CGFloat, CGFloat) -> Void = { _, _ in }
+        var onSeekEnded: () -> Void = {}
         var onSeekCancelled: () -> Void = {}
         var landscape = false
         var speedMode = false
@@ -1870,6 +1904,7 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         let seekPan = UIPanGestureRecognizer()
         /// Brightness / volume vertical pan (outer fifths, leaving the middle for paging).
         let adjustPan = UIPanGestureRecognizer()
+        private var seekActive = false
         private var adjustSide: AdjustSide?
         private var speedOrigin: CGPoint = .zero
         private var speedArmed = false
@@ -1886,12 +1921,10 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             // Small movement tolerance so a vertical page flick cancels speed long-press quickly.
             longPress.allowableMovement = 10
             longPress.cancelsTouchesInView = false
-            seekPan.addTarget(self, action: #selector(handleSeekPan))
+            seekPan.addTarget(self, action: #selector(handleSeek(_:)))
             seekPan.delegate = self
             seekPan.maximumNumberOfTouches = 1
             seekPan.cancelsTouchesInView = false
-            seekPan.delaysTouchesBegan = false
-            seekPan.delaysTouchesEnded = false
             adjustPan.addTarget(self, action: #selector(handleAdjust))
             adjustPan.delegate = self
             adjustPan.maximumNumberOfTouches = 1
@@ -1974,19 +2007,24 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             onPinchFill(g.scale > 1)
         }
 
-        @objc private func handleSeekPan(_ g: UIPanGestureRecognizer) {
+        @objc private func handleSeek(_ g: UIPanGestureRecognizer) {
             guard let view else { return }
             switch g.state {
+            case .began:
+                seekActive = true
+                onSeekBegan()
             case .changed:
-                // 0.12 seconds per point: a 100 pt horizontal drag moves about 12 seconds.
-                onSeekChanged(Double(g.translation(in: view).x) * 0.12)
+                guard seekActive else { return }
+                onSeekChanged(g.translation(in: view).x, max(1, view.bounds.width))
             case .ended:
-                let delta = Double(g.translation(in: view).x) * 0.12
-                onSeekEnded(delta)
+                guard seekActive else { return }
+                seekActive = false
+                onSeekEnded()
             case .cancelled, .failed:
+                guard seekActive else { return }
+                seekActive = false
                 onSeekCancelled()
-            default:
-                break
+            default: break
             }
         }
 
@@ -2015,24 +2053,20 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            // Brightness/volume and horizontal seek each own their classified pan; other
-            // gestures remain simultaneous so taps and long-press speed keep their existing behavior.
+            // The adjust pan owns its touch exclusively; horizontal seeking can coexist with feed paging
+            // until the direction gate identifies a horizontal drag.
             if gestureRecognizer === adjustPan || otherGestureRecognizer === adjustPan { return false }
-            if gestureRecognizer === seekPan || otherGestureRecognizer === seekPan { return false }
             return true
         }
 
-        /// Keep horizontal seeking ahead of competing pans. The seek recognizer's
-        /// direction gate rejects vertical movement immediately, allowing feed paging
-        /// to proceed; the adjust pan similarly claims only vertical movement in its
-        /// designated side regions.
+        /// In the edge strips the feed's paging pan waits for the adjust pan to fail; in the middle the
+        /// adjust pan fails on its first move (gestureRecognizerShouldBegin) so paging is not delayed.
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            if gestureRecognizer === seekPan, otherGestureRecognizer is UIPanGestureRecognizer { return true }
-            guard gestureRecognizer === adjustPan, otherGestureRecognizer !== adjustPan else { return false }
-            return otherGestureRecognizer is UIPanGestureRecognizer
+            gestureRecognizer === adjustPan && otherGestureRecognizer.view is UIScrollView
+                && otherGestureRecognizer is UIPanGestureRecognizer
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -2041,11 +2075,9 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             // Left strip reserved for interactive pop — never claim it.
             if gestureRecognizer !== pinch, x < view.edgeBackWidth { return false }
             if gestureRecognizer === seekPan, let pan = gestureRecognizer as? UIPanGestureRecognizer {
-                // Horizontal seeking is allowed across the screen except the navigation edge;
-                // vertical movement is left to brightness/volume adjustment or episode paging.
-                guard !speedMode else { return false }
+                guard !speedMode, !locked else { return false }
                 let v = pan.velocity(in: view)
-                return abs(v.x) > max(80, abs(v.y) * 1.25)
+                return abs(v.x) > abs(v.y) * 1.2
             }
             if gestureRecognizer === adjustPan, let pan = gestureRecognizer as? UIPanGestureRecognizer {
                 guard !speedMode, Coordinator.side(pan, in: view, landscape: landscape) != nil else { return false }
