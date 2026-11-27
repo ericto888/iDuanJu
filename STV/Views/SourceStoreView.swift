@@ -21,6 +21,7 @@ struct SourceStoreView: View {
             let category: String?
             let author: String?
             // Missing adult metadata is treated conservatively: hide until the user unlocks.
+            var isAdult: Bool { adult ?? true }
         }
         let schema: Int
         let name: String?
