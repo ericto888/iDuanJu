@@ -274,8 +274,7 @@ struct XVProvider: SiteProvider {
         return url.absoluteString
     }
 
-    /// XVideos has used several player layouts over time. Keep the native parser tolerant:
-    /// html5player calls, legacy flv_url, JSON config fields, then explicit media URLs.
+    /// XVideos / XNXX：只识别 html5player 的 setVideoHLS / setVideoUrlHigh / setVideoUrlLow 三个调用。
     static func streams(_ h: String, page: String) -> [HGStream] {
         let hdr = ["Referer": page, "User-Agent": TubeFmt.desktopUA]
         var out: [HGStream] = []
@@ -283,7 +282,7 @@ struct XVProvider: SiteProvider {
 
         func append(_ raw: String, quality: String, isHLS: Bool) {
             let url = mediaURL(raw, page: page)
-            guard !url.isEmpty, seen.insert(url).inserted else { return }
+            guard url.hasPrefix("https://"), seen.insert(url).inserted else { return }
             out.append(HGStream(streamId: "xv-\(out.count)", quality: quality, url: url,
                                 key: "", kind: isHLS ? .hls : .mp4Clear, headers: hdr))
         }
@@ -293,39 +292,6 @@ struct XVProvider: SiteProvider {
         for (fn, quality) in [("setVideoUrlHigh", "高清 MP4"), ("setVideoUrlLow", "标清 MP4")] {
             let value = call(fn, h)
             if !value.isEmpty { append(value, quality: quality, isHLS: false) }
-        }
-
-        let flvPatterns = [
-            #"(?:[?&])flv_url=([^&"'\s<>]+)"#,
-            #"flv_url\s*[:=]\s*'([^']*)'"#,
-            #"flv_url\s*[:=]\s*"([^"]*)""#
-        ]
-        for pattern in flvPatterns {
-            if let match = HTML.groups(pattern, h), match.count > 1 {
-                let encoded = match[1].replacingOccurrences(of: "+", with: "%20")
-                append(encoded.removingPercentEncoding ?? encoded, quality: "原画 · 直链", isHLS: false)
-                if !out.isEmpty { break }
-            }
-        }
-
-        let fields: [(String, String, Bool)] = [
-            ("(?:hls|video_hls|hls_url|hlsUrl)", "自动 · HLS", true),
-            ("(?:flv_url|video_url|videoUrl|urlHigh|urlLow|contentUrl)", "直链 · MP4", false)
-        ]
-        for (keys, quality, isHLS) in fields {
-            let pattern = #"[\"']?"# + keys + #"[\"']?\s*:\s*[\"']([^\"']+)[\"']"#
-            for match in HTML.all(pattern, h) where match.count > 1 {
-                append(match[1], quality: quality, isHLS: isHLS)
-            }
-        }
-
-        let normalizedHTML = h.replacingOccurrences(of: "\\/", with: "/")
-        let rawPattern = #"(?:https?:)?//[^"'\s<>]+?\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?"#
-
-        for match in HTML.all(rawPattern, normalizedHTML) where !match.isEmpty {
-            let raw = match[0].hasPrefix("//") ? "https:" + match[0] : match[0]
-            let isHLS = raw.range(of: #"\.m3u8(?:\?|$)"#, options: .regularExpression) != nil
-            append(raw, quality: isHLS ? "自动 · HLS" : "直链 · MP4", isHLS: isHLS)
         }
         return out
     }

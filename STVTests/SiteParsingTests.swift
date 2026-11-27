@@ -115,24 +115,21 @@ final class SiteParsingTests: XCTestCase {
         XCTAssertEqual(s.map(\.url), ["https://hls.example.com/x/hls.m3u8", "https://mp4.example.com/hd.mp4?secure=a", "https://mp4.example.com/sd.mp4?secure=a"])
         XCTAssertEqual(s[0].headers["Referer"], "https://www.xvideos.com/video.olukc/slug")
 
-        // Current and legacy player layouts: double quotes, escaped slashes, config fields and flv_url.
+        // Current player layout: double quotes and escaped slashes.
         let modern = #"html5player.setVideoHLS("https:\/\/hls.example.com\/master.m3u8?x=1\u0026y=2");"#
         let modernStreams = XVProvider.streams(modern, page: "https://www.xvideos.com/video.test/slug")
         XCTAssertEqual(modernStreams.first?.url, "https://hls.example.com/master.m3u8?x=1&y=2")
         XCTAssertEqual(modernStreams.first?.kind, .hls)
 
+        // Only the three html5player calls are recognized: config fields, flv_url and raw URLs are ignored.
         let config = #"{"hls_url":"https://hls.example.com/config.m3u8","videoUrl":"https://cdn.example.com/video.mp4"}"#
-        let configStreams = XVProvider.streams(config, page: "https://www.xvideos.com/video.test/slug")
-        XCTAssertEqual(configStreams.map(\.url), ["https://hls.example.com/config.m3u8", "https://cdn.example.com/video.mp4"])
-        XCTAssertEqual(configStreams.map(\.kind), [.hls, .mp4Clear])
+        XCTAssertTrue(XVProvider.streams(config, page: "https://www.xvideos.com/video.test/slug").isEmpty)
 
         let legacy = #"https://www.xvideos.com/video.test/?flv_url=https%3A%2F%2Fcdn.example.com%2Flegacy.mp4%3Ftoken%3Da%26q%3D1"#
-        XCTAssertEqual(XVProvider.streams(legacy, page: "https://www.xvideos.com/video.test/slug").first?.url,
-                       "https://cdn.example.com/legacy.mp4?token=a&q=1")
+        XCTAssertTrue(XVProvider.streams(legacy, page: "https://www.xvideos.com/video.test/slug").isEmpty)
 
         let raw = #"window.video = "https://cdn.example.com/fallback.mp4";"#
-        XCTAssertEqual(XVProvider.streams(raw, page: "https://www.xvideos.com/video.test/slug").first?.url,
-                       "https://cdn.example.com/fallback.mp4")
+        XCTAssertTrue(XVProvider.streams(raw, page: "https://www.xvideos.com/video.test/slug").isEmpty)
     }
 
     func testPornhub() {
