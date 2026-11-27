@@ -281,6 +281,7 @@ struct PlayerPortraitDock: View {
     var liveChannelsTitle: String = "频道"
     var liveGuideActive: Bool = false
     let onPlayPause: () -> Void
+    var showSeekControls: Bool = true
     let onSeekBackward: () -> Void
     let onSeekForward: () -> Void
     let onEpisodes: () -> Void
@@ -305,7 +306,7 @@ struct PlayerPortraitDock: View {
             .accessibilityLabel(paused ? "播放" : "暂停")
             .accessibilityIdentifier("player.playPause")
 
-            if !isLive {
+            if !isLive && showSeekControls {
                 Button(action: onSeekBackward) {
                     Image(systemName: "gobackward.10").font(.system(size: 14, weight: .medium))
                         .foregroundStyle(PlayerPalette.ivory).frame(width: 32, height: 36)
