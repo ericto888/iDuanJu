@@ -61,6 +61,9 @@ struct PlayerScreen: View {
     @State private var seekRun: (total: Int, at: Date)?
     /// Preview-only horizontal seek delta; playback is committed once when the gesture ends.
     @State private var seekPreviewDelta: Double?
+    /// Orientation decisions are made once the current episode is ready, never while it is loading.
+    @State private var orientationEpisode: Int?
+    @State private var orientationIsPortrait: Bool?
     @Environment(\.verticalSizeClass) private var vClass
     @Environment(\.layoutMetrics) private var layoutMetrics
     @Environment(\.dismiss) private var dismiss
@@ -89,6 +92,21 @@ struct PlayerScreen: View {
     private var aspect: CGFloat {
         if co.videoSize.width > 0, co.videoSize.height > 0 { return co.videoSize.width / co.videoSize.height }
         return series.orientation == "portrait" || (!series.source.isLongVideo && series.orientation != "landscape") ? 9.0 / 16 : 16.0 / 9
+    }
+
+    /// Apply orientation policy only after the active episode has a ready playback item.
+    /// Portrait videos lock portrait; landscape videos let UIKit follow the physical device orientation.
+    @MainActor private func syncEpisodeOrientation() {
+        guard let index = co.current, co.readyIndex == index else { return }
+        let portrait = aspect < 1.0
+        guard orientationEpisode != index || orientationIsPortrait != portrait else { return }
+        orientationEpisode = index
+        orientationIsPortrait = portrait
+        if portrait {
+            OrientationGate.lockPortrait()
+        } else {
+            OrientationGate.allowDeviceRotation()
+        }
     }
 
     /// Immutable render viewport. Expanded/compact controls are independent overlays, never an inset.
@@ -297,7 +315,9 @@ struct PlayerScreen: View {
             nextDramaPick = await NextDramaRecommender.shared.pickNextDrama(current: d, seasons: seasons, watched: watched)
         }
         .task {
-            OrientationGate.unlock()
+            // The player always starts in portrait. Rotation is enabled only after a
+            // confirmed landscape episode is ready.
+            OrientationGate.lockPortrait()
             co.start()
             if co.current == nil { await load() }
         }
@@ -337,7 +357,17 @@ struct PlayerScreen: View {
             showOSD(text)
             co.notice = nil
         }
+        .compatOnChange(of: co.readyIndex) { _ in
+            syncEpisodeOrientation()
+        }
+        .compatOnChange(of: co.videoSize) { _ in
+            syncEpisodeOrientation()
+        }
         .compatOnChange(of: co.current) { new in
+            // Hold the current interface orientation while the next episode is resolving/loading.
+            orientationEpisode = nil
+            orientationIsPortrait = nil
+            OrientationGate.freezeCurrentOrientation()
             scrubbing = false
             if let new, co.channelList, co.episodes.indices.contains(new) {
                 LiveHooks.remember(co.episodes[new], in: series)
