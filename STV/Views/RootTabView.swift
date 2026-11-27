@@ -108,6 +108,8 @@ private struct Stack<V: View>: View {
 }
 
 struct GlassTabBar: View {
+    /// Vertical space reserved below root-page content for the floating tab bar.
+    static let clearance: CGFloat = 72
     @Binding var selection: Int
     let items: [(String, String)]
     var onReselect: (Int) -> Void = { _ in }
