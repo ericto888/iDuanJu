@@ -1464,7 +1464,8 @@ struct PlayerScreen: View {
 
     private func updateHorizontalSeek(translation: CGFloat, width: CGFloat) {
         guard let start = horizontalSeekStart, co.duration > 0, width > 0 else { return }
-        let span = min(co.duration, 120)
+        // Map the full gesture width to the complete video timeline.
+        let span = co.duration
         let target = max(0, min(co.duration, start + Double(translation / width) * span))
         horizontalSeekTarget = target
         co.clock.scrubPreview = target
