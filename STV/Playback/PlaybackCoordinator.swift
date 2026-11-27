@@ -278,6 +278,8 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     private var audioObservers: [NSObjectProtocol] = []
     private var nowPlaying: MPNowPlayingSession?
     @Published private(set) var pipActive = false
+    /// Hides the in-app PiP return affordance as soon as AVKit starts restoring the app UI.
+    @Published private(set) var pipReturnRequested = false
     @Published var pipError: String?
     private var restoringPiP = false
     private var backgrounded = false
@@ -579,6 +581,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         // and renderer mutations that can trigger UIKit layout must stay on the main actor.
         Task { @MainActor [weak self] in
             guard let self, controller === self.pip else { return }
+            self.pipReturnRequested = false
             self.pipActive = true
             self.engine.setPiPActive(true)
         }
@@ -599,7 +602,9 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         Task { @MainActor [weak self] in
             guard let self else { completion(false); return }
             self.restoringPiP = true
-            completion(controller === self.pip && self.observer != nil)
+            let canRestore = controller === self.pip && self.observer != nil
+            if canRestore { self.pipReturnRequested = true }
+            completion(canRestore)
         }
     }
 
@@ -607,6 +612,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         Task { @MainActor [weak self] in
             guard let self, controller === self.pip else { return }
             self.pipActive = false
+            self.pipReturnRequested = false
             // A software source or fallback can replace the PiP content during an episode load.
             // That stop belongs to the handover, not to the user pressing the close button.
             if self.continuePiP {
