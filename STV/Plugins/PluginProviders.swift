@@ -301,14 +301,19 @@ struct JSVideoProvider: SiteProvider {
     var pluginID: String { source.pluginID ?? "" }
     static let homeID = "__home"
 
+    static func visibleCategories(cached: [PluginCategory], features: [String]?) -> [SiteCategory] {
+        let mapped = cached.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }
+        // Category-shelf plugins expose only real categories. Legacy plugins retain the
+        // historical __home entry so DynamicSiteFeed can keep using home() as its feed.
+        if PluginHomeFeatures.usesCategoryShelves(features) { return mapped }
+        return mapped.isEmpty ? [SiteCategory(id: homeID, title: "推荐", path: homeID)] : mapped
+    }
+
     var categories: [SiteCategory] {
-        let cached = (PluginStore.snapshot(pluginID)?.cachedCategories ?? []).map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }
-        // Category-shelf plugins must expose only real site categories. Legacy plugins retain
-        // the historical __home entry so DynamicSiteFeed can keep using home() as its feed.
-        if PluginHomeFeatures.usesCategoryShelves(PluginStore.snapshot(pluginID)?.manifest.homeFeatures) {
-            return cached
-        }
-        return cached.isEmpty ? [SiteCategory(id: Self.homeID, title: "推荐", path: Self.homeID)] : cached
+        Self.visibleCategories(
+            cached: PluginStore.snapshot(pluginID)?.cachedCategories ?? [],
+            features: PluginStore.snapshot(pluginID)?.manifest.homeFeatures
+        )
     }
 
     private func series(_ o: [String: Any]) -> HGSeries? {
