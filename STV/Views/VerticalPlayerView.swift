@@ -62,17 +62,12 @@ struct PlayerScreen: View {
     /// Horizontal drag seek preview, committed once when the gesture ends.
     @State private var horizontalSeekStart: Double?
     @State private var horizontalSeekTarget: Double?
-    /// Orientation decisions are made once the current episode is ready, never while it is loading.
-    @State private var orientationEpisode: Int?
-    @State private var orientationIsPortrait: Bool?
     /// Last confirmed episode direction, used only as a temporary fallback during episode transitions.
     @State private var lastConfirmedVideoIsLandscape: Bool?
     @State private var liftFallbackEpisode: Int?
     @State private var liftFallbackIsLandscape: Bool?
     /// Direction of the outgoing held frame; snapshots use viewport dimensions, not video dimensions.
     @State private var heldFrameIsLandscape: Bool?
-    /// Preserve an already-entered landscape fullscreen session across automatic next-episode transitions.
-    @State private var preserveLandscapeForAutoNext = false
     @Environment(\.verticalSizeClass) private var vClass
     @Environment(\.layoutMetrics) private var layoutMetrics
     @Environment(\.dismiss) private var dismiss
@@ -129,25 +124,6 @@ struct PlayerScreen: View {
     private var aspect: CGFloat {
         if co.videoSize.width > 0, co.videoSize.height > 0 { return co.videoSize.width / co.videoSize.height }
         return series.orientation == "portrait" || (!series.source.isLongVideo && series.orientation != "landscape") ? 9.0 / 16 : 16.0 / 9
-    }
-
-    /// Apply orientation policy only after the active episode has a ready playback item.
-    /// Portrait videos lock portrait; landscape videos let UIKit follow the physical device orientation.
-    @MainActor private func syncEpisodeOrientation() {
-        guard let index = co.current, co.readyIndex == index else { return }
-        let portrait = aspect < 1.0
-        guard orientationEpisode != index || orientationIsPortrait != portrait else { return }
-        orientationEpisode = index
-        orientationIsPortrait = portrait
-        if preserveLandscapeForAutoNext {
-            // The previous episode was already playing in landscape fullscreen.
-            // Do not let the next episode's aspect ratio collapse that fullscreen session.
-            OrientationGate.allowDeviceRotation()
-        } else if portrait {
-            OrientationGate.lockPortrait()
-        } else {
-            OrientationGate.allowDeviceRotation()
-        }
     }
 
     /// Immutable render viewport. Expanded/compact controls are independent overlays, never an inset.
@@ -401,20 +377,6 @@ struct PlayerScreen: View {
             guard let text else { return }
             showOSD(text)
             co.notice = nil
-        }
-        .compatOnChange(of: co.readyIndex) { _ in
-            rememberConfirmedVideoOrientation()
-            syncEpisodeOrientation()
-        }
-        .compatOnChange(of: co.videoSize) { _ in
-            rememberConfirmedVideoOrientation()
-            if co.readyIndex != co.current {
-                // Also covers line changes that reopen the same episode index.
-                orientationEpisode = nil
-                orientationIsPortrait = nil
-            } else {
-                syncEpisodeOrientation()
-            }
         }
         .compatOnChange(of: co.current) { new in
             // Keep the outgoing episode's confirmed direction only while the incoming episode loads.
