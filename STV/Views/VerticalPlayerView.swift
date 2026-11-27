@@ -361,9 +361,8 @@ struct PlayerScreen: View {
             nextDramaPick = await NextDramaRecommender.shared.pickNextDrama(current: d, seasons: seasons, watched: watched)
         }
         .task {
-            // The player always starts in portrait. Rotation is enabled only after a
-            // confirmed landscape episode is ready.
-            OrientationGate.lockPortrait()
+            // Match upstream: portrait is the default; the user or system may rotate the device.
+            OrientationGate.unlock()
             co.start()
             if co.current == nil { await load() }
         }
@@ -422,15 +421,7 @@ struct PlayerScreen: View {
             liftFallbackEpisode = new
             liftFallbackIsLandscape = lastConfirmedVideoIsLandscape
             heldFrameIsLandscape = lastConfirmedVideoIsLandscape
-            // If auto-next starts while the player is already landscape, carry that fullscreen
-            // session into the next episode. Loading must not collapse it to portrait.
-            if co.lastAdvanceWasAuto && landscape {
-                preserveLandscapeForAutoNext = true
-            }
-            // Hold the current interface orientation while the next episode is resolving/loading.
-            orientationEpisode = nil
-            orientationIsPortrait = nil
-            OrientationGate.freezeCurrentOrientation()
+            // Keep the outgoing frame direction for the 46pt visual lift while the next episode loads.
             scrubbing = false
             if let new, co.channelList, co.episodes.indices.contains(new) {
                 LiveHooks.remember(co.episodes[new], in: series)
