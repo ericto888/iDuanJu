@@ -431,6 +431,15 @@ struct PlayerScreen: View {
             if !l {
                 locked = false
                 preserveLandscapeForAutoNext = false
+
+                // Returning to portrait ends the carried fullscreen session.
+                // Re-apply the current episode's policy instead of leaving the
+                // permissive landscape mask active after auto-next.
+                if orientationIsPortrait == true {
+                    OrientationGate.lockPortrait()
+                } else if orientationIsPortrait == false {
+                    OrientationGate.allowDeviceRotation()
+                }
             }
             panel = nil
         }
@@ -1976,13 +1985,14 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             return true
         }
 
-        /// In the edge strips the feed's paging pan waits for the adjust pan to fail; in the middle the
-        /// adjust pan fails on its first move (gestureRecognizerShouldBegin) so paging is not delayed.
+        /// Only the vertical brightness/volume pan may hold the feed's paging pan:
+        /// it can begin solely in its designated side regions. Horizontal seeking
+        /// relies on its direction gate in gestureRecognizerShouldBegin, so it does
+        /// not impose a blanket failure dependency on every scroll-view pan.
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            if gestureRecognizer === seekPan, otherGestureRecognizer is UIPanGestureRecognizer { return true }
             guard gestureRecognizer === adjustPan, otherGestureRecognizer !== adjustPan else { return false }
             return otherGestureRecognizer is UIPanGestureRecognizer
         }
