@@ -1,6 +1,11 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+private extension UTType {
+    /// Imported plugin bundles shared through Files use the .idjplugin extension.
+    static let idjPlugin = UTType(importedAs: "com.ericto888.idjplugin", conformingTo: .data)
+}
+
 /// 我的 → 插件：已安装插件、添加（网址 / 文件 / 粘贴）、订阅、内置推荐、苹果 CMS 采集站、检查更新。
 struct PluginsView: View {
     @ObservedObject private var store = PluginStore.shared
@@ -133,7 +138,7 @@ struct PluginsView: View {
         }
         .sheet(isPresented: $showPaste) { PasteSheet { text in showPaste = false; if let text { interpret(text) } } }
         .sheet(isPresented: $showCMS) { AddCMSSheet { showCMS = false; if let m = $0 { message = m } } }
-        .fileImporter(isPresented: $showFile, allowedContentTypes: [.json, .data, .plainText, .item]) { r in
+        .fileImporter(isPresented: $showFile, allowedContentTypes: [.idjPlugin, .json, .data, .plainText, .item]) { r in
             guard case let .success(url) = r else { return }
             let ok = url.startAccessingSecurityScopedResource()
             defer { if ok { url.stopAccessingSecurityScopedResource() } }
