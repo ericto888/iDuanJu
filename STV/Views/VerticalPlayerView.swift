@@ -66,6 +66,8 @@ struct PlayerScreen: View {
     @State private var orientationIsPortrait: Bool?
     /// Preserve an already-entered landscape fullscreen session across automatic next-episode transitions.
     @State private var preserveLandscapeForAutoNext = false
+    /// Keep the last confirmed video offset while the next episode temporarily clears videoSize.
+    @State private var lastReadyVideoLift: CGFloat?
     @Environment(\.verticalSizeClass) private var vClass
     @Environment(\.layoutMetrics) private var layoutMetrics
     @Environment(\.dismiss) private var dismiss
@@ -75,8 +77,17 @@ struct PlayerScreen: View {
     private var isPortraitVideo: Bool { aspect < 1.0 }
     /// Wide video in an upright handset is shifted upward without moving controls or subtitles.
     private var videoLift: CGFloat {
-        guard !layoutMetrics.isPad, aspect > 1.0 else { return 0 }
-        return landscape ? 0 : 46
+        guard !layoutMetrics.isPad, !landscape else { return 0 }
+        if co.readyIndex == co.current, co.videoSize.width > 0, co.videoSize.height > 0 {
+            return co.videoSize.width / co.videoSize.height > 1.0 ? 46 : 0
+        }
+        return lastReadyVideoLift ?? (aspect > 1.0 ? 46 : 0)
+    }
+
+    /// Update only from a confirmed active episode; the zero-size loading state must not erase it.
+    private func updateLastReadyVideoLift() {
+        guard co.readyIndex == co.current, co.videoSize.width > 0, co.videoSize.height > 0 else { return }
+        lastReadyVideoLift = !layoutMetrics.isPad && !landscape && co.videoSize.width / co.videoSize.height > 1.0 ? 46 : 0
     }
     private var canShowPadSplit: Bool {
         layoutMetrics.isPad && layoutMetrics.isLandscape && layoutMetrics.width >= 840 && aspect < 1.0 && !co.pipActive && !co.episodes.isEmpty
@@ -364,9 +375,11 @@ struct PlayerScreen: View {
             co.notice = nil
         }
         .compatOnChange(of: co.readyIndex) { _ in
+            updateLastReadyVideoLift()
             syncEpisodeOrientation()
         }
         .compatOnChange(of: co.videoSize) { _ in
+            updateLastReadyVideoLift()
             if co.readyIndex != co.current {
                 // Also covers line changes that reopen the same episode index.
                 orientationEpisode = nil
