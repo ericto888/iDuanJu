@@ -427,19 +427,7 @@ struct PlayerScreen: View {
         }
         
         .compatOnChange(of: landscape) { l in
-            if !l {
-                locked = false
-                preserveLandscapeForAutoNext = false
-
-                // Returning to portrait ends the carried fullscreen session.
-                // Re-apply the current episode's policy instead of leaving the
-                // permissive landscape mask active after auto-next.
-                if orientationIsPortrait == true {
-                    OrientationGate.lockPortrait()
-                } else if orientationIsPortrait == false {
-                    OrientationGate.allowDeviceRotation()
-                }
-            }
+            if !l { locked = false }
             panel = nil
         }
         .sheet(item: $verifyTarget) { t in SiteVerifySheet(target: t) { if let c = co.current { co.activate(c) } } }
