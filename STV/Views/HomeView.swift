@@ -551,8 +551,13 @@ private struct HomePage: View {
 private struct HomeFeedPage: View {
     let source: HomeSource
     @Binding var tab: HomeTab
+    @ObservedObject private var pluginStore = PluginStore.shared
     @State private var legacyChannels: [HuangguoChannel] = []
     @State private var legacyError: Error?
+    @State private var pluginHomeSource: String?
+    @State private var pluginFeatured: [HGSeries] = []
+    @State private var pluginHomeError: Error?
+    @State private var featuredIndex = 0
     private let gutter: CGFloat = 16
     /// DEBUG `STV_HOME_SCROLL=bottom` opens the feed scrolled to the end (simulator screenshots).
     private static var debugAnchor: UnitPoint? {
@@ -563,15 +568,21 @@ private struct HomeFeedPage: View {
     }
 
     var body: some View {
-        if case .site(let source) = tab, source.cmsKey != nil || source.pluginID != nil {
-            DynamicSiteFeed(source: source)
+        // CMS is unchanged in this pass. JS video plugins use the shared native homepage UI.
+        if case .site(let site) = tab, site.cmsKey != nil {
+            DynamicSiteFeed(source: site)
         } else {
             rankFeed
         }
     }
 
     private var rankFeed: some View {
-        let boards = self.boards
+        let allBoards = self.boards
+        let pluginID = sourcePluginID
+        let features = pluginID.flatMap { PluginStore.snapshot($0)?.manifest.homeFeatures } ?? []
+        let categoryShelves = features.contains("categoryShelves")
+        let boards = pluginID != nil && !categoryShelves ? Array(allBoards.prefix(1)) : allBoards
+        let hasFeatured = !pluginFeatured.isEmpty
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if source.subs.count > 1 { subChips } else if case .site = source { boardChips(boards) }
@@ -580,9 +591,13 @@ private struct HomeFeedPage: View {
                 } else {
                     // Lazy: boards below the fold are neither built nor requested until they are scrolled to.
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        if let first = boards.first { HomeHeroSection(feed: BoardCache.shared.feed(first), board: first).id(first.id) }
+                        if hasFeatured {
+                            HomePluginFeaturedSection(title: source.label, items: pluginFeatured, index: $featuredIndex)
+                        } else if let first = boards.first {
+                            HomeHeroSection(feed: BoardCache.shared.feed(first), board: first).id(first.id)
+                        }
                         if source == .hongguo { HomeContinueSection() }
-                        sections(boards)
+                        sections(boards, featuredIDs: Set(pluginFeatured.map(\.id)))
                     }
                 }
             }
@@ -596,7 +611,31 @@ private struct HomeFeedPage: View {
         .refreshable {
             if tab == .actorRank { await ActorRankStore.shared.reload() } else { boards.forEach { BoardCache.shared.feed($0).load(force: true) } }
         }
-        .task(id: tab) { if case .huangguo(.legacy) = tab, legacyChannels.isEmpty { await loadLegacy() } }
+        .task(id: tab) {
+            if case .site(let site) = tab, site.pluginID != nil {
+                await loadPluginHome(site)
+            } else if case .huangguo(.legacy) = tab, legacyChannels.isEmpty {
+                await loadLegacy()
+            }
+        }
+    }
+
+    private var sourcePluginID: String? {
+        if case .site(let site) = source { return site.pluginID }
+        return nil
+    }
+
+    private func loadPluginHome(_ site: DramaSource) async {
+        guard let id = site.pluginID, pluginHomeSource != id else { return }
+        pluginHomeSource = id
+        do {
+            guard let provider = Sites.provider(site) as? JSVideoProvider else { return }
+            let data = try await provider.homeData()
+            pluginFeatured = data.featured
+            pluginHomeError = nil
+        } catch {
+            pluginHomeError = error
+        }
     }
 
     /// ui-redesign 10: secondary boards are the same segmented control as 找剧.
@@ -631,19 +670,24 @@ private struct HomeFeedPage: View {
         case .huangguo(.ai): HuangguoClient.aiChannels.map { BoardSpec(kind: .huangguo($0)) }
         case .huangguo(.video): HuangguoClient.videoChannels.map { BoardSpec(kind: .huangguo($0)) }
         case .huangguo(.legacy): legacyChannels.map { BoardSpec(kind: .huangguo($0)) }
-        case .site(let s): (Sites.provider(s)?.categories ?? []).map { BoardSpec(kind: .site(s, $0)) }
+        case .site(let s): (Sites.provider(s)?.categories ?? []).map { category in
+            let numbered = s.pluginID.map { PluginStore.snapshot($0)?.manifest.homeFeatures?.contains("numbered") ?? false } ?? true
+            return BoardSpec(kind: .site(s, category), numbered: numbered)
+        }
         case .actorRank: []
         }
     }
 
-    @ViewBuilder private func sections(_ boards: [BoardSpec]) -> some View {
+    @ViewBuilder private func sections(_ boards: [BoardSpec], featuredIDs: Set<String> = []) -> some View {
         if case .huangguo(.legacy) = tab, legacyChannels.isEmpty {
             if let legacyError { ErrorStateView(error: legacyError) { Task { await loadLegacy() } } }
             else { HomeCardsSkeleton(landscape: false).padding(.horizontal, gutter).padding(.top, 24) }
         } else {
             let landscape: Bool = { if case .site(let s) = tab { return s.isLongVideo } else { return false } }()
             ForEach(Array(boards.enumerated()), id: \.element.id) { n, b in
-                HomeBoardSection(feed: BoardCache.shared.feed(b), board: b, skip: n == 0 ? HomeHeroSection.count : 0, landscape: landscape) {
+                HomeBoardSection(feed: BoardCache.shared.feed(b), board: b,
+                                 skip: n == 0 && featuredIDs.isEmpty ? HomeHeroSection.count : 0,
+                                 landscape: landscape, excludeIDs: featuredIDs) {
                     boards.forEach { BoardCache.shared.feed($0).load(force: true) }
                 }
                 .padding(.top, 24)
@@ -653,6 +697,21 @@ private struct HomeFeedPage: View {
 
     private func loadLegacy() async {
         do { legacyChannels = try await HuangguoClient.shared.legacyChannels(); legacyError = nil } catch { legacyError = error }
+    }
+}
+
+/// Featured items returned by home() and explicitly enabled by manifest.homeFeatures.
+private struct HomePluginFeaturedSection: View {
+    let title: String
+    let items: [HGSeries]
+    @Binding var index: Int
+    var body: some View {
+        let picks = Array(items.prefix(5))
+        if !picks.isEmpty {
+            PosterHero(board: title, picks: picks, index: $index)
+                .padding(.horizontal, 16).padding(.top, 16)
+                .transition(.opacity)
+        }
     }
 }
 
@@ -694,6 +753,7 @@ private struct HomeBoardSection: View {
     /// Items already shown by the hero above.
     let skip: Int
     let landscape: Bool
+    var excludeIDs: Set<String> = []
     let reloadAll: () -> Void
     @State private var verify: VerifyTarget?
 
@@ -717,7 +777,8 @@ private struct HomeBoardSection: View {
                 }
             } else if case .loaded(let items) = feed.state {
                 // 第一个榜单一律跳过 hero 里已展示的剧（数据不够时也跳过，只剩标题和「全部」）。
-                HomeShelf(title: board.title, note: nil, items: Array(items.dropFirst(skip).prefix(12)), more: board)
+                HomeShelf(title: board.title, note: nil,
+                          items: Array(items.filter { !excludeIDs.contains($0.id) }.dropFirst(skip).prefix(12)), more: board)
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     DSSectionHeader(title: board.title)
@@ -1177,11 +1238,12 @@ struct BoardListView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 if let e = pager.error, pager.items.isEmpty { ErrorStateView(error: e) { reload() } }
-                else { NumberedGrid(items: pager.items, hasMore: pager.hasMore, loading: pager.isLoading) { pager.loadMore() } }
+                else { NumberedGrid(items: pager.items, numbered: board.numbered, hasMore: pager.hasMore, loading: pager.isLoading) { pager.loadMore() } }
             }.padding(.vertical, 8)
         }
         .accessibilityIdentifier("screen.board")
         .dsNavigation(board.title)
+        .refreshable { reload() }
         .task { if pager.items.isEmpty { reload() } }
     }
     private func reload() { let b = board; pager.reset { try await b.fetch($0, $1) } }
