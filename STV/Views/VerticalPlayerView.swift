@@ -326,7 +326,7 @@ struct PlayerScreen: View {
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .statusBarHidden(landscape || !controlsVisible || panel == .danmaku)
-        .environment(\.colorScheme, .dark)
+        .preferredColorScheme(.dark)
         .persistentSystemOverlays(.hidden)
         .animation(.easeOut(duration: 0.18), value: panel)
         .task(id: co.current) {
