@@ -838,10 +838,19 @@ struct PlayerScreen: View {
                 Spacer(minLength: 12)
                 Group {
                     if showTech, let t = co.tech { PlayerTechStrip(telemetry: co.telemetry, landscape: true).padding(.trailing, 4) }
-                    PlayerChip(id: "player.autoNext", a11y: co.autoNext ? "关闭连播" : "开启连播", symbol: "repeat",
-                               title: "连播", value: co.autoNext ? "开" : "关", on: co.autoNext) {
-                        co.autoNext.toggle(); showOSD(co.autoNext ? "连播：开" : "连播：关"); flashChrome()
-                    }
+                    PlayerChip(action: PlayerAction(
+                        id: "player.autoNext",
+                        a11y: co.autoNext ? "关闭连播" : "开启连播",
+                        symbol: "repeat",
+                        title: "连播",
+                        value: co.autoNext ? "开" : "关",
+                        active: co.autoNext,
+                        action: {
+                            co.autoNext.toggle()
+                            showOSD(co.autoNext ? "连播：开" : "连播：关")
+                            flashChrome()
+                        }
+                    ))
                     PlayerIconButton(symbol: "lock.open", label: "锁屏") { locked = true; panel = nil; flashChrome() }
                         .accessibilityIdentifier("player.lock")
                     PlayerIconButton(symbol: "ellipsis", label: "更多", tint: panel == .more ? STVTheme.accent : .white) {
