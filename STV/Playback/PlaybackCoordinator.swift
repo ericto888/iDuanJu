@@ -575,51 +575,40 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     }
 
     func pictureInPictureControllerWillStartPictureInPicture(_ controller: AVPictureInPictureController) {
-        // AVKit may deliver delegate callbacks from a private queue. All coordinator state
-        // and renderer mutations that can trigger UIKit layout must stay on the main actor.
-        Task { @MainActor [weak self] in
-            guard let self, controller === self.pip else { return }
-            self.pipActive = true
-            self.engine.setPiPActive(true)
-        }
+        guard controller === pip else { return }
+        pipActive = true
+        engine.setPiPActive(true)
     }
 
     func pictureInPictureController(_ controller: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
-        Task { @MainActor [weak self] in
-            guard let self, controller === self.pip else { return }
-            self.pipActive = false
-            self.engine.setPiPActive(false)
-            self.continuePiP = false
-            if !self.backgrounded { self.pipError = error.localizedDescription }
-        }
+        guard controller === pip else { return }
+        pipActive = false
+        engine.setPiPActive(false)
+        continuePiP = false
+        if !backgrounded { pipError = error.localizedDescription }
     }
 
     func pictureInPictureController(_ controller: AVPictureInPictureController,
                                     restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completion: @escaping (Bool) -> Void) {
-        Task { @MainActor [weak self] in
-            guard let self else { completion(false); return }
-            self.restoringPiP = true
-            completion(controller === self.pip && self.observer != nil)
-        }
+        restoringPiP = true
+        completion(controller === pip && observer != nil)
     }
 
     func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
-        Task { @MainActor [weak self] in
-            guard let self, controller === self.pip else { return }
-            self.pipActive = false
-            // A software source or fallback can replace the PiP content during an episode load.
-            // That stop belongs to the handover, not to the user pressing the close button.
-            if self.continuePiP {
-                // Keep the replacement renderer alive until its own PiP controller starts. Clearing
-                // this flag here can tear down the newly loaded video while still backgrounded.
-                if self.readyIndex != nil { self.refreshPiP() }
-            } else {
-                self.engine.setPiPActive(false)
-                if !self.restoringPiP { self.setPaused(true) }
-                else { self.resumeIfRequested() }
-            }
-            self.restoringPiP = false
+        guard controller === pip else { return }
+        pipActive = false
+        // A software source or fallback can replace the PiP content during an episode load.
+        // That stop belongs to the handover, not to the user pressing the close button.
+        if continuePiP {
+            // Keep the replacement renderer alive until its own PiP controller starts. Clearing
+            // this flag here can tear down the newly loaded video while still backgrounded.
+            if readyIndex != nil { refreshPiP() }
+        } else {
+            engine.setPiPActive(false)
+            if !restoringPiP { setPaused(true) }
+            else { resumeIfRequested() }
         }
+        restoringPiP = false
     }
 
     func didEnterBackground() {
@@ -637,8 +626,10 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         audioSessionActive = false
         continuePiP = false
         if !pipActive { engine.setPiPActive(false) }
-        // AVKit owns the stop when the user restores the app from the PiP window. Stopping
-        // it again here races the restore delegate and can relayout the video surface twice.
+        if pip?.isPictureInPictureActive == true {
+            restoringPiP = true
+            pip?.stopPictureInPicture()
+        }
         resumeIfRequested()
         // Engine foreground restoration may itself be asynchronous. Reconcile once afterwards,
         // re-reading intent so a pause pressed in the meantime always wins.
