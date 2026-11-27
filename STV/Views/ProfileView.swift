@@ -165,6 +165,7 @@ private struct ProfileLinks: View {
             DSSection(separatorInset: 58) {
                 DSLinkRow("Telegram 频道", route: Route.channels, icon: "paperplane", value: counts.channels)
                 DSLinkRow("漫画", route: Route.mangaHome, icon: "book", value: counts.manga)
+                DSLinkRow("小说", route: Route.novel, icon: "text.book.closed")
                 DSLinkRow("下载管理", route: Route.downloads, icon: "arrow.down.circle", value: counts.downloads)
             }
             DSSection(separatorInset: 58) {
