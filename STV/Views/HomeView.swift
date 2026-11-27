@@ -895,7 +895,6 @@ private struct DynamicSiteFeed: View {
                                 .padding(.top, 4)
                                 .compatOnChange(of: featuredIndex) { index in
                                     if featuredItems.indices.contains(index) {
-                                        onHero(featuredItems[index].cover)
                                     }
                                 }
                         }
