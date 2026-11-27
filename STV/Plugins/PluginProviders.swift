@@ -237,7 +237,7 @@ struct JSComicProvider: MangaProvider {
         let cover = PluginOut.url(o["cover"])
         return MangaItem(source: source, mangaId: id, title: title,
                          cover: PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"]),
-                                                transform: PluginOut.mediaTransform(o["coverTransform"])) ,
+                                                transform: PluginOut.mediaTransform(o["coverTransform"])),
                          author: PluginOut.s(o["author"], max: 80), tags: tags, latest: PluginOut.s(o["remarks"], max: 40))
     }
 
