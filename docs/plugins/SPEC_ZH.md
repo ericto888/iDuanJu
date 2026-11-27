@@ -46,7 +46,7 @@ manga18fx/
 | 函数 | 参数 | 返回 | 何时调用 |
 |---|---|---|---|
 | `init` | `{}` | 无 | 每次加载插件 |
-| `home` | `{}` | `{ categories, items? }` | 打开插件首页；声明 `featured` 时，`items` 用作精选轮播；声明 `categoryShelves` 时，App 将真实分类接入统一横向货架与「全部」分页入口 |
+| `home` | `{}` | `{ categories, items? }` | 打开插件首页；仅声明 `categoryShelves` 才进入统一多货架首页；同时声明 `featured` 且有有效 `items` 时使用精选轮播，否则按分类顺序选第一个有内容的分类作为轮播来源 |
 | `category` | `{ id, page, filters }` | `{ items, page, hasMore }` | 分类翻页，`page` 从 1 开始 |
 | `search` | `{ keyword, page }` | `{ items, page, hasMore }` | 全局搜索会并发调用所有开着的插件 |
 | `detail` | `{ id }` | 视频：`{ title, cover, desc, lines:[{name, episodes:[{id,name}]}] }`；漫画：`{ title, cover, desc, chapters:[{id,name}] }` | 进详情页 |
@@ -61,7 +61,7 @@ manga18fx/
   "homeFeatures": ["featured", "categoryShelves"]
 }
 ```
-如需在分类「全部」列表显示序号，再加入 `"numbered"`；不声明时不显示排名数字。精选轮播与分类货架可独立组合，首页布局和分页由 App 统一提供。
+如需在分类「全部」列表显示序号，再加入 `"numbered"`；不声明时不显示排名数字。`categoryShelves` 是启用统一多货架首页的必要开关；`featured` 只决定该首页是否优先使用插件提供的精选数据，未声明或没有有效精选时仍会从真实分类中寻找第一个有内容的分类作为轮播来源。未声明 `categoryShelves` 的旧插件继续使用原有首页路径。首页布局和分页由 App 统一提供。
 
 规则：
 - **id 都是你自己定的字符串**，App 原样存、原样传回。不要把 cookie、token 塞进 id（会被存进观看历史）。
