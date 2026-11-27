@@ -65,7 +65,7 @@ targets:
       path: STV/Info.plist
       properties:
         CFBundleName: KDJ
-        CFBundleDisplayName: 看短剧
+        CFBundleDisplayName: KDJ
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UIFileSharingEnabled: true
