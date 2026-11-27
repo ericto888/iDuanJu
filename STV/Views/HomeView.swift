@@ -143,11 +143,6 @@ final class HomeHeroSelection: ObservableObject {
     }
 }
 
-private struct HomeFeedScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
 /// 发现页：玻璃搜索栏/筛选 → 来源分类条（红果 / 黄果 / AI剧 / 已开启的长视频站）→ 下方按来源横滑翻页，
 /// 分类条联动（选中项自动滚到居中、指示条跟随）。每页：二级榜单选择 → 竖海报 hero → 真实榜单分段。
 /// 横滑冲突：hero 轮播区域内的横滑归轮播；其它区域横滑翻来源页；首页是根页面，没有系统侧滑返回。
@@ -269,8 +264,7 @@ struct HomeView: View {
                 HomeFeedPage(source: s,
                              bottomBarHidden: false,
                              tab: Binding(get: { subs[s] ?? s.subs[0] }, set: { subs[s] = $0 }),
-                             onHero: { heroCovers[s] = $0 },
-                             onScrolled: { v in if scrolled[s] != v { scrolled[s] = v } })
+                             onHero: { heroCovers[s] = $0 })
             }
         }
         .environment(\.homeHeader, HomeHeader(
@@ -402,7 +396,6 @@ private struct HomeFeedPage: View {
     let bottomBarHidden: Bool
     @Binding var tab: HomeTab
     var onHero: (String) -> Void
-    var onScrolled: (Bool) -> Void = { _ in }
     var onScrollOffset: (CGFloat) -> Void = { _ in }
     var onScrollInteraction: (Bool) -> Void = { _ in }
     var onScrollMetrics: (CompatScrollMetrics) -> Void = { _ in }
@@ -432,10 +425,6 @@ private struct HomeFeedPage: View {
     private var rankFeed: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                GeometryReader { proxy in
-                    Color.clear.preference(key: HomeFeedScrollOffsetKey.self, value: proxy.frame(in: .named("home.feed.scroll")).minY)
-                }
-                .frame(height: 0)
                 if source.subs.count > 1 { subChips } else if case .site = source { boardChips }
                 if tab == .actorRank {
                     ActorRankList().padding(.vertical, 8)
@@ -462,13 +451,9 @@ private struct HomeFeedPage: View {
         .background(STVTheme.bg.ignoresSafeArea())
         .scrollIndicators(.hidden)
         .coordinateSpace(name: "home.feed.scroll")
-        .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
-            if #unavailable(iOS 18.0) { onScrollOffset(offset) }
-        }
         .compatOnScrollInteraction { onScrollInteraction($0) }
         .compatOnScrollMetrics { onScrollMetrics($0) }
         .compatDefaultScrollAnchor(Self.debugAnchor)
-        .compatOnScrolled(threshold: 4) { onScrolled($0) }
         .accessibilityIdentifier("home.page.\(source.label)")
         .homePageInset()
         .refreshable { if tab == .actorRank { await ActorRankStore.shared.reload() } else { boards.forEach { BoardCache.shared.feed($0).load(force: true) } } }
@@ -740,12 +725,7 @@ private struct DynamicSiteFeed: View {
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 18) {
-                        GeometryReader { g in
-                            Color.clear.preference(key: HomeFeedScrollOffsetKey.self,
-                                                   value: g.frame(in: .named("home.feed.scroll")).minY)
-                        }
-                        .frame(height: 0)
-                        .id("dynamic.top")
+                        Color.clear.frame(height: 0).id("dynamic.top")
 
                         if selectedCategory == nil && !categories.isEmpty {
                             categoryBar(proxy)
@@ -778,11 +758,6 @@ private struct DynamicSiteFeed: View {
                 .ignoresSafeArea(.container, edges: .bottom)
                 .scrollIndicators(.hidden)
                 .coordinateSpace(name: "home.feed.scroll")
-                .onPreferenceChange(HomeFeedScrollOffsetKey.self) { offset in
-                    if #unavailable(iOS 18.0) { onScrollOffset(offset) }
-                }
-                .compatOnScrollInteraction { onScrollInteraction($0) }
-                .compatOnScrollMetrics { onScrollMetrics($0) }
                 .accessibilityIdentifier("home.page.\(source.label)")
                 .homePageInset()
                 .refreshable { await refresh() }
