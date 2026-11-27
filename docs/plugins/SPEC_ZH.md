@@ -52,7 +52,7 @@ manga18fx/
 | `home` | `{}` | `{ categories, items? }` | 打开插件首页 |
 | `category` | `{ id, page, filters }` | `{ items, page, hasMore }` | 分类翻页，`page` 从 1 开始 |
 | `search` | `{ keyword, page }` | `{ items, page, hasMore }` | 全局搜索会并发调用所有开着的插件 |
-| `detail` | `{ id }` | 视频：`{ title, cover, desc, lines:[{name, episodes:[{id,name}]}] }`；漫画：`{ title, cover, desc, chapters:[{id,name}] }` | 进详情页 |
+| `detail` | `{ id }` | 视频：`{ title, cover, coverTransform?, desc, lines:[{name, episodes:[{id,name}]}] }`；漫画：`{ title, cover, coverTransform?, desc, chapters:[{id,name}] }` | 进详情页 |
 | `play` | `{ line, episodeId }` | `{ streams:[{ url, format, headers, proxy? }], subtitles?, danmaku?, skip? }` | 点播放；`expiresAt` 到期前会再调 |
 | `pages` | `{ chapterId }` | `{ images:[{ url, transform? }], headers? }` | 漫画进章节 |
 | `danmaku` | `{ episodeKey, from, to }` | `{ items:[{ time, text, color?, mode? }] }` | 可选，按时间段分批拉 |
@@ -61,6 +61,7 @@ manga18fx/
 - **id 都是你自己定的字符串**，App 原样存、原样传回。不要把 cookie、token 塞进 id（会被存进观看历史）。
 - 所有地址必须是 `http(s)` 绝对地址，相对地址自己补全。
 - 列表里 `title` 和 `id` 不能空；没有封面就不写，别写占位图。
+- 封面需要 App 原生处理时，在列表 `items[]`、搜索结果或 `detail` 返回值里加 `coverTransform`（格式同漫画章节图片的 `transform`）；不写就按普通图片加载。
 - 漫画 `chapters`、视频 `episodes` 一律**旧→新**。
 - 出错用 `throw host.error('E_PARSE', '人能看懂的原因')`，不要吞掉错误返回空列表（空列表 App 会当成「真的没有」）。
 
@@ -82,7 +83,32 @@ return {
 
 `proxy` 能声明的处理（都由 App 原生代码执行，插件不在播放热路径里跑代码）：`stripFakeHeader`（去假头）、`hlsKey`（覆盖 AES-128 key）、`segmentDecrypt`（分段解密）、`drm: {type:'cenc-ctr', key}`（CENC MP4 解密）、`rewriteHosts`（段地址换 CDN）。
 
-图片同理：`transform: {type:'stripes', segments: 10}` 让 App 原生把打乱的横条拼回去（18comic 这类）；`{type:'aes', ...}` 解密加密图片（黄果封面这类）。
+图片同理：`transform: {type:'stripes', segments: 10}` 让 App 原生把打乱的横条拼回去（18comic 这类）；`{type:'aes', ...}` 解密加密图片（黄果封面这类）。视频与漫画封面用同一套处理，字段名是 `coverTransform`。
+
+### 4.1 封面处理 `coverTransform`
+
+`home()` / `category()` / `search()` 的 `items[]` 与 `detail()` 返回值都可以带 `coverTransform`，App 下载封面后原生应用，插件不需要自己解密图片。漫画的 `cover` 同样支持。
+
+```js
+{
+  id: '4444',
+  title: '示例剧集',
+  cover: 'https://pic.biacea.cn/upload_01/upload/20261126/xxx.png',
+  coverTransform: {
+    type: 'aes',                // 必填：aes | stripes（其它类型会被忽略，按普通图片加载）
+    key: 'f5d965df75336270',    // aes：16/24/32 字节
+    iv: '97b60394abc2fbe1',     // aes-cbc 需要 16 字节
+    keyEncoding: 'utf8',        // 可选：utf8（默认）| hex | base64 | latin1
+    mode: 'cbc',                // 可选：cbc（默认）| ecb | ctr | gcm
+    padding: 'pkcs7'            // 可选：pkcs7（默认）| none
+  }
+}
+```
+
+- 横条重排示例：`coverTransform: { type:'stripes', segments: 10 }`。
+- `cover` 仍必须是 `permissions.media`（未声明时同 `permissions.http`）里的域名；`coverTransform` 不会扩大网络权限。
+- 旧版 App 会忽略该字段（按普通图片加载）；需要该能力的用户升级 App 即可，插件本身不用改。
+- 逐跳跳转仍会校验域名白名单，图片上限 30MB；插件不能借 `coverTransform` 读取未授权域名。
 
 ## 5. 宿主能力 host.*
 

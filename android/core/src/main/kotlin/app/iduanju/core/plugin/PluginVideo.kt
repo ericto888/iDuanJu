@@ -23,6 +23,8 @@ object PluginOut {
             if (id.isEmpty() || name.isEmpty() || ContentFilter.isBlocked(listOf(name, id))) null else CMSCategory(id, name) }
     }
     fun objs(v: Any?, max: Int): List<JSONObject> { val a = v as? JSONArray ?: return emptyList(); return (0 until minOf(a.length(), max)).mapNotNull { a.optJSONObject(it) } }
+    /** 插件声明的图片处理（封面 coverTransform / 章节图片 transform），只接受原生支持的 stripes / aes。 */
+    fun transform(v: Any?): JSONObject? = (v as? JSONObject)?.takeIf { it.optString("type") in setOf("stripes", "aes") }
 }
 
 /** iOS JSVideoProvider — maps idj1 video/shortdrama plugin output onto the app's series/episode/stream models. */
@@ -32,9 +34,11 @@ class PluginVideo(val inst: PluginInstance, private val extraDomains: List<Strin
     private val media get() = DomainPolicy(m.mediaDomains + m.httpDomains + extraDomains)
     var categories: List<CMSCategory> = emptyList(); private set
 
-    private fun cover(u: String, headers: Map<String, String> = emptyMap()): String {
+    private fun cover(u: String, headers: Map<String, String> = emptyMap(), transform: JSONObject? = null): String {
         val h = runCatching { java.net.URI(u).host }.getOrNull() ?: return ""
         if (!media.allows(h) || NetGuard.isIPLiteral(h)) return ""
+        // 声明了 transform 时必须包成 idjimg://，由 PluginImageFetcher 原生应用处理。
+        if (transform != null) return PluginMedia.ref(pid, u, headers, transform)
         return if (headers.isNotEmpty()) PluginMedia.ref(pid, u, headers) else u
     }
 
@@ -43,7 +47,7 @@ class PluginVideo(val inst: PluginInstance, private val extraDomains: List<Strin
         if (id.isEmpty() || title.isEmpty()) return null
         val tags = PluginOut.strings(o.opt("tags")) + PluginOut.strings(o.opt("badges"))
         if (ContentFilter.isBlocked(listOf(title) + tags)) return null
-        return HGSeries(seriesId = sid(pid, id), title = title, cover = cover(PluginOut.url(o.opt("cover")), PluginOut.headers(o.opt("coverHeaders"))), subtitle = PluginOut.s(o.opt("remarks"), 40).ifEmpty { null },
+        return HGSeries(seriesId = sid(pid, id), title = title, cover = cover(PluginOut.url(o.opt("cover")), PluginOut.headers(o.opt("coverHeaders")), PluginOut.transform(o.opt("coverTransform"))), subtitle = PluginOut.s(o.opt("remarks"), 40).ifEmpty { null },
             author = PluginOut.strings(o.opt("actors")).joinToString(" ").ifEmpty { null }, orientation = if (o.optString("orientation") == "portrait") "portrait" else null, tags = tags)
     }
 
@@ -80,7 +84,7 @@ class PluginVideo(val inst: PluginInstance, private val extraDomains: List<Strin
             val eid = PluginOut.s(e.opt("id"), 2000); if (eid.isEmpty()) null
             else HGEpisode(i + 1, epVid(pid, id, eid), e.optInt("duration"), PluginOut.s(e.opt("name"), 80).ifEmpty { "第${i + 1}集" }, page = lineName)
         }.mapIndexed { i, e -> e.copy(ep = i + 1) }
-        return HGSeriesDetail(seriesId = seriesSid, title = title, cover = cover(PluginOut.url(o.opt("cover")), PluginOut.headers(o.opt("coverHeaders"))), desc = org.jsoup.parser.Parser.unescapeEntities(PluginOut.s(o.opt("desc"), 4000), false).replace(Regex("[\\s\\u00a0]+"), " ").trim(),
+        return HGSeriesDetail(seriesId = seriesSid, title = title, cover = cover(PluginOut.url(o.opt("cover")), PluginOut.headers(o.opt("coverHeaders")), PluginOut.transform(o.opt("coverTransform"))), desc = org.jsoup.parser.Parser.unescapeEntities(PluginOut.s(o.opt("desc"), 4000), false).replace(Regex("[\\s\\u00a0]+"), " ").trim(),
             author = PluginOut.s(o.opt("director"), 80), actors = PluginOut.strings(o.opt("actors")), totalEps = eps.size, episodes = eps, tags = tags,
             episodeLabel = if (eps.size > 1) "共${eps.size}集" else "长视频", source = m.name)
     }

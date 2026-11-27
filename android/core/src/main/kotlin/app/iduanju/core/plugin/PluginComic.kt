@@ -61,7 +61,7 @@ class PluginComic(private val inst: PluginInstance, override val label: String, 
         if (id.isEmpty() || title.isEmpty()) return null
         val tags = PluginOut.strings(o.opt("tags")) + PluginOut.strings(o.opt("badges"))
         if (ContentFilter.isBlocked(listOf(title) + tags)) return null
-        return MangaItem(source, id, title, PluginMedia.ref(pid, PluginOut.url(o.opt("cover")), PluginOut.headers(o.opt("coverHeaders"))),
+        return MangaItem(source, id, title, PluginMedia.ref(pid, PluginOut.url(o.opt("cover")), PluginOut.headers(o.opt("coverHeaders")), PluginOut.transform(o.opt("coverTransform"))),
             PluginOut.s(o.opt("author"), 80), tags, PluginOut.s(o.opt("remarks"), 40))
     }
     private fun page(v: Any?): MangaPage { val o = v as? JSONObject ?: JSONObject(); val items = PluginOut.objs(o.opt("items"), 500).mapNotNull(::item); return MangaPage(items, o.optBoolean("hasMore") && items.isNotEmpty()) }
@@ -83,7 +83,7 @@ class PluginComic(private val inst: PluginInstance, override val label: String, 
         val o = call("detail", JSONObject().put("id", m.mangaId)) as? JSONObject ?: JSONObject()
         val it = m.copy()
         PluginOut.s(o.opt("title"), 200).takeIf { s -> s.isNotEmpty() }?.let { s -> it.title = s }
-        PluginOut.url(o.opt("cover")).takeIf { s -> s.isNotEmpty() }?.let { s -> it.cover = PluginMedia.ref(pid, s, PluginOut.headers(o.opt("coverHeaders"))) }
+        PluginOut.url(o.opt("cover")).takeIf { s -> s.isNotEmpty() }?.let { s -> it.cover = PluginMedia.ref(pid, s, PluginOut.headers(o.opt("coverHeaders")), PluginOut.transform(o.opt("coverTransform"))) }
         PluginOut.strings(o.opt("tags")).takeIf { s -> s.isNotEmpty() }?.let { s -> it.tags = s }
         PluginOut.s(o.opt("author"), 80).takeIf { s -> s.isNotEmpty() }?.let { s -> it.author = s }
         if (ContentFilter.isBlocked(listOf(it.title) + it.tags)) throw ProviderException.invalid("该内容已被过滤")
@@ -97,7 +97,7 @@ class PluginComic(private val inst: PluginInstance, override val label: String, 
         val common = PluginOut.headers(o.opt("headers"))
         val imgs = PluginOut.objs(o.opt("images"), 2000).mapNotNull { i ->
             val u = PluginOut.url(i.opt("url")).ifEmpty { return@mapNotNull null }
-            val t = i.optJSONObject("transform")?.takeIf { it.optString("type") in setOf("stripes", "aes") }
+            val t = PluginOut.transform(i.opt("transform"))
             PluginMedia.ref(pid, u, common + PluginOut.headers(i.opt("headers")), t)
         }
         if (imgs.isEmpty()) throw ProviderException.upstream("插件没有返回图片")
