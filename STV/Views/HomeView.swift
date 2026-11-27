@@ -266,10 +266,9 @@ struct HomeView: View {
         guard let header = headerSpan, let safe = safeSpan else { return nil }
         return VSpan(top: header.bottom, bottom: safe.bottom)
     }
-    private var bottomInset: CGFloat { safeSpan?.inset ?? GlassTabBar.clearance + 34 }
-    private var indicator: CGFloat {
-        bottomInset >= GlassTabBar.clearance ? bottomInset - GlassTabBar.clearance : bottomInset
-    }
+    /// Only account for the device's actual bottom safe area; do not reserve extra height for the floating tab bar.
+    private var bottomInset: CGFloat { safeSpan?.inset ?? 34 }
+    private var indicator: CGFloat { bottomInset }
     private var pinned: Bool { scrolled[source] ?? false }
 
     init() {
