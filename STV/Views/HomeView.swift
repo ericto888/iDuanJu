@@ -852,7 +852,6 @@ final class SourceHomeCache {
 private struct DynamicSiteFeed: View {
     let source: DramaSource
     let bottomBarHidden: Bool
-    var onHero: (String) -> Void
     var onScrollOffset: (CGFloat) -> Void = { _ in }
 
     @State private var categories: [SiteCategory] = []
