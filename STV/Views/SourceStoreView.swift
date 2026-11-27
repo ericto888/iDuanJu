@@ -38,6 +38,7 @@ struct SourceStoreView: View {
     @State private var preparingID: String?
     @State private var updateAvailableIDs: Set<String> = []
     @State private var checkingUpdateIDs: Set<String> = []
+    @State private var updateCheckFailedIDs: Set<String> = []
     @State private var pending: PendingInstall?
     @State private var message: String?
 
@@ -137,6 +138,7 @@ struct SourceStoreView: View {
                     updateAvailableIDs.remove(item.manifest.id)
                     checkingUpdateIDs.remove(item.manifest.id)
                     updateCheckFailedIDs.remove(item.manifest.id)
+                    updateCheckFailedIDs.remove(item.manifest.id)
                     message = "已安装 \(item.manifest.name) \(item.manifest.version)"
                 } catch {
                     message = error.localizedDescription
@@ -165,14 +167,14 @@ struct SourceStoreView: View {
     // Installed entries always expose a live manifest check; catalog version metadata is only advisory.
     private func sourceCard(_ entry: Catalog.Entry) -> some View {
         let installed = store.plugin(entry.id)
-        // If the catalog omits its cached version, still let the user check the
-        // remote manifest; prepare() will validate the actual version before commit.
-        let isCurrent: Bool
-        if let installed, let version = entry.version {
-            isCurrent = PluginManifest.compare(installed.manifest.version, version) >= 0
-        } else {
-            isCurrent = false
-        }
+        // Catalog version is a discovery fallback only. A newer catalog
+        // version remains actionable when live manifest/script validation fails;
+        // prepare() still performs the full checks before installation.
+        let catalogHasNewerVersion = installed.flatMap { current in
+            entry.version.map { PluginManifest.compare($0, current.manifest.version) > 0 }
+        } ?? false
+        let shouldOfferUpdate = updateAvailableIDs.contains(entry.id)
+            || (updateCheckFailedIDs.contains(entry.id) && catalogHasNewerVersion)
         return HStack(alignment: .top, spacing: 12) {
             RoundedRectangle(cornerRadius: 12)
                 .fill(STVTheme.glass)
@@ -199,13 +201,15 @@ struct SourceStoreView: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     Text("已安装 v\(installed.manifest.version)")
                         .font(.caption2).foregroundStyle(STVTheme.secondary)
-                    if updateAvailableIDs.contains(entry.id) {
+                    if shouldOfferUpdate {
                         Button(preparingID == entry.id ? "处理中" : "更新") {
                             Task { await prepare(entry) }
                         }.buttonStyle(.borderedProminent).tint(STVTheme.accent).disabled(preparingID != nil)
                     } else {
-                        Text(checkingUpdateIDs.contains(entry.id) ? "检查更新中…" : "已是最新")
-                            .font(.caption2).foregroundStyle(STVTheme.secondary)
+                        let status = checkingUpdateIDs.contains(entry.id)
+                            ? "检查更新中…"
+                            : (updateCheckFailedIDs.contains(entry.id) ? "版本校验失败" : "已是最新")
+                        Text(status).font(.caption2).foregroundStyle(STVTheme.secondary)
                     }
                 }
             } else {
@@ -270,6 +274,7 @@ struct SourceStoreView: View {
         let installedEntries = entries.filter { store.plugin($0.id) != nil }
         checkingUpdateIDs = Set(installedEntries.map(\.id))
         updateAvailableIDs = []
+        updateCheckFailedIDs = []
         for entry in installedEntries {
             guard let installed = store.plugin(entry.id) else { continue }
             do {
@@ -280,8 +285,12 @@ struct SourceStoreView: View {
                 } else {
                     updateAvailableIDs.remove(entry.id)
                 }
+                updateCheckFailedIDs.remove(entry.id)
             } catch {
-                // Keep the card in a neutral state; a catalog refresh retries the check.
+                // Never silently label a failed remote check as "up to date".
+                // The catalog version can still expose a newer update; tapping
+                // Update retries full validation and surfaces the actual error.
+                updateCheckFailedIDs.insert(entry.id)
             }
             checkingUpdateIDs.remove(entry.id)
         }
