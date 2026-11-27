@@ -281,9 +281,9 @@ struct PlayerPortraitDock: View {
     var liveChannelsTitle: String = "频道"
     var liveGuideActive: Bool = false
     let onPlayPause: () -> Void
-    var showSeekControls: Bool = true
     let onSeekBackward: () -> Void
     let onSeekForward: () -> Void
+    var showSeekControls: Bool = true
     let onEpisodes: () -> Void
     let onRateOrGuide: () -> Void
     let onDanmakuOrQuality: () -> Void
