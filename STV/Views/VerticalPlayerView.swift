@@ -642,7 +642,7 @@ struct PlayerScreen: View {
 
     /// Wide video in an upright handset keeps the portrait dock and playback information visible.
     /// Portrait-format video and landscape fullscreen retain the original auto-hide behavior.
-    private var keepsChromeVisible: Bool { !landscape && !isPortraitVideo }
+    private var keepsChromeVisible: Bool { !layoutMetrics.isPad && !landscape && !isPortraitVideo }
 
     private var controlsVisible: Bool {
         !speedMode && (keepsChromeVisible || showChrome || scrubbing || panel != nil || voiceOver)
