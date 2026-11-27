@@ -45,26 +45,15 @@ class AppUpdater(private val ctx: Context) {
         AppRelease.parseVersion(name) ?: emptyList()
     }
 
-    /** Launch check: at most every [AUTO_INTERVAL_MS], skips an ignored version, never reports errors. */
+    /** Local full-source branch: disabled so empty-shell GitHub releases never overwrite this build. */
     suspend fun autoCheck() {
-        val now = System.currentTimeMillis()
-        if (now - sp.getLong(KEY_LAST, 0) < AUTO_INTERVAL_MS) return
-        val r = runCatching { fetchNewer() }.getOrNull() ?: return
-        sp.edit().putLong(KEY_LAST, now).apply()
-        if (r.tag != sp.getString(KEY_IGNORED, null)) present(r)
+        return
     }
 
-    /** 我的 → 检查更新: always queries, ignores 忽略此版本, returns a footer message when there is no dialog. */
+    /** 我的 → 检查更新: disabled on local full-source branch to prevent overwriting with empty-shell APK. */
     suspend fun manualCheck(): String? {
-        if (checking) return null
-        checking = true
-        return try {
-            val r = fetchNewer()
-            sp.edit().putLong(KEY_LAST, System.currentTimeMillis()).apply()
-            if (r == null) "已是最新版本（${currentVersion.joinToString(".")}）" else { present(r); null }
-        } catch (e: Exception) {
-            "检查更新失败：${e.message ?: e.javaClass.simpleName}"
-        } finally { checking = false }
+        val ver = currentVersion.joinToString(".").ifEmpty { "local" }
+        return "当前为本地完整源分支（$ver），已关闭在线空壳更新"
     }
 
     fun ignore(r: AppRelease) { sp.edit().putString(KEY_IGNORED, r.tag).apply(); dismiss() }
