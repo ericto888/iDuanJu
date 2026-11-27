@@ -696,6 +696,7 @@ struct PluginLogView: View {
     let id: String
     @State private var lines: [String] = []
     @State private var message: String?
+    @State private var confirmClear = false
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 6) {
@@ -708,6 +709,14 @@ struct PluginLogView: View {
         }
         .dsNavigation("运行日志") {
             DSBarButton(systemName: "doc.on.doc") { UIPasteboard.general.string = lines.joined(separator: "\n"); message = "已复制" }.accessibilityLabel("复制")
+            DSBarButton(systemName: "trash") { confirmClear = true }
+                .disabled(lines.isEmpty).accessibilityLabel("清空").accessibilityIdentifier("plugin.logs.clear")
+        }
+        .confirmationDialog("清空此插件的运行日志？", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("清空日志", role: .destructive) { PluginLog.clear(id); lines = [] }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只删除「\\(PluginStore.shared.plugin(id)?.manifest.name ?? id)」的日志，不会清除 Cookie、存储或插件设置。")
         }
         .dsToast($message, icon: "checkmark.circle.fill")
         .task { lines = PluginLog.lines(id) }
