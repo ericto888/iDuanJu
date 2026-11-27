@@ -588,34 +588,38 @@ struct SpeedPopover: View {
         let frac = CGFloat(currentIndex) / CGFloat(count - 1)
         return GeometryReader { g in
             let w = max(1, g.size.width)
-            let needleX = w * frac
+            let innerW = max(1, w - 16)
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white.opacity(0.07))
-                    .frame(height: 30)
+                Capsule()
+                    .fill(Color.white.opacity(0.16))
+                    .frame(height: 5)
+                    .padding(.horizontal, 8)
+                Capsule()
+                    .fill(STVTheme.accent)
+                    .frame(width: max(5, innerW * frac), height: 5)
+                    .padding(.leading, 8)
                 HStack(spacing: 0) {
                     ForEach(allSteps.indices, id: \.self) { i in
-                        let passed = i <= currentIndex
                         let isOne = abs(allSteps[i] - 1.0) < 0.01
-                        Rectangle()
-                            .fill(passed ? PlayerPalette.signal.opacity(0.85) : Color.white.opacity(isOne ? 0.55 : 0.24))
-                            .frame(width: isOne ? 2 : 1.2, height: isOne ? 14 : 9)
+                        Circle()
+                            .fill(i <= currentIndex ? .white : .white.opacity(isOne ? 0.55 : 0.25))
+                            .frame(width: isOne ? 5 : 3.5, height: isOne ? 5 : 3.5)
                         if i < count - 1 { Spacer(minLength: 0) }
                     }
                 }
-                .padding(.horizontal, 10)
-                Capsule()
-                    .fill(PlayerPalette.signal)
-                    .frame(width: 4, height: 22)
-                    .shadow(color: PlayerPalette.signal.opacity(0.6), radius: 4)
-                    .offset(x: 8 + (w - 20) * frac)
+                .padding(.horizontal, 8)
+                Circle()
+                    .fill(.white)
+                    .frame(width: 18, height: 18)
+                    .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
+                    .offset(x: innerW * frac - 1)
             }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { v in
-                        let ratio = min(1, max(0, (v.location.x - 10) / max(1, w - 20)))
+                        let ratio = min(1, max(0, (v.location.x - 8) / innerW))
                         let idx = Int((ratio * CGFloat(count - 1)).rounded())
                         let next = allSteps[max(0, min(count - 1, idx))]
                         if abs(next - current) >= 0.01 {

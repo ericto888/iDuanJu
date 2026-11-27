@@ -295,7 +295,7 @@ private let previewSamples: [DanmakuPreviewSample] = [
 
 /// Scrolling bullet-comment layer synced to playback time, with live preview & area guide when `previewActive` is true.
 struct DanmakuOverlay: View {
-    let co: PlaybackCoordinator
+    @ObservedObject var co: PlaybackCoordinator
     let seriesId: String
     let vid: String
     /// 弹幕 file delivered by the source (TVBox); nil = 红果 comments.
@@ -310,27 +310,48 @@ struct DanmakuOverlay: View {
     var laneCount: Int = 4
     var previewActive: Bool = false
 
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var settings = DanmakuSettings.shared
     @State private var raw: [HGDanmaku] = []
     @State private var placed: [DanmakuLayout.Placed] = []
     @State private var parsedColors: [Color] = []
     @State private var key = ""
+    /// Bumped on foreground/PiP resume & play transitions to recreate `TimelineView`'s internal display link
+    /// if SwiftUI wedged it during a background-to-foreground PiP stop transition (without re-fetching danmaku).
+    @State private var timelineEpoch = 0
 
     var body: some View {
+        let shouldPause = !previewActive && (co.paused || placed.isEmpty || scenePhase == .background)
         GeometryReader { geo in
             let size = geo.size
-            TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !previewActive && (co.paused || placed.isEmpty))) { timeline in
+            TimelineView(.animation(minimumInterval: 1.0 / 60, paused: shouldPause)) { timeline in
                 let nowDate = timeline.date
                 Canvas { ctx, canvas in
                     draw(&ctx, canvas, nowDate: nowDate)
                 }
             }
+            .id(timelineEpoch)
             .onAppear { relayout(size, layoutKey(size)) }
             .compatOnChange(of: layoutKey(size)) { k in relayout(size, k) }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .task(id: vid) { await load() }
+        .compatOnChange(of: scenePhase) { phase in
+            if phase == .active { timelineEpoch &+= 1 }
+        }
+        .compatOnChange(of: co.pipActive) { active in
+            if !active { timelineEpoch &+= 1 }
+        }
+        .compatOnChange(of: co.restoringPiP) { restoring in
+            if !restoring { timelineEpoch &+= 1 }
+        }
+        .compatOnChange(of: co.paused) { paused in
+            if !paused { timelineEpoch &+= 1 }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            timelineEpoch &+= 1
+        }
     }
 
     private var font: CGFloat { settings.fontPoints }

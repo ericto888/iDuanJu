@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// Direction 1 (Filmstrip Calibration) player color tokens:
-/// Warm charcoal surfaces, ivory telemetry, single film-signal orange (#F26419) for playhead & active speed.
+/// Unified native iOS cinema player color tokens:
+/// Crisp luminous white on dark smoked glass, native brand blue (`STVTheme.accent`) only for active highlights.
 enum PlayerPalette {
-    static let signal = Color(red: 0.949, green: 0.392, blue: 0.098)       // #F26419
-    static let signalSoft = Color(red: 0.949, green: 0.392, blue: 0.098).opacity(0.18)
-    static let ivory = Color(red: 0.937, green: 0.925, blue: 0.902)        // #EFECE6
-    static let hudSurface = Color(red: 0.082, green: 0.078, blue: 0.071).opacity(0.86)
+    static let signal = STVTheme.accent
+    static let signalSoft = STVTheme.accent.opacity(0.20)
+    static let ivory = Color.white
+    static let hudSurface = Color.black.opacity(0.72)
 }
 
 /// Round Liquid Glass button floating over video (40 pt glass, 44 pt hit area).
@@ -102,7 +102,7 @@ struct PlayerProgressBar: View {
         self.mini = mini
     }
 
-    private static let thin: CGFloat = 3.5, thick: CGFloat = 18, miniH: CGFloat = 2
+    private static let thin: CGFloat = 3.5, thick: CGFloat = 7, miniH: CGFloat = 2
 
     var body: some View {
         let sample = clock.sample
@@ -111,56 +111,26 @@ struct PlayerProgressBar: View {
         let shown = drag ?? played
         let buffered = duration > 0 ? min(1, max(shown, sample.bufferedUntil / duration)) : 0
         let active = !mini && drag != nil
+        let h = mini ? Self.miniH : (active ? Self.thick : Self.thin)
         GeometryReader { g in
             let w = max(1, g.size.width)
-            let needleX = min(max(1.5, w * shown), w - 1.5)
+            let thumbX = min(max(0, w * shown), w)
             ZStack(alignment: .leading) {
-                if active {
-                    // Precision dual-tick filmstrip vernier expands cleanly only while scrubbing.
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.black.opacity(0.45))
-                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
-                        .frame(height: Self.thick)
-                    Canvas { ctx, size in
-                        let minorStep: CGFloat = 8
-                        let count = Int(size.width / minorStep)
-                        for idx in 1..<count {
-                            let x = CGFloat(idx) * minorStep
-                            let major = idx % 5 == 0
-                            let tickH: CGFloat = major ? 9 : 5
-                            let passed = x <= needleX
-                            let col = passed ? PlayerPalette.ivory.opacity(major ? 0.72 : 0.34) : Color.white.opacity(major ? 0.36 : 0.16)
-                            var p = Path()
-                            p.move(to: CGPoint(x: x, y: size.height - 2))
-                            p.addLine(to: CGPoint(x: x, y: size.height - 2 - tickH))
-                            ctx.stroke(p, with: .color(col), lineWidth: major ? 1.2 : 0.8)
-                        }
-                    }
-                    .frame(height: Self.thick)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    Capsule().fill(PlayerPalette.signal.opacity(0.95))
-                        .frame(width: max(3, needleX), height: 2.5)
-                        .frame(maxHeight: Self.thick, alignment: .bottom)
-                } else {
-                    // Idle state: airy single track + subtle micro-ticks + crisp vertical film-orange playhead needle.
-                    Capsule().fill(.white.opacity(mini ? 0.16 : 0.22))
-                        .frame(height: mini ? Self.miniH : Self.thin)
-                    if !mini {
-                        Capsule().fill(.white.opacity(0.38))
-                            .frame(width: w * buffered, height: Self.thin)
-                    }
-                    Capsule().fill(mini ? PlayerPalette.ivory.opacity(0.9) : PlayerPalette.ivory)
-                        .frame(width: max(mini ? Self.miniH : Self.thin, w * shown), height: mini ? Self.miniH : Self.thin)
+                Capsule().fill(.white.opacity(mini ? 0.16 : 0.22))
+                if !mini {
+                    Capsule().fill(.white.opacity(0.42)).frame(width: w * buffered)
                 }
+                Capsule().fill(.white.opacity(mini ? 0.85 : 1.0)).frame(width: max(h, thumbX))
             }
+            .frame(height: h)
             .overlay(alignment: .leading) {
                 if !mini {
-                    let needleH: CGFloat = active ? 22 : 13
-                    Capsule()
-                        .fill(PlayerPalette.signal)
-                        .frame(width: active ? 3.5 : 3, height: needleH)
-                        .shadow(color: PlayerPalette.signal.opacity(0.55), radius: active ? 5 : 2)
-                        .offset(x: needleX - (active ? 1.75 : 1.5))
+                    let knob: CGFloat = active ? 16 : 10
+                    Circle()
+                        .fill(.white)
+                        .frame(width: knob, height: knob)
+                        .shadow(color: .black.opacity(0.42), radius: active ? 4 : 2, y: 1)
+                        .offset(x: min(max(0, thumbX - knob / 2), w - knob))
                 }
             }
             .frame(maxHeight: .infinity)
@@ -180,7 +150,7 @@ struct PlayerProgressBar: View {
             }
             .onDisappear { cancelInterruptedScrub(animated: false) }
         }
-        .frame(height: mini ? Self.miniH : 26)
+        .frame(height: mini ? Self.miniH : 24)
         .task(id: drag.map { Int($0 * max(1, clock.sample.duration) / PlayerThumbnailer.bucket) }) {
             guard let f = drag, clock.sample.duration > 0, co.thumbnails.available else { return }
             let t = f * clock.sample.duration
@@ -326,18 +296,14 @@ struct PlayerFullscreenButton: View {
     }
 }
 
-/// 2 pt progress line while the chrome is hidden, tipped with film-signal orange.
+/// 2 pt pure white progress line while the chrome is hidden.
 struct PlayerCompactProgress: View {
     @ObservedObject var clock: PlaybackClock
     var body: some View {
         GeometryReader { g in
-            let w = g.size.width * clock.sample.fraction
             ZStack(alignment: .leading) {
-                Color.white.opacity(0.14)
-                PlayerPalette.ivory.opacity(0.55).frame(width: w)
-                if w > 3 {
-                    PlayerPalette.signal.frame(width: 3).offset(x: max(0, w - 3))
-                }
+                Color.white.opacity(0.15)
+                Color.white.opacity(0.68).frame(width: g.size.width * clock.sample.fraction)
             }
         }
         .frame(height: 2)
@@ -403,7 +369,7 @@ struct PlayerSpeedHUD: View {
 
     private var tint: Color {
         if pendingCancel { return Color(red: 1, green: 0.38, blue: 0.36) }
-        return PlayerPalette.signal
+        return pendingLock ? STVTheme.accent : .white
     }
 
     var body: some View {
@@ -422,12 +388,12 @@ struct PlayerSpeedHUD: View {
                     Image(systemName: "play.fill").opacity(pulse ? 1 : 0.45)
                 }
                 .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(tint)
+                .foregroundStyle(.white)
             }
 
             Text(SpeedPopover.shortLabel(rate))
-                .font(.system(size: 14, weight: .bold, design: .monospaced).monospacedDigit())
-                .foregroundStyle(PlayerPalette.ivory)
+                .font(.system(size: 14, weight: .bold).monospacedDigit())
+                .foregroundStyle(.white)
 
             Rectangle()
                 .fill(.white.opacity(0.18))
@@ -439,9 +405,8 @@ struct PlayerSpeedHUD: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 34)
-        .background(PlayerPalette.hudSurface, in: Capsule())
-        .overlay(Capsule().strokeBorder(tint.opacity(pendingLock || pendingCancel ? 0.7 : 0.32), lineWidth: 0.8))
-        .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
+        .liquidGlassCapsule(tone: .clear, onMedia: true)
+        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
         .onAppear {
             withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) { pulse = true }
         }

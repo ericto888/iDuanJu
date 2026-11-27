@@ -181,22 +181,21 @@ struct PlayerAdjustHUD: View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(PlayerPalette.signal)
+                .foregroundStyle(.white)
                 .frame(width: 18)
             ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.22))
-                Capsule().fill(PlayerPalette.signal).frame(width: max(4, 112 * value))
+                Capsule().fill(.white.opacity(0.24))
+                Capsule().fill(.white).frame(width: max(4, 112 * value))
             }
             .frame(width: 112, height: 4)
             Text("\(Int((value * 100).rounded()))%")
-                .font(.system(size: 12, weight: .semibold, design: .monospaced).monospacedDigit())
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
                 .foregroundStyle(.white.opacity(0.92))
                 .frame(width: 34, alignment: .trailing)
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
-        .background(PlayerPalette.hudSurface, in: Capsule())
-        .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+        .liquidGlassCapsule(tone: .clear, onMedia: true)
+        .shadow(color: .black.opacity(0.32), radius: 10, y: 4)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(side == .brightness ? "亮度 \(Int(value * 100))%" : "音量 \(Int(value * 100))%")
     }

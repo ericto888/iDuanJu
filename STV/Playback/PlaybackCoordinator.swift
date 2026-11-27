@@ -585,6 +585,8 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
         guard controller === pip else { return }
         pipActive = false
+        restoringPiP = false
+        clockAnchor = nil
         // A software source or fallback can replace the PiP content during an episode load.
         // That stop belongs to the handover, not to the user pressing the close button.
         if continuePiP {
@@ -619,6 +621,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     }
 
     func didBecomeActive() {
+        clockAnchor = nil
         guard backgrounded else { return }
         backgrounded = false
         audioSessionActive = false
@@ -628,6 +631,8 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
             restoringPiP = true
             pipActive = false
             pip?.stopPictureInPicture()
+        } else {
+            restoringPiP = false
         }
         resumeIfRequested()
         // Engine foreground restoration may itself be asynchronous. Reconcile once afterwards,
