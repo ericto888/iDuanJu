@@ -1940,7 +1940,9 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             // Left strip reserved for interactive pop — never claim it.
             if gestureRecognizer !== pinch, x < view.edgeBackWidth { return false }
             if gestureRecognizer === seekPan, let pan = gestureRecognizer as? UIPanGestureRecognizer {
-                guard !speedMode, Coordinator.side(pan, in: view, landscape: landscape) == nil else { return false }
+                // Horizontal seeking is allowed across the screen except the navigation edge;
+                // vertical movement is left to brightness/volume adjustment or episode paging.
+                guard !speedMode else { return false }
                 let v = pan.velocity(in: view)
                 return abs(v.x) > max(80, abs(v.y) * 1.25)
             }
