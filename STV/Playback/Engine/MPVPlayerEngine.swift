@@ -540,6 +540,9 @@ final class MPVMetalView: UIView {
         guard generation == gen else { throw CancellationError() }
         mounted = true
         refreshTrackLists()
+        // A replacement item can start audio while MoltenVK keeps the previous video output attached.
+        // Rebuild the active video track once the new file is loaded, just as we do after a surface resize.
+        scheduleVideoRefit()
     }
 
     private func command(_ args: [String]) {
