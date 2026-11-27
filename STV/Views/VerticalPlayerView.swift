@@ -213,7 +213,7 @@ struct PlayerScreen: View {
                         if locked {
                             if controlsVisible { lockOnly(full, ins: ins).transition(.opacity) }
                         } else if co.paused, co.current != nil, co.readyIndex == co.current,
-                                  !centerSuppressed, !scrubbing, panel == nil {
+                                  !co.finaleEnded, !centerSuppressed, !scrubbing, panel == nil {
                             Button {
                                 co.togglePause()
                                 flashChrome()
