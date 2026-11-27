@@ -64,6 +64,10 @@ struct PlayerScreen: View {
     /// Orientation decisions are made once the current episode is ready, never while it is loading.
     @State private var orientationEpisode: Int?
     @State private var orientationIsPortrait: Bool?
+    /// Last confirmed episode direction, used only as a temporary fallback during episode transitions.
+    @State private var lastConfirmedVideoIsLandscape: Bool?
+    @State private var liftFallbackEpisode: Int?
+    @State private var liftFallbackIsLandscape: Bool?
     /// Preserve an already-entered landscape fullscreen session across automatic next-episode transitions.
     @State private var preserveLandscapeForAutoNext = false
     @Environment(\.verticalSizeClass) private var vClass
@@ -73,13 +77,40 @@ struct PlayerScreen: View {
 
     private var landscape: Bool { vClass == .compact || (layoutMetrics.isPad && layoutMetrics.isLandscape) }
     private var isPortraitVideo: Bool { aspect < 1.0 }
-    /// Fixed 46pt physical offset only after the active episode's real video dimensions are known.
-    /// Never infer the lift from series metadata or a previous episode while the item is loading.
+    /// True only for a confirmed wide frame, or a safe loading fallback for this episode.
+    private var currentVideoIsLandscape: Bool {
+        guard let index = co.current else { return false }
+        if let frame = co.firstFrames[index], frame.size.width > 0, frame.size.height > 0 {
+            return frame.size.width / frame.size.height > 1.0
+        }
+        if co.readyIndex == index, co.videoSize.width > 0, co.videoSize.height > 0 {
+            return co.videoSize.width / co.videoSize.height > 1.0
+        }
+        if liftFallbackEpisode == index, let carried = liftFallbackIsLandscape {
+            return carried
+        }
+        // First load only: use series metadata until this episode supplies a real frame.
+        return !(series.orientation == "portrait" ||
+                 (!series.source.isLongVideo && series.orientation != "landscape"))
+    }
     private var videoLift: CGFloat {
+        guard !layoutMetrics.isPad, !landscape, currentVideoIsLandscape else { return 0 }
+        return 46
+    }
+    /// The outgoing still keeps its own position; it must not follow the incoming episode's size.
+    private func heldFrameLift(_ image: UIImage) -> CGFloat {
         guard !layoutMetrics.isPad, !landscape,
-              co.readyIndex == co.current,
-              co.videoSize.width > 0, co.videoSize.height > 0 else { return 0 }
-        return co.videoSize.width / co.videoSize.height > 1.0 ? 46 : 0
+              image.size.width > 0, image.size.height > 0,
+              image.size.width / image.size.height > 1.0 else { return 0 }
+        return 46
+    }
+    private func rememberConfirmedVideoOrientation() {
+        guard let index = co.current else { return }
+        if let frame = co.firstFrames[index], frame.size.width > 0, frame.size.height > 0 {
+            lastConfirmedVideoIsLandscape = frame.size.width / frame.size.height > 1.0
+        } else if co.readyIndex == index, co.videoSize.width > 0, co.videoSize.height > 0 {
+            lastConfirmedVideoIsLandscape = co.videoSize.width / co.videoSize.height > 1.0
+        }
     }
     private var canShowPadSplit: Bool {
         layoutMetrics.isPad && layoutMetrics.isLandscape && layoutMetrics.width >= 840 && aspect < 1.0 && !co.pipActive && !co.episodes.isEmpty
@@ -152,7 +183,7 @@ struct PlayerScreen: View {
                         FeedDrift(feed: feed, index: held.index, page: full.height) {
                             Image(uiImage: held.image).resizable().frame(width: area.width, height: area.height)
                         }
-                        .offset(x: area.minX, y: area.minY - videoLift)
+                        .offset(x: area.minX, y: area.minY - heldFrameLift(held.image))
                         .allowsHitTesting(false).accessibilityHidden(true)
                     }
                     Group {
@@ -367,9 +398,11 @@ struct PlayerScreen: View {
             co.notice = nil
         }
         .compatOnChange(of: co.readyIndex) { _ in
+            rememberConfirmedVideoOrientation()
             syncEpisodeOrientation()
         }
         .compatOnChange(of: co.videoSize) { _ in
+            rememberConfirmedVideoOrientation()
             if co.readyIndex != co.current {
                 // Also covers line changes that reopen the same episode index.
                 orientationEpisode = nil
@@ -379,6 +412,9 @@ struct PlayerScreen: View {
             }
         }
         .compatOnChange(of: co.current) { new in
+            // Keep the outgoing episode's confirmed direction only while the incoming episode loads.
+            liftFallbackEpisode = new
+            liftFallbackIsLandscape = lastConfirmedVideoIsLandscape
             // If auto-next starts while the player is already landscape, carry that fullscreen
             // session into the next episode. Loading must not collapse it to portrait.
             if co.lastAdvanceWasAuto && landscape {
