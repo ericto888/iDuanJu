@@ -64,6 +64,8 @@ struct PlayerScreen: View {
     /// Orientation decisions are made once the current episode is ready, never while it is loading.
     @State private var orientationEpisode: Int?
     @State private var orientationIsPortrait: Bool?
+    /// Preserve an already-entered landscape fullscreen session across automatic next-episode transitions.
+    @State private var preserveLandscapeForAutoNext = false
     @Environment(\.verticalSizeClass) private var vClass
     @Environment(\.layoutMetrics) private var layoutMetrics
     @Environment(\.dismiss) private var dismiss
@@ -102,7 +104,11 @@ struct PlayerScreen: View {
         guard orientationEpisode != index || orientationIsPortrait != portrait else { return }
         orientationEpisode = index
         orientationIsPortrait = portrait
-        if portrait {
+        if preserveLandscapeForAutoNext {
+            // The previous episode was already playing in landscape fullscreen.
+            // Do not let the next episode's aspect ratio collapse that fullscreen session.
+            OrientationGate.allowDeviceRotation()
+        } else if portrait {
             OrientationGate.lockPortrait()
         } else {
             OrientationGate.allowDeviceRotation()
@@ -370,6 +376,11 @@ struct PlayerScreen: View {
             }
         }
         .compatOnChange(of: co.current) { new in
+            // If auto-next starts while the player is already landscape, carry that fullscreen
+            // session into the next episode. Loading must not collapse it to portrait.
+            if co.lastAdvanceWasAuto && landscape {
+                preserveLandscapeForAutoNext = true
+            }
             // Hold the current interface orientation while the next episode is resolving/loading.
             orientationEpisode = nil
             orientationIsPortrait = nil
@@ -416,7 +427,13 @@ struct PlayerScreen: View {
             }
         }
         
-        .compatOnChange(of: landscape) { l in if !l { locked = false }; panel = nil }
+        .compatOnChange(of: landscape) { l in
+            if !l {
+                locked = false
+                preserveLandscapeForAutoNext = false
+            }
+            panel = nil
+        }
         .sheet(item: $verifyTarget) { t in SiteVerifySheet(target: t) { if let c = co.current { co.activate(c) } } }
         .stvLocalColorScheme(.dark)
     }
