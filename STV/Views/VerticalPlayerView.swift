@@ -215,7 +215,7 @@ struct PlayerScreen: View {
                         .position(x: full.width / 2, y: full.height / 2)
                         .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
-                    if co.pipActive {
+                    if co.pipActive && !co.pipReturnRequested {
                         Button { co.togglePiP() } label: {
                             Label("返回播放器", systemImage: "pip.exit")
                                 .padding(.horizontal, 20).padding(.vertical, 12)
