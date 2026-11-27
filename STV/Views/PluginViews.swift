@@ -24,6 +24,18 @@ struct PluginsView: View {
         let plugins = store.visiblePlugins, recommended = self.recommended
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                NavigationLink { SourceStoreView() } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "storefront").font(.system(size: 20, weight: .semibold)).foregroundStyle(STVTheme.accent)
+                            .frame(width: 42, height: 42).background(STVTheme.accentSoft, in: RoundedRectangle(cornerRadius: 12))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("在线站源商店").font(.headline).foregroundStyle(STVTheme.text)
+                            Text("浏览、安装和更新社区站源").font(.caption).foregroundStyle(STVTheme.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(STVTheme.secondary)
+                    }.padding(14).background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14)).padding(.horizontal, 16)
+                }.buttonStyle(.plain).accessibilityIdentifier("plugins.onlineStore")
                 DSSection("已安装（\(plugins.count)）", footer: hiddenAdult > 0 ? "另有 \(hiddenAdult) 个成人插件已隐藏：在「片源管理」解锁后显示。" : nil, separatorInset: 58) {
                     if plugins.isEmpty {
                         Text("还没有插件。可以从下面的网址 / 文件 / 订阅添加，或安装内置推荐。").dsFont(14, relativeTo: .subheadline)
