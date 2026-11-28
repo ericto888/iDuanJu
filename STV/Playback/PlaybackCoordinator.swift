@@ -1582,8 +1582,13 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
             if d.isFinite, d > 0, !isLive, abs(d - s.duration) > 0.01 { s.duration = d }
         }
         let waiting = engine.isWaiting
-        let stopped = engine.isPaused && !waiting
-        if stopped != transportPaused { transportPaused = stopped }
+        // During episode activation the new item is marked ready just before the engine
+        // starts rendering. Do not interpret that short opening interval as a user pause;
+        // explicit pause intent is already represented by wantsPlayback.
+        if started {
+            let stopped = engine.isPaused && !waiting
+            if stopped != transportPaused { transportPaused = stopped }
+        }
         if waiting != waitingForMedia { waitingForMedia = waiting }
         let s = engine.presentationSize
         if s.width > 0, s != videoSize { videoSize = s }
