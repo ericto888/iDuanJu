@@ -1720,6 +1720,7 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         /// Horizontal seek drag; vertical feed paging remains owned by the ScrollView.
         let seekPan = UIPanGestureRecognizer()
         var seekStartTime: Double = 0
+        private var activeSeekStartTime: Double = 0
         var seekDuration: Double = 0
         private var adjustSide: AdjustSide?
         private var speedOrigin: CGPoint = .zero
@@ -1828,14 +1829,15 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             guard let view else { return }
             switch g.state {
             case .began:
+                activeSeekStartTime = seekStartTime
                 onSeekBegan()
             case .changed:
                 let width = max(1, view.bounds.width)
-                let target = max(0, min(seekDuration, seekStartTime + Double(g.translation(in: view).x / width) * seekDuration))
+                let target = max(0, min(seekDuration, activeSeekStartTime + Double(g.translation(in: view).x / width) * seekDuration))
                 onSeekChanged(target)
             case .ended:
                 let width = max(1, view.bounds.width)
-                let target = max(0, min(seekDuration, seekStartTime + Double(g.translation(in: view).x / width) * seekDuration))
+                let target = max(0, min(seekDuration, activeSeekStartTime + Double(g.translation(in: view).x / width) * seekDuration))
                 onSeekEnded(target, true)
             case .cancelled, .failed:
                 onSeekEnded(nil, false)
