@@ -27,11 +27,11 @@ struct RootTabView: View {
                 }
                 .animation(DS.select, value: showNav && metrics.useRail)
                 TabView(selection: $tab) {
-                    Stack(path: $paths[0], reserveBottomBar: !metrics.useRail && !(showNav && tab == 0 && tabBarHidden)) { HomeView() }.tag(0)
-                    Stack(path: $paths[1], reserveBottomBar: !metrics.useRail) { TVBoxHubView() }.tag(1)
-                    Stack(path: $paths[2], reserveBottomBar: !metrics.useRail) { CategoryView() }.tag(2)
-                    Stack(path: $paths[3], reserveBottomBar: !metrics.useRail) { ProfileView() }.tag(3)
-                    Stack(path: $paths[4], reserveBottomBar: !metrics.useRail) { SearchView() }.tag(4)
+                    Stack(path: $paths[0], reserveBottomBar: false) { HomeView() }.tag(0)
+                    Stack(path: $paths[1], reserveBottomBar: false) { TVBoxHubView() }.tag(1)
+                    Stack(path: $paths[2], reserveBottomBar: false) { CategoryView() }.tag(2)
+                    Stack(path: $paths[3], reserveBottomBar: false) { ProfileView() }.tag(3)
+                    Stack(path: $paths[4], reserveBottomBar: false) { SearchView() }.tag(4)
                 }
                 .environment(\.homeTabBarHidden, tabBarHidden)
                 .tint(STVTheme.accent)
@@ -118,17 +118,20 @@ struct GlassTabBar: View {
     var onReselect: (Int) -> Void = { _ in }
     @Namespace private var ns
     var body: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 4) {
-                ForEach(items.indices, id: \.self) { i in
-                    NavBarItem(title: items[i].0, symbol: items[i].1, on: i == selection, height: 48, ns: ns) { pick(i) }
-                        .accessibilityIdentifier("tab.\(i)")
+        LiquidGlassGroup(spacing: 10) {
+            HStack(spacing: 10) {
+                HStack(spacing: 4) {
+                    ForEach(items.indices, id: \.self) { i in
+                        NavBarItem(title: items[i].0, symbol: items[i].1, on: i == selection, height: 48, ns: ns) { pick(i) }
+                            .accessibilityIdentifier("tab.\(i)")
+                    }
                 }
-            }
-            .padding(6)
+                .padding(6)
+                .liquidGlassCapsule(interactive: true)
 
-            if let searchTag {
-                NavSearchButton(on: selection == searchTag, size: 60) { pick(searchTag) }
+                if let searchTag {
+                    NavSearchButton(on: selection == searchTag, size: 60) { pick(searchTag) }
+                }
             }
         }
         .frame(maxWidth: 420)
@@ -157,6 +160,11 @@ private struct NavBarItem: View {
             }
             .foregroundStyle(on ? STVTheme.accent : STVTheme.secondary)
             .frame(maxWidth: .infinity).frame(height: height)
+            .background {
+                if on {
+                    Capsule(style: .continuous).fill(STVTheme.glassBorder).matchedGeometryEffect(id: "pill", in: ns)
+                }
+            }
             .contentShape(Capsule())
         }
         .buttonStyle(PressScale(scale: 0.94))
