@@ -86,22 +86,28 @@ enum PluginMediaDomainCache {
         }
         guard !discovered.isEmpty else { return }
 
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         let key = keyPrefix + pluginID
         var stored = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
-        let expiry = now.timeIntervalSince1970 + ttl
+        let nowTimestamp = now.timeIntervalSince1970
+        let fresh = discovered.filter { stored[$0].map { $0 <= nowTimestamp } ?? (stored[$0] == nil) }
+        let expiry = nowTimestamp + ttl
         for host in discovered { stored[host] = expiry }
-        stored = stored.filter { $0.value > now.timeIntervalSince1970 }
+        stored = stored.filter { $0.value > nowTimestamp }
         if stored.count > maxDomains {
             let keep = stored.sorted { $0.value > $1.value }.prefix(maxDomains)
             stored = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
         }
         UserDefaults.standard.set(stored, forKey: key)
+        lock.unlock()
+        if !fresh.isEmpty {
+            PluginLog.add(pluginID, "📝 动态授权图片 CDN（24 小时）：\(fresh.sorted().joined(separator: ", "))")
+        }
     }
 }
 
 /// Plugin-provided images go through `idjimg://` refs so that every fetch is checked against that plugin's
-/// media allow-list, uses only that plugin's cookies, and applies declared transforms natively.
+/// manifest permissions plus that plugin's learned image CDN hosts, uses only its cookies, and applies transforms natively.
 enum PluginMedia {
     static let scheme = "idjimg://"
     static let allowedHeaders: Set<String> = ["referer", "user-agent", "origin", "accept", "accept-language"]
