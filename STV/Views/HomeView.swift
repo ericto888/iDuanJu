@@ -319,7 +319,9 @@ struct HomeView: View {
         )
         .environment(\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: 0, onScrolled: { v in
             guard s == source else { return }
-            if scrolled[s] != v { scrolled[s] = v }
+            if scrolled[s] != v {
+                withAnimation(DS.select) { scrolled[s] = v }
+            }
         }))
     }
 
@@ -421,32 +423,36 @@ struct HomeView: View {
 
     private var header: some View {
         VStack(spacing: 0) {
-            LiquidGlassGroup(spacing: 10) {
-                HStack(spacing: 10) {
-                    NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
-                        DSSearchBarLabel()
+            if !homeScrollChromeHidden {
+                LiquidGlassGroup(spacing: 10) {
+                    HStack(spacing: 10) {
+                        NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
+                            DSSearchBarLabel()
+                                .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
+                                .liquidGlassCapsule(interactive: true)
+                        }
+                        .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
+                        Button { showChannels = true } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
+                                Text("筛选").font(.system(size: 14, weight: .medium))
+                            }
+                            .foregroundStyle(STVTheme.text)
                             .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
                             .liquidGlassCapsule(interactive: true)
-                    }
-                    .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
-                    Button { showChannels = true } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
-                            Text("筛选").font(.system(size: 14, weight: .medium))
                         }
-                        .foregroundStyle(STVTheme.text)
-                        .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
-                        .liquidGlassCapsule(interactive: true)
+                        .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
                     }
-                    .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
                 }
+                .padding(.horizontal, 16)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
-            .padding(.horizontal, 16)
             HomeChannelBar(items: sources, selection: $source, label: \.label, ink: STVTheme.text)
-                .padding(.top, 12)
+                .padding(.top, homeScrollChromeHidden ? 0 : 12)
         }
-        .padding(.top, 8)
+        .padding(.top, homeScrollChromeHidden ? 0 : 8)
         .padding(.bottom, 8)
+        .animation(DS.select, value: homeScrollChromeHidden)
         .background { LiquidEdgeFade(visible: pinned) }
         .background { SpanReader(span: $headerSpan) }
     }
