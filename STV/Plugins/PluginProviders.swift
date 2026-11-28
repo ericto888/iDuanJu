@@ -382,36 +382,89 @@ enum PluginMedia {
 
     /// Final image bytes (transform applied).
     static func load(_ ref: String) async throws -> Data {
-        guard let r = parse(ref) else { throw ProviderError.invalid("图片地址无效") }
-        guard let rec = PluginStore.snapshot(r.plugin), rec.enabled else { throw ProviderError.invalid("插件未启用") }
-        let explicitPolicy = DomainPolicy(rec.manifest.mediaDomains + rec.manifest.httpDomains + rec.extraDomains)
-        let learnedHosts = Set(PluginMediaDomainCache.domains(pluginID: r.plugin))
-        guard let host = r.url.host?.lowercased(), r.url.scheme == "https" || r.url.scheme == "http" else {
+        guard let r = parse(ref) else {
+            let rawPlugin = String(ref.dropFirst(scheme.count)).split(separator: "/", maxSplits: 1).first.map(String.init) ?? "unknown"
+            PluginLog.add(rawPlugin, "✕ 原生图片加载失败：图片引用解析失败")
             throw ProviderError.invalid("图片地址无效")
         }
-        guard PluginMedia.allows(r.url, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts) else {
-            PluginLog.add(r.plugin, "✕ 图片域名未授权 \(host)")
+        let pluginID = r.plugin
+        let host = r.url.host?.lowercased() ?? "?"
+        PluginLog.add(pluginID, "🖼️ 原生图片加载开始：\(r.url.scheme ?? "?")://\(host)")
+
+        guard let rec = PluginStore.snapshot(pluginID), rec.enabled else {
+            PluginLog.add(pluginID, "✕ 原生图片加载失败：插件未安装或已停用")
+            throw ProviderError.invalid("插件未启用")
+        }
+        let explicitPolicy = DomainPolicy(rec.manifest.mediaDomains + rec.manifest.httpDomains + rec.extraDomains)
+        let learnedHosts = Set(PluginMediaDomainCache.domains(pluginID: pluginID))
+        guard r.url.scheme == "https" || r.url.scheme == "http" else {
+            PluginLog.add(pluginID, "✕ 图片 URL 协议不支持：\(r.url.scheme ?? "nil")")
+            throw ProviderError.invalid("图片地址无效")
+        }
+        let explicitlyAllowed = explicitPolicy.allows(host)
+        let dynamicallyAllowed = learnedHosts.contains(host) && r.url.scheme == "https"
+        guard allows(r.url, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts) else {
+            PluginLog.add(pluginID, "✕ 图片域名授权检查失败：host=\(host)，显式授权=\(explicitlyAllowed)，动态授权=\(dynamicallyAllowed)，已学习域名数=\(learnedHosts.count)")
             throw ProviderError.invalid("图片域名未授权：\(host)")
         }
+        PluginLog.add(pluginID, "✓ 图片域名授权通过：host=\(host)，方式=\(explicitlyAllowed ? "manifest" : "dynamic")")
+
         let blocked = await Task.detached { NetGuard.resolvesToBlocked(host, useCache: false) }.value
-        if blocked { throw ProviderError.invalid("图片地址解析到内网") }
+        if blocked {
+            PluginLog.add(pluginID, "✕ 图片 DNS 安全检查拦截：\(host)（解析失败或命中内网地址）")
+            throw ProviderError.invalid("图片地址解析到内网")
+        }
+
         var data: Data
-        if let fx = PluginFixtures.responder, let reply = fx(URLRequest(url: r.url)) { data = reply.body }
-        else {
+        if let fx = PluginFixtures.responder, let reply = fx(URLRequest(url: r.url)) {
+            data = reply.body
+            PluginLog.add(pluginID, "✓ 图片测试响应：bytes=\(data.count)")
+        } else {
             var req = URLRequest(url: r.url)
             req.setValue(rec.learnedUA ?? PluginHostContext.defaultUA, forHTTPHeaderField: "User-Agent")
             for (k, v) in r.headers where allowedHeaders.contains(k.lowercased()) { req.setValue(v, forHTTPHeaderField: k) }
-            let cs = PluginRuntime.jar(r.plugin).cookies(for: r.url)
+            let cs = PluginRuntime.jar(pluginID).cookies(for: r.url)
             for (k, v) in HTTPCookie.requestHeaderFields(with: cs) { req.setValue(v, forHTTPHeaderField: k) }
-            let guardD = RedirectGuard(pluginID: r.plugin, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts)
-            let (d, resp) = try await session.data(for: req, delegate: guardD)
-            if let b = guardD.blocked { throw ProviderError.invalid("图片跳转到未授权域名 \(b)") }
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            guard (200..<300).contains(code), !d.isEmpty else { throw ProviderError.upstream("图片 HTTP \(code) · \(host)") }
-            guard d.count <= 30 << 20 else { throw ProviderError.upstream("图片太大") }
-            data = d
+            let guardD = RedirectGuard(pluginID: pluginID, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts)
+            do {
+                let (d, resp) = try await session.data(for: req, delegate: guardD)
+                if let b = guardD.blocked {
+                    PluginLog.add(pluginID, "✕ 图片重定向被拦截：\(host) → \(b)")
+                    throw ProviderError.invalid("图片跳转到未授权域名 \(b)")
+                }
+                let http = resp as? HTTPURLResponse
+                let code = http?.statusCode ?? 0
+                let finalURL = http?.url?.absoluteString ?? r.url.absoluteString
+                let mime = http?.value(forHTTPHeaderField: "Content-Type") ?? "unknown"
+                PluginLog.add(pluginID, "图片 HTTP 响应：status=\(code)，final=\(http?.url?.host ?? host)，mime=\(mime)，bytes=\(d.count)")
+                guard (200..<300).contains(code), !d.isEmpty else {
+                    PluginLog.add(pluginID, "✕ 图片 HTTP 下载失败：status=\(code)，finalURL=\(finalURL)")
+                    throw ProviderError.upstream("图片 HTTP \(code) · \(host)")
+                }
+                guard d.count <= 30 << 20 else {
+                    PluginLog.add(pluginID, "✕ 图片响应超过 30MB：bytes=\(d.count)")
+                    throw ProviderError.upstream("图片太大")
+                }
+                data = d
+            } catch {
+                if guardD.blocked == nil {
+                    let ns = error as NSError
+                    PluginLog.add(pluginID, "✕ 图片网络请求异常：\(ns.domain)(\(ns.code)) \(error.localizedDescription)")
+                }
+                throw error
+            }
         }
-        if let t = r.transform { data = try apply(t, data) }
+
+        PluginLog.add(pluginID, "图片下载完成：bytes=\(data.count)，transform=\(r.transform?["type"] as? String ?? "none")")
+        if let t = r.transform {
+            do {
+                data = try apply(t, data)
+                PluginLog.add(pluginID, "✓ 图片处理完成：type=\(t["type"] as? String ?? "unknown")，bytes=\(data.count)")
+            } catch {
+                PluginLog.add(pluginID, "✕ 图片处理失败：\(error.localizedDescription)")
+                throw error
+            }
+        }
         return data
     }
 
