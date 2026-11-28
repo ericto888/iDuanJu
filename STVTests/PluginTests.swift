@@ -245,8 +245,32 @@ final class PluginTests: XCTestCase {
                                      sourcePolicy: DomainPolicy(["source.example.com"]),
                                      contentType: "application/json",
                                      body: Data(hosts.utf8))
-        XCTAssertLessThanOrEqual(PluginMediaDomainCache.candidates(pluginID: pluginID).count, 64,
-                                 "one response must never create more than the fixed candidate budget")
+        XCTAssertEqual(PluginMediaDomainCache.candidates(pluginID: pluginID).count, 64,
+                       "scanner should stop exactly at the fixed candidate budget")
+    }
+
+    func testEncryptedPayloadTraversalStopsAtGlobalNodeBudget() throws {
+        let pluginID = "com.test.encrypted-node-budget"
+        PluginMediaDomainCache.clear(pluginID: pluginID)
+        defer { PluginMediaDomainCache.clear(pluginID: pluginID) }
+
+        let ciphertext = Data(repeating: 0x42, count: 32)
+        let encoded = ciphertext.base64EncodedString()
+        var groups = (0..<9).map { _ in [Any](repeating: "not-a-ciphertext-payload", count: 512) }
+        groups[8][511] = encoded
+        let response = try JSONSerialization.data(withJSONObject: groups)
+        PluginMediaDomainCache.observeEncryptedPayloads(
+            pluginID: pluginID,
+            sourceURL: URL(string: "https://source.example.com/catalog")!,
+            sourcePolicy: DomainPolicy(["source.example.com"]),
+            contentType: "application/json",
+            body: response
+        )
+
+        let plaintext = Data(#"{"cover":"https://cdn-late.example.net/image.jpg"}"#.utf8)
+        PluginMediaDomainCache.learnDecryptedPayload(pluginID: pluginID, ciphertext: ciphertext, plaintext: plaintext)
+        XCTAssertTrue(PluginMediaDomainCache.candidates(pluginID: pluginID).isEmpty,
+                      "payloads beyond 4,096 visited JSON nodes must not be retained as provenance")
     }
 
     func testDynamicImageDomainsAreLearnedPerPluginFromAuthorizedSourceResponses() async throws {
