@@ -301,7 +301,7 @@ struct HomeView: View {
             mounted: shouldMount(s),
             tab: Binding(get: { subs[s] ?? s.subs.first ?? .hongguo(.all) }, set: { subs[s] = $0 })
         )
-        .environment(\\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: 0, onScrolled: { v in
+        .environment(\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: 0, onScrolled: { v in
             guard s == source else { return }
             if scrolled[s] != v { scrolled[s] = v }
         }))
@@ -315,7 +315,7 @@ struct HomeView: View {
             GeometryReader { geo in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 0) {
-                        ForEach(sources, id: \\.key) { s in
+                        ForEach(sources, id: \.key) { s in
                             pageCell(s)
                                 .frame(width: geo.size.width, height: geo.size.height)
                         }
@@ -334,7 +334,7 @@ struct HomeView: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .id(sources.map(\\.key).joined(separator: "|"))
+            .id(sources.map(\.key).joined(separator: "|"))
         }
     }
 
