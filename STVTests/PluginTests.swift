@@ -265,6 +265,26 @@ final class PluginTests: XCTestCase {
         XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: unrelatedID).isEmpty)
         PluginMediaDomainCache.clear(pluginID: unrelatedID)
 
+        // Generic JSON src and HTML video/script src are ambiguous, not image evidence.
+        let ambiguousID = "com.test.ambiguous-src"
+        PluginMediaDomainCache.learn(pluginID: ambiguousID,
+                                     sourceURL: URL(string: "https://example.com/page")!,
+                                     sourcePolicy: DomainPolicy(["example.com"]),
+                                     contentType: "application/json",
+                                     body: Data(#"{"src":"https://json-src-cdn.example.net/file","poster":"https://json-poster-cdn.example.net/poster"}"#.utf8))
+        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: ambiguousID), ["json-poster-cdn.example.net"])
+        PluginMediaDomainCache.clear(pluginID: ambiguousID)
+
+        let htmlID = "com.test.html-image-src"
+        PluginMediaDomainCache.learn(pluginID: htmlID,
+                                     sourceURL: URL(string: "https://example.com/page")!,
+                                     sourcePolicy: DomainPolicy(["example.com"]),
+                                     contentType: "text/html",
+                                     body: Data(#"<img class="cover" src="https://img-tag-cdn.example.net/no-extension"><video src="https://video-src-cdn.example.net/movie"><script src="https://script-src-cdn.example.net/app.js"></script><video poster="https://video-poster-cdn.example.net/poster">"#.utf8))
+        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: htmlID).sorted(),
+                       ["img-tag-cdn.example.net", "video-poster-cdn.example.net"])
+        PluginMediaDomainCache.clear(pluginID: htmlID)
+
         // Dynamic image permission is deliberately separate from host.http permission.
         await expectCode("E_PERMISSION") {
             try await p.evalForTest("(async () => (await host.http.get('https://img-cdn.example.net/cover.webp')).status)()")
