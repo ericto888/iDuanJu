@@ -693,8 +693,36 @@ struct JSVideoProvider: SiteProvider {
         guard !ContentFilter.isBlocked([title] + tags) else { return nil }
         let cover = PluginMedia.ref(plugin: pluginID, url: PluginOut.url(o["cover"]), headers: PluginOut.headers(o["coverHeaders"]),
                                     transform: PluginOut.mediaTransform(o["coverTransform"]))
+        let liveMatch: LiveMatchInfo? = {
+            guard let raw = o["liveMatch"] as? [String: Any],
+                  let homeRaw = raw["home"] as? [String: Any],
+                  let awayRaw = raw["away"] as? [String: Any] else { return nil }
+            let homeName = PluginOut.s(homeRaw["name"], max: 80)
+            let awayName = PluginOut.s(awayRaw["name"], max: 80)
+            guard !homeName.isEmpty, !awayName.isEmpty else { return nil }
+            func logo(_ team: [String: Any]) -> String? {
+                let url = PluginOut.url(team["logo"])
+                guard !url.isEmpty else { return nil }
+                return PluginMedia.ref(plugin: pluginID, url: url, headers: PluginOut.headers(team["logoHeaders"]))
+            }
+            let statusRaw = PluginOut.s(raw["status"], max: 20).lowercased()
+            let status = ["scheduled", "live", "finished"].contains(statusRaw) ? statusRaw : "scheduled"
+            let homeScore = raw["homeScore"] as? Int
+            let awayScore = raw["awayScore"] as? Int
+            let hasScore = homeScore.map { $0 >= 0 } == true && awayScore.map { $0 >= 0 } == true
+            return LiveMatchInfo(
+                home: LiveMatchTeam(name: homeName, logo: logo(homeRaw)),
+                away: LiveMatchTeam(name: awayName, logo: logo(awayRaw)),
+                homeScore: hasScore ? homeScore : nil,
+                awayScore: hasScore ? awayScore : nil,
+                status: status,
+                kickoff: PluginOut.s(raw["kickoff"], max: 40).nilIfEmpty,
+                statusText: PluginOut.s(raw["statusText"], max: 30).nilIfEmpty
+            )
+        }()
         return HGSeries(source: source, seriesId: id, title: title, cover: cover, subtitle: PluginOut.s(o["remarks"], max: 40).nilIfEmpty,
-                        actors: PluginOut.strings(o["actors"]), orientation: (o["orientation"] as? String) == "portrait" ? "portrait" : nil, tags: tags)
+                        actors: PluginOut.strings(o["actors"]), orientation: (o["orientation"] as? String) == "portrait" ? "portrait" : nil, tags: tags,
+                        liveMatch: liveMatch)
     }
 
     private func page(_ v: Any, _ p: Int) -> HGPage {
