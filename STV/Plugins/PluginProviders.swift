@@ -32,6 +32,12 @@ enum PluginMediaDomainCache {
     private static let keyPrefix = "stv.plugin.learnedImageDomains."
     private static let ttl: TimeInterval = 24 * 60 * 60
     private static let maxDomains = 64
+    private static var generations: [String: UInt64] = [:]
+
+    static func generation(pluginID: String) -> UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        return generations[pluginID, default: 0]
+    }
 
     static func domains(pluginID: String, now: Date = Date()) -> [String] {
         lock.lock(); defer { lock.unlock() }
@@ -44,11 +50,13 @@ enum PluginMediaDomainCache {
 
     static func clear(pluginID: String) {
         lock.lock(); defer { lock.unlock() }
+        generations[pluginID, default: 0] &+= 1
         UserDefaults.standard.removeObject(forKey: keyPrefix + pluginID)
     }
 
     static func learn(pluginID: String, sourceURL: URL, sourcePolicy: DomainPolicy,
-                      contentType: String, body: Data, now: Date = Date()) {
+                      contentType: String, body: Data, expectedGeneration: UInt64? = nil,
+                      now: Date = Date()) {
         guard sourceURL.scheme == "https",
               let sourceHost = sourceURL.host?.lowercased(), sourcePolicy.allows(sourceHost) else { return }
         let type = contentType.lowercased()
@@ -90,6 +98,10 @@ enum PluginMediaDomainCache {
         guard !discovered.isEmpty else { return }
 
         lock.lock()
+        if let expectedGeneration, generations[pluginID, default: 0] != expectedGeneration {
+            lock.unlock()
+            return
+        }
         let key = keyPrefix + pluginID
         var stored = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
         let nowTimestamp = now.timeIntervalSince1970
