@@ -141,6 +141,25 @@ struct NumberedGrid: View {
     private var landscape: Bool { items.first?.isLandscapeCover ?? false }
     private var cols: [GridItem] { landscape ? layout.wideGridItems(spacing: 10) : layout.posterGridItems(spacing: 10) }
     var body: some View {
+        if items.contains(where: { $0.liveMatch != nil }) {
+            LazyVStack(spacing: 10) {
+                ForEach(Array(items.enumerated()), id: \\.element.id) { i, series in
+                    if series.liveMatch != nil {
+                        LiveMatchCard(series: series)
+                    } else {
+                        NumberedPosterCell(series: series, rank: numbered ? i + 1 : nil)
+                    }
+                    if hasMore, !loading, i >= max(0, items.count - 3) {
+                        Color.clear.frame(height: 1).onAppear { loadMore() }
+                    }
+                }
+                if loading { ForEach(0..<3, id: \\.self) { _ in ShimmerBlock().frame(height: 112).clipShape(RoundedRectangle(cornerRadius: 14)) } }
+            }
+            .padding(.horizontal, 16)
+            if !hasMore && !loading && !items.isEmpty {
+                Text("没有更多了").font(.caption).foregroundStyle(STVTheme.tertiary).frame(maxWidth: .infinity).padding()
+            }
+        } else {
         // Three rows early, so the next page is usually there before the end of the list is.
         let trigger = items.dropLast(max(0, min(items.count - 1, cols.count * 3))).last?.id
         LazyVGrid(columns: cols, spacing: 16) {
@@ -160,6 +179,7 @@ struct NumberedGrid: View {
         .padding(.horizontal, 16)
         if !hasMore && !loading && !items.isEmpty {
             Text("没有更多了").font(.caption).foregroundStyle(STVTheme.tertiary).frame(maxWidth: .infinity).padding()
+        }
         }
     }
 }
