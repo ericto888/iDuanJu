@@ -585,10 +585,6 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
         guard controller === pip else { return }
         pipActive = false
-        // Preserve the restoration intent before clearing the published UI state. This callback
-        // runs after restoreUserInterfaceForPictureInPictureStopWithCompletionHandler, so
-        // clearing restoringPiP first makes every normal PiP return look like a user stop.
-        let shouldRestorePlayback = restoringPiP
         restoringPiP = false
         clockAnchor = nil
         // A software source or fallback can replace the PiP content during an episode load.
@@ -599,9 +595,10 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
             if readyIndex != nil { refreshPiP() }
         } else {
             engine.setPiPActive(false)
-            if shouldRestorePlayback { resumeIfRequested() }
-            else { setPaused(true) }
+            if !restoringPiP { setPaused(true) }
+            else { resumeIfRequested() }
         }
+        restoringPiP = false
     }
 
     func didEnterBackground() {
