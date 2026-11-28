@@ -41,6 +41,7 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
         if isPad { mask = .all; refresh(); return }
         if isPortrait {
             mask = .portrait
+            activeScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
         } else if let scene = activeScene {
             switch scene.interfaceOrientation {
             case .landscapeLeft, .landscapeRight: mask = .landscape
@@ -51,8 +52,10 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
         refresh()
     }
 
+    /// End player/fullscreen orientation overrides and return control to the system.
     @MainActor static func unlock() {
         rotationGeneration += 1
+        fullscreenSnapshot = nil
         mask = isPad ? .all : .allButUpsideDown
         refresh()
     }
@@ -68,24 +71,14 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
         activeScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
     }
 
-    /// Exit fullscreen and restore the exact orientation policy that was active before entering it.
+    /// Exit fullscreen to portrait, then release the orientation lock so device rotation works again.
     @MainActor static func exitLandscape() {
         rotationGeneration += 1
-        guard let snapshot = fullscreenSnapshot else { return }
+        guard fullscreenSnapshot != nil else { return }
         fullscreenSnapshot = nil
-        mask = snapshot.mask
+        mask = isPad ? .all : .allButUpsideDown
         refresh()
-        guard let scene = activeScene,
-              let orientation = snapshot.orientation else { return }
-        let target: UIInterfaceOrientationMask
-        switch orientation {
-        case .portrait: target = .portrait
-        case .portraitUpsideDown: target = .portraitUpsideDown
-        case .landscapeLeft: target = .landscapeLeft
-        case .landscapeRight: target = .landscapeRight
-        default: return
-        }
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: target)) { _ in }
+        activeScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
     }
 
     @MainActor static func lockPortrait() {
