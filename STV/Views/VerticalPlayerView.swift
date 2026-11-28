@@ -55,59 +55,17 @@ struct PlayerScreen: View {
     @State private var padDrawerOpen = true
     @State private var nextDramaPick: NextDramaPick?
     @State private var favoriteTick = 0
-    /// Feed content offset: the shared video layer rides along with the page.
+    /// Feed content offset: the shared video layer rides along with the page. Held as a plain reference so a scrolling
+    /// feed moves the video layer only and never re-evaluates this page.
     @State private var feed = FeedOffset()
     /// Running double-tap seek (+10/+20/… s) and which side it is on; drives the side bubble.
     @State private var seekRun: (total: Int, at: Date)?
-    /// Horizontal drag seek preview, committed once when the gesture ends.
-    @State private var horizontalSeekStart: Double?
-    @State private var horizontalSeekTarget: Double?
-    /// Last confirmed episode direction, used only as a temporary fallback during episode transitions.
-    @State private var lastConfirmedVideoIsLandscape: Bool?
-    @State private var liftFallbackEpisode: Int?
-    @State private var liftFallbackIsLandscape: Bool?
-    /// Direction of the outgoing held frame; snapshots use viewport dimensions, not video dimensions.
-    @State private var heldFrameIsLandscape: Bool?
     @Environment(\.verticalSizeClass) private var vClass
     @Environment(\.layoutMetrics) private var layoutMetrics
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var library = LibraryStore.shared
 
     private var landscape: Bool { vClass == .compact || (layoutMetrics.isPad && layoutMetrics.isLandscape) }
-    private var isPortraitVideo: Bool { aspect < 1.0 }
-    /// True only for a confirmed wide frame, or a safe loading fallback for this episode.
-    private var currentVideoIsLandscape: Bool {
-        guard let index = co.current else { return false }
-        if let frame = co.firstFrames[index], frame.size.width > 0, frame.size.height > 0 {
-            return frame.size.width / frame.size.height > 1.0
-        }
-        if co.readyIndex == index, co.videoSize.width > 0, co.videoSize.height > 0 {
-            return co.videoSize.width / co.videoSize.height > 1.0
-        }
-        if liftFallbackEpisode == index, let carried = liftFallbackIsLandscape {
-            return carried
-        }
-        // First load only: use series metadata until this episode supplies a real frame.
-        return !(series.orientation == "portrait" ||
-                 (!series.source.isLongVideo && series.orientation != "landscape"))
-    }
-    private var videoLift: CGFloat {
-        guard !layoutMetrics.isPad, !landscape, currentVideoIsLandscape else { return 0 }
-        return 46
-    }
-    /// The outgoing still keeps its own position; snapshots use the direction captured before the switch.
-    private var heldFrameLift: CGFloat {
-        guard !layoutMetrics.isPad, !landscape, heldFrameIsLandscape == true else { return 0 }
-        return 46
-    }
-    private func rememberConfirmedVideoOrientation() {
-        guard let index = co.current else { return }
-        if let frame = co.firstFrames[index], frame.size.width > 0, frame.size.height > 0 {
-            lastConfirmedVideoIsLandscape = frame.size.width / frame.size.height > 1.0
-        } else if co.readyIndex == index, co.videoSize.width > 0, co.videoSize.height > 0 {
-            lastConfirmedVideoIsLandscape = co.videoSize.width / co.videoSize.height > 1.0
-        }
-    }
     private var canShowPadSplit: Bool {
         layoutMetrics.isPad && layoutMetrics.isLandscape && layoutMetrics.width >= 840 && aspect < 1.0 && !co.pipActive && !co.episodes.isEmpty
     }
@@ -153,14 +111,14 @@ struct PlayerScreen: View {
                     FeedDrift(feed: feed, index: co.current ?? 0, page: full.height) {
                         videoLayer.frame(width: area.width, height: area.height)
                     }
-                    .offset(x: area.minX, y: area.minY - videoLift)
+                    .offset(x: area.minX, y: area.minY)
                     .allowsHitTesting(false)
                     if let held = co.heldFrame {
                         // Previous episode's last frame, riding with the swipe until the next one is on screen.
                         FeedDrift(feed: feed, index: held.index, page: full.height) {
                             Image(uiImage: held.image).resizable().frame(width: area.width, height: area.height)
                         }
-                        .offset(x: area.minX, y: area.minY - heldFrameLift)
+                        .offset(x: area.minX, y: area.minY)
                         .allowsHitTesting(false).accessibilityHidden(true)
                     }
                     Group {
@@ -223,24 +181,6 @@ struct PlayerScreen: View {
                     } else {
                         if locked {
                             if controlsVisible { lockOnly(full, ins: ins).transition(.opacity) }
-                        } else if co.paused, co.current != nil, co.readyIndex == co.current,
-                                  !co.finaleEnded, !centerSuppressed, !scrubbing, panel == nil {
-                            Button {
-                                co.togglePause()
-                                flashChrome()
-                            } label: {
-                                Image(systemName: "play.fill")
-                                    .font(.system(size: 27, weight: .regular))
-                                    .offset(x: 2)
-                                    .frame(width: 72, height: 72)
-                                    .liquidGlass(Circle(), tone: .clear, interactive: true, onMedia: true)
-                                    .contentShape(Circle())
-                            }
-                            .buttonStyle(PressScale(scale: 0.92))
-                            .accessibilityLabel("播放")
-                            .accessibilityIdentifier("player.centerPlay")
-                            .position(x: rect.midX, y: rect.midY - videoLift)
-                            .transition(.opacity.combined(with: .scale(scale: 0.92)))
                         } else if co.isLive, controlsVisible, !centerSuppressed, co.current != nil, co.readyIndex == co.current, !scrubbing, panel == nil {
                             PlayerCenterControls(co: co, onInteract: flashChrome, spacing: landscape ? 72 : 44)
                                 .position(x: landscape ? full.width / 2 : rect.midX, y: landscape ? full.height / 2 : rect.midY)
@@ -253,21 +193,6 @@ struct PlayerScreen: View {
                     }
                     if let p = panel, !locked {
                         popover(p, full: full, ins: ins)
-                    }
-                    if let target = horizontalSeekTarget, co.duration > 0 {
-                        VStack(spacing: 4) {
-                            Text("\(Fmt.clock(Int(target))) / \(Fmt.clock(Int(co.duration)))")
-                                .font(.system(size: 20, weight: .bold).monospacedDigit())
-                            let delta = target - (horizontalSeekStart ?? co.clock.sample.time)
-                            Text(abs(delta) >= 1 ? (delta > 0 ? "+" : "−") + Fmt.clock(Int(abs(delta))) : "松开跳转")
-                                .font(.system(size: 12, weight: .semibold)).foregroundStyle(STVTheme.accent)
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        .liquidGlass(corner: 12, tone: .panel, onMedia: true)
-                        .position(x: full.width / 2, y: landscape ? full.height / 2 - 92 : rect.midY - 92)
-                        .transition(.opacity).allowsHitTesting(false)
-                        .accessibilityIdentifier("player.horizontalSeek")
                     }
                     if let run = seekRun {
                         Label("\(run.total > 0 ? "+" : "−")\(abs(run.total)) 秒", systemImage: run.total > 0 ? "forward.fill" : "backward.fill")
@@ -337,8 +262,9 @@ struct PlayerScreen: View {
             nextDramaPick = await NextDramaRecommender.shared.pickNextDrama(current: d, seasons: seasons, watched: watched)
         }
         .task {
-            // Match upstream: portrait is the default; the user or system may rotate the device.
-            OrientationGate.allowDeviceRotation()
+            // Portrait by default for everything (landscape videos play centred). Rotating the phone (when
+            // the system rotation lock is off) or the 横屏 button switches to landscape.
+            OrientationGate.unlock()
             co.start()
             if co.current == nil { await load() }
         }
@@ -379,11 +305,6 @@ struct PlayerScreen: View {
             co.notice = nil
         }
         .compatOnChange(of: co.current) { new in
-            // Keep the outgoing episode's confirmed direction only while the incoming episode loads.
-            liftFallbackEpisode = new
-            liftFallbackIsLandscape = lastConfirmedVideoIsLandscape
-            heldFrameIsLandscape = lastConfirmedVideoIsLandscape
-            // Keep the outgoing frame direction for the 46pt visual lift while the next episode loads.
             scrubbing = false
             if let new, co.channelList, co.episodes.indices.contains(new) {
                 LiveHooks.remember(co.episodes[new], in: series)
@@ -398,9 +319,6 @@ struct PlayerScreen: View {
                     rearmAutoHide()
                 }
             }
-        }
-        .compatOnChange(of: co.videoSize) { _ in
-            rememberConfirmedVideoOrientation()
         }
         .compatOnChange(of: co.readyIndex) { index in
             guard index != nil else { return }
@@ -429,10 +347,7 @@ struct PlayerScreen: View {
             }
         }
         
-        .compatOnChange(of: landscape) { l in
-            if !l { locked = false }
-            panel = nil
-        }
+        .compatOnChange(of: landscape) { l in if !l { locked = false }; panel = nil }
         .sheet(item: $verifyTarget) { t in SiteVerifySheet(target: t) { if let c = co.current { co.activate(c) } } }
         .stvLocalColorScheme(.dark)
     }
@@ -658,10 +573,6 @@ struct PlayerScreen: View {
                 onSpeedBegan: enterSpeedMode,
                 onSpeedChanged: handleSpeedTranslation,
                 onSpeedEnded: endSpeedMode,
-                onSeekBegan: { beginHorizontalSeek() },
-                onSeekChanged: { translation, width in updateHorizontalSeek(translation: translation, width: width) },
-                onSeekEnded: { commitHorizontalSeek() },
-                onSeekCancelled: { cancelHorizontalSeek() },
                 landscape: landscape,
                 onAdjustBegan: { adjuster.begin($0) },
                 onAdjustChanged: { adjuster.change($0, fraction: $1) },
@@ -688,12 +599,8 @@ struct PlayerScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Wide video in an upright handset keeps the portrait dock and playback information visible.
-    /// Portrait-format video and landscape fullscreen retain the original auto-hide behavior.
-    private var keepsChromeVisible: Bool { !layoutMetrics.isPad && !landscape && !isPortraitVideo }
-
     private var controlsVisible: Bool {
-        !speedMode && (keepsChromeVisible || showChrome || scrubbing || panel != nil || voiceOver)
+        !speedMode && (showChrome || scrubbing || panel != nil || voiceOver)
     }
 
     // MARK: Chrome
@@ -805,9 +712,6 @@ struct PlayerScreen: View {
                         liveChannelsTitle: "频道",
                         liveGuideActive: panel == .guide,
                         onPlayPause: { co.togglePause(); flashChrome() },
-                        onSeekBackward: {},
-                        onSeekForward: {},
-                        showSeekControls: false,
                         onEpisodes: { toggle(.episodes) },
                         onRateOrGuide: {
                             if co.isLive { toggle(.guide) }
@@ -881,65 +785,80 @@ struct PlayerScreen: View {
     private func landscapeControls(_ full: CGSize, ins: EdgeInsets, chrome: Bool, interactive: Bool) -> some View {
         let side = max(ins.leading, ins.trailing, 64) + 2
         return VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                PlayerIconButton(symbol: "chevron.left", label: "返回") { exitPlayer() }
-                    .opacity(dim).modifier(ChromeFade(on: chrome))
-
-                Spacer(minLength: 12)
-                Group {
-                    if showTech, co.tech != nil { PlayerTechStrip(telemetry: co.telemetry, landscape: true).padding(.trailing, 4) }
-                    PlayerChip(action: PlayerAction(
-                        id: "player.autoNext",
-                        a11y: co.autoNext ? "关闭连播" : "开启连播",
-                        symbol: "repeat",
-                        title: "连播",
-                        value: co.autoNext ? "开" : "关",
-                        active: co.autoNext,
-                        action: {
-                            co.autoNext.toggle()
-                            showOSD(co.autoNext ? "连播：开" : "连播：关")
-                            flashChrome()
+            LiquidGlassGroup(spacing: 10) {
+                HStack(spacing: 10) {
+                    PlayerIconButton(symbol: "chevron.left", label: "返回") { exitPlayer() }
+                        .opacity(dim).modifier(ChromeFade(on: chrome))
+                    if let i = co.current, co.episodes.indices.contains(i) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(mainTitle(i))
+                                .font(.system(size: 16, weight: .bold)).lineLimit(1)
+                                .accessibilityIdentifier("player.title")
+                                .accessibilityValue("第\(co.episodes[i].ep)集")
+                            Group {
+                                if co.isLive { PlayerProgramLine(series: series, channel: co.episodes[i]) }
+                                else { Text(landSubline(i)).font(.system(size: 12)).foregroundStyle(.white.opacity(0.7)).lineLimit(1) }
+                            }
+                            .accessibilityIdentifier("player.episodeInfo")
+                            .accessibilityValue("第\(co.episodes[i].ep)集")
                         }
-                    ))
-                    PlayerIconButton(symbol: "lock.open", label: "锁屏") { locked = true; panel = nil; flashChrome() }
-                        .accessibilityIdentifier("player.lock")
-                    PlayerIconButton(symbol: "ellipsis", label: "更多", tint: panel == .more ? STVTheme.accent : .white) {
-                        toggle(.more)
+                        .shadow(color: .black.opacity(chrome ? 0 : 0.7), radius: 3)
+                        .opacity(scrubbing ? 0.28 : 1)
+                        .padding(.leading, 4)
+                        .layoutPriority(1)
                     }
-                    .accessibilityIdentifier("player.more")
-                    PlayerIconButton(symbol: "arrow.down.right.and.arrow.up.left", label: "退出横屏") {
-                        OrientationGate.exitLandscape(); flashChrome()
+                    Spacer(minLength: 12)
+                    Group {
+                        if showTech { PlayerTechStrip(telemetry: co.telemetry, landscape: true).padding(.trailing, 4) }
+                        if !co.isLive {
+                            PlayerChip(action: PlayerAction(id: "player.autoNext", a11y: co.autoNext ? "关闭连播" : "开启连播", symbol: "repeat",
+                                                            title: "连播", value: co.autoNext ? "开" : "关", accent: co.autoNext) {
+                                co.autoNext.toggle(); showOSD(co.autoNext ? "连播：开" : "连播：关"); flashChrome()
+                            })
+                        }
+                        PlayerIconCluster {
+                            if co.channelList, suppliedDetail == nil { favoriteIcon }
+                            PlayerClusterIcon(symbol: "lock.open", label: "锁屏") { locked = true; panel = nil; flashChrome() }
+                                .accessibilityIdentifier("player.lock")
+                            PlayerClusterIcon(symbol: "ellipsis", label: "更多", tint: panel == .more ? STVTheme.accent : .white) { toggle(.more) }
+                                .accessibilityIdentifier("player.more")
+                            PlayerClusterIcon(symbol: "arrow.down.right.and.arrow.up.left", label: "退出横屏") { OrientationGate.exitLandscape(); flashChrome() }
+                                .accessibilityIdentifier("player.exitFullscreen")
+                        }
                     }
-                    .accessibilityIdentifier("player.exitFullscreen")
+                    .opacity(dim).modifier(ChromeFade(on: chrome))
                 }
-                .opacity(dim).modifier(ChromeFade(on: chrome))
             }
             .frame(height: 44)
             .padding(.horizontal, side).padding(.top, 16)
             Spacer(minLength: 0)
             if let i = co.current, co.episodes.indices.contains(i) {
-                VStack(spacing: 7) {
-                    // Landscape: progress occupies its own row above the transport/tool controls.
-                    if co.channelList {
-                        PlayerProgramLine(series: series, channel: co.episodes[i])
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        PlayerProgressBar(co: co, scrubbing: $scrubbing, onInteract: flashChrome)
-                            .frame(maxWidth: .infinity)
+                VStack(spacing: 12) {
+                    if !co.isLive {
+                        PlayerTimelineV3(co: co, scrubbing: $scrubbing, onInteract: flashChrome).id(i)
                             .opacity(panel != nil ? 0.35 : 1)
                             .shadow(color: .black.opacity(chrome ? 0 : 0.6), radius: 2)
                             .allowsHitTesting(interactive && co.readyIndex == i)
                     }
-
-                    // Keep transport, timestamps and episode/tools in one continuous row.
-                    HStack(spacing: 8) {
-                        PlayerCompactTimeControls(co: co, onInteract: flashChrome)
-                            .foregroundStyle(.white.opacity(0.85))
-                            .opacity(dim).modifier(ChromeFade(on: chrome))
-
-                        landChips(i)
-                            .opacity(dim).modifier(ChromeFade(on: chrome))
+                    HStack(spacing: 10) {
+                        Button { co.togglePause(); flashChrome() } label: {
+                            Image(systemName: co.paused ? "play.fill" : "pause.fill")
+                                .font(.system(size: 15, weight: .semibold))
+                                .offset(x: co.paused ? 1 : 0)
+                                .foregroundStyle(PlayerPalette.ivory)
+                                .frame(width: 36, height: 36)
+                                .background(Color.white.opacity(0.12), in: Circle())
+                                .overlay(Circle().strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(PressScale())
+                        .accessibilityLabel(co.paused ? "播放" : "暂停")
+                        .accessibilityIdentifier("player.playPause")
+                        if co.channelList { PlayerLiveBadge(replay: co.replay != nil) } else { skipIntroButton }
+                        Spacer(minLength: 8)
+                        PlayerActionChips(actions: actions(i))
                     }
+                    .opacity(dim).modifier(ChromeFade(on: chrome))
                 }
                 .padding(.horizontal, side)
                 .padding(.bottom, max(ins.bottom, 8) + 4)
@@ -958,67 +877,6 @@ struct PlayerScreen: View {
             return co.episodes.count > 1 ? "S1:E\(e.ep)" + (e.title.isEmpty ? "" : " · " + e.title) : (series.subtitle ?? Fmt.meta(series))
         }
         return (seasonTag.map { $0 + " · " } ?? "") + "第 \(e.ep) 集 / 共 \(co.episodes.count) 集"
-    }
-
-    private func landChips(_ i: Int) -> some View {
-        let dmOK = series.source == .hongguo
-        let rate = co.playbackRate == 1 ? "1.0×" : SpeedPopover.label(co.playbackRate)
-        return HStack(spacing: 6) {
-            Button { if let current = co.current { co.select(current - 1) }; flashChrome() } label: {
-                Image(systemName: "backward.end.fill")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(width: 28, height: 34)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(PressScale())
-            .disabled((co.current ?? 0) <= 0)
-            .opacity((co.current ?? 0) > 0 ? 1 : 0.35)
-            .accessibilityLabel("上一集")
-            .accessibilityIdentifier("player.previousEpisode")
-
-            Button { if let current = co.current { co.select(current + 1) }; flashChrome() } label: {
-                Image(systemName: "forward.end.fill")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(width: 28, height: 34)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(PressScale())
-            .disabled((co.current ?? 0) >= co.episodes.count - 1)
-            .opacity((co.current ?? 0) < co.episodes.count - 1 ? 1 : 0.35)
-            .accessibilityLabel("下一集")
-            .accessibilityIdentifier("player.nextEpisode")
-
-            PlayerChip(glassBackground: false, action: PlayerAction(
-                id: "player.episodes", a11y: "选集", symbol: "square.grid.2x2", title: "选集",
-                active: panel == .episodes, action: { toggle(.episodes) }
-            ))
-            PlayerChip(glassBackground: false, action: PlayerAction(
-                id: "player.rate", a11y: "播放倍速 " + rate, symbol: "gauge.with.dots.needle.33percent",
-                title: "倍速", value: rate, active: panel == .rates || co.playbackRate != 1,
-                action: { toggle(.rates) }
-            ))
-            PlayerChip(glassBackground: false, action: PlayerAction(
-                id: "player.quality", a11y: "画质与播放源", symbol: "sparkles.tv", title: "画质",
-                value: qualityTag == "画质" ? nil : qualityTag, active: panel == .quality,
-                action: { toggle(.quality) }
-            ))
-            PlayerChip(glassBackground: false, action: PlayerAction(
-                id: "player.danmaku", a11y: danmaku.enabled ? "关闭弹幕" : "开启弹幕",
-                symbol: "text.bubble", title: "弹幕",
-                value: dmOK ? (danmaku.enabled ? "开" : "关") : nil,
-                active: dmOK && danmaku.enabled, dimmed: !dmOK,
-                action: {
-                    guard dmOK else { showOSD("当前片源不支持弹幕"); return }
-                    danmaku.enabled.toggle(); flashChrome()
-                }
-            ))
-            PlayerChip(glassBackground: false, action: PlayerAction(
-                id: "player.audio", a11y: "音轨与字幕", symbol: "captions.bubble", title: "音轨字幕",
-                active: panel == .audio || panel == .subtitles, action: { toggle(.audio) }
-            ))
-        }
     }
 
     private var lineName: String { co.lines.indices.contains(co.lineIndex) && co.lines.count > 1 ? co.lines[co.lineIndex].name : "" }
@@ -1398,43 +1256,6 @@ struct PlayerScreen: View {
         altSources = Array(found.prefix(1))
     }
 
-    // MARK: Horizontal seek gesture
-
-    private func beginHorizontalSeek() {
-        guard !locked, !speedMode, co.readyIndex == co.current, co.duration > 0 else { return }
-        horizontalSeekStart = co.time
-        horizontalSeekTarget = co.time
-        co.clock.scrubPreview = co.time
-        scrubbing = true
-        flashChrome()
-    }
-
-    private func updateHorizontalSeek(translation: CGFloat, width: CGFloat) {
-        guard let start = horizontalSeekStart, co.duration > 0, width > 0 else { return }
-        // Map the full gesture width to the complete video timeline.
-        let span = co.duration
-        let target = max(0, min(co.duration, start + Double(translation / width) * span))
-        horizontalSeekTarget = target
-        co.clock.scrubPreview = target
-    }
-
-    private func commitHorizontalSeek() {
-        guard let target = horizontalSeekTarget, co.duration > 0 else { cancelHorizontalSeek(); return }
-        co.seek(fraction: max(0, min(1, target / co.duration)))
-        horizontalSeekStart = nil
-        horizontalSeekTarget = nil
-        co.clock.scrubPreview = nil
-        scrubbing = false
-        flashChrome()
-    }
-
-    private func cancelHorizontalSeek() {
-        horizontalSeekStart = nil
-        horizontalSeekTarget = nil
-        co.clock.scrubPreview = nil
-        scrubbing = false
-    }
-
     // MARK: Taps
 
     private func handleTap() {
@@ -1768,10 +1589,6 @@ struct PlayerTouchCatcher: UIViewRepresentable {
     var onSpeedBegan: () -> Void
     var onSpeedChanged: (CGSize) -> Void
     var onSpeedEnded: () -> Void
-    var onSeekBegan: () -> Void = {}
-    var onSeekChanged: (CGFloat, CGFloat) -> Void = { _, _ in }
-    var onSeekEnded: () -> Void = {}
-    var onSeekCancelled: () -> Void = {}
     var landscape: Bool = false
     var onAdjustBegan: (AdjustSide) -> Void = { _ in }
     var onAdjustChanged: (AdjustSide, Double) -> Void = { _, _ in }
@@ -1798,13 +1615,8 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         c.onSpeedBegan = onSpeedBegan
         c.onSpeedChanged = onSpeedChanged
         c.onSpeedEnded = onSpeedEnded
-        c.onSeekBegan = onSeekBegan
-        c.onSeekChanged = onSeekChanged
-        c.onSeekEnded = onSeekEnded
-        c.onSeekCancelled = onSeekCancelled
         c.landscape = landscape
         c.speedMode = speedMode
-        c.locked = locked
         c.onAdjustBegan = onAdjustBegan
         c.onAdjustChanged = onAdjustChanged
         c.onAdjustEnded = onAdjustEnded
@@ -1813,7 +1625,6 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         // While speed HUD is up, keep catcher receiving the finger; chrome is hit-disabled.
         uiView.isUserInteractionEnabled = true
         c.longPress.isEnabled = playbackReady && !locked && speedEnabled
-        c.seekPan.isEnabled = playbackReady && !locked && !speedMode
         c.adjustPan.isEnabled = !locked
         c.doubleTapEnabled = playbackReady && !speedMode && !locked
         c.tap.isEnabled = !speedMode
@@ -1830,13 +1641,8 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         var onSpeedBegan: () -> Void = {}
         var onSpeedChanged: (CGSize) -> Void = { _ in }
         var onSpeedEnded: () -> Void = {}
-        var onSeekBegan: () -> Void = {}
-        var onSeekChanged: (CGFloat, CGFloat) -> Void = { _, _ in }
-        var onSeekEnded: () -> Void = {}
-        var onSeekCancelled: () -> Void = {}
         var landscape = false
         var speedMode = false
-        var locked = false
         var onAdjustBegan: (AdjustSide) -> Void = { _ in }
         var onAdjustChanged: (AdjustSide, Double) -> Void = { _, _ in }
         var onAdjustEnded: () -> Void = {}
@@ -1850,11 +1656,8 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         /// After a side double tap, further taps on that side keep seeking until this time.
         private var streak: (until: Date, right: Bool)?
         let longPress = UILongPressGestureRecognizer()
-        /// Horizontal seek pan, active only in the center area and only after horizontal intent is clear.
-        let seekPan = UIPanGestureRecognizer()
         /// Brightness / volume vertical pan (outer fifths, leaving the middle for paging).
         let adjustPan = UIPanGestureRecognizer()
-        private var seekActive = false
         private var adjustSide: AdjustSide?
         private var speedOrigin: CGPoint = .zero
         private var speedArmed = false
@@ -1871,17 +1674,12 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             // Small movement tolerance so a vertical page flick cancels speed long-press quickly.
             longPress.allowableMovement = 10
             longPress.cancelsTouchesInView = false
-            seekPan.addTarget(self, action: #selector(handleSeek(_:)))
-            seekPan.delegate = self
-            seekPan.maximumNumberOfTouches = 1
-            seekPan.cancelsTouchesInView = false
             adjustPan.addTarget(self, action: #selector(handleAdjust))
             adjustPan.delegate = self
             adjustPan.maximumNumberOfTouches = 1
             adjustPan.cancelsTouchesInView = false
             view.addGestureRecognizer(tap)
             view.addGestureRecognizer(longPress)
-            view.addGestureRecognizer(seekPan)
             view.addGestureRecognizer(adjustPan)
             pinch.addTarget(self, action: #selector(handlePinch))
             pinch.delegate = self
@@ -1957,27 +1755,6 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             onPinchFill(g.scale > 1)
         }
 
-        @objc private func handleSeek(_ g: UIPanGestureRecognizer) {
-            guard let view else { return }
-            switch g.state {
-            case .began:
-                seekActive = true
-                onSeekBegan()
-            case .changed:
-                guard seekActive else { return }
-                onSeekChanged(g.translation(in: view).x, max(1, view.bounds.width))
-            case .ended:
-                guard seekActive else { return }
-                seekActive = false
-                onSeekEnded()
-            case .cancelled, .failed:
-                guard seekActive else { return }
-                seekActive = false
-                onSeekCancelled()
-            default: break
-            }
-        }
-
         @objc private func handleAdjust(_ g: UIPanGestureRecognizer) {
             guard let view else { return }
             switch g.state {
@@ -2003,8 +1780,8 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            // The adjust pan owns its touch exclusively; horizontal seeking can coexist with feed paging
-            // until the direction gate identifies a horizontal drag.
+            // The adjust pan owns its touch exclusively (no paging/speed at the same time);
+            // tap + long-press always coexist with UIScrollView pan + interactive pop.
             if gestureRecognizer === adjustPan || otherGestureRecognizer === adjustPan { return false }
             return true
         }
@@ -2015,8 +1792,8 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            gestureRecognizer === adjustPan && otherGestureRecognizer.view is UIScrollView
-                && otherGestureRecognizer is UIPanGestureRecognizer
+            guard gestureRecognizer === adjustPan, otherGestureRecognizer !== adjustPan else { return false }
+            return otherGestureRecognizer is UIPanGestureRecognizer
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -2024,11 +1801,6 @@ struct PlayerTouchCatcher: UIViewRepresentable {
             let x = gestureRecognizer.location(in: view).x
             // Left strip reserved for interactive pop — never claim it.
             if gestureRecognizer !== pinch, x < view.edgeBackWidth { return false }
-            if gestureRecognizer === seekPan, let pan = gestureRecognizer as? UIPanGestureRecognizer {
-                guard !speedMode, !locked else { return false }
-                let v = pan.velocity(in: view)
-                return abs(v.x) > abs(v.y) * 1.2
-            }
             if gestureRecognizer === adjustPan, let pan = gestureRecognizer as? UIPanGestureRecognizer {
                 guard !speedMode, Coordinator.side(pan, in: view, landscape: landscape) != nil else { return false }
                 let v = pan.velocity(in: view)
