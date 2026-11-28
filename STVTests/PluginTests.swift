@@ -239,7 +239,7 @@ final class PluginTests: XCTestCase {
         PluginMediaDomainCache.clear(pluginID: pluginID)
         defer { PluginMediaDomainCache.clear(pluginID: pluginID) }
 
-        let hosts = (0..<2_000).map { "https://cdn-\\($0).example.net/image" }.joined(separator: " ")
+        let hosts = (0..<2_000).map { "https://cdn-\($0).example.net/image" }.joined(separator: " ")
         PluginMediaDomainCache.learn(pluginID: pluginID,
                                      sourceURL: URL(string: "https://source.example.com/catalog")!,
                                      sourcePolicy: DomainPolicy(["source.example.com"]),
