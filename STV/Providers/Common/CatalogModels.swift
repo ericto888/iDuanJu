@@ -108,7 +108,9 @@ struct HGSeries: Identifiable, Hashable, Codable {
     var orientation: String? = nil
     var isNew: Bool = false
     var tags: [String] = []
-    /// Optional live-event metadata. Nil for ordinary video/short-drama items.\n    var liveMatch: LiveMatchInfo? = nil\n    /// huangguo detail page URL, if any.
+    /// Optional live-event metadata. Nil for ordinary video/short-drama items.
+    var liveMatch: LiveMatchInfo? = nil
+    /// huangguo detail page URL, if any.
     var page: String? = nil
     var id: String { source.rawValue + ":" + seriesId }
     /// Long-video sites use 16:9 thumbnails; grids switch to 2 columns.
