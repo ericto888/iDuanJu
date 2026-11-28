@@ -77,11 +77,9 @@ enum PluginMediaDomainCache {
 
             let ext = URL(string: candidate)?.pathExtension.lowercased() ?? ""
             let imageExtension = ["jpg", "jpeg", "png", "webp", "gif", "avif", "bmp"].contains(ext)
-            let left = max(0, match.range.location - 120)
-            let right = min(ns.length, match.range.location + match.range.length + 40)
-            let context = ns.substring(with: NSRange(location: left, length: right - left)).lowercased()
-            let imageField = context.range(of: #"(cover|poster|image|img|pic|thumb|thumbnail|avatar|banner|src)"#,
-                                           options: .regularExpression) != nil
+            let prefix = ns.substring(to: match.range.location)
+            let imageFieldPattern = #""(?:cover|poster|image|img|pic|thumb|thumbnail|avatar|banner|src)"\s*:\s*["']?$|(?:data-(?:src|original|lazy-src)|src|poster)\s*=\s*["']?$"#
+            let imageField = prefix.range(of: imageFieldPattern, options: .regularExpression) != nil
             guard imageExtension || imageField else { continue }
             discovered.insert(host)
         }
