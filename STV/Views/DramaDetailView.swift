@@ -271,7 +271,6 @@ struct DramaDetailView: View {
         }
         .frame(height: 44)
         .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 8)
-        .background { LiquidEdgeFade(visible: pinned) }
         .animation(.easeOut(duration: 0.2), value: pinned)
     }
 
