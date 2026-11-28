@@ -253,6 +253,22 @@ extension View {
     func homePageInset() -> some View { modifier(HomePageInset()) }
 }
 
+/// iPhone 首页交给系统处理底部安全区；iPad 保留原有分页布局补偿。
+private struct HomeBottomSafeArea: ViewModifier {
+    let indicator: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            content
+        } else {
+            content
+                .padding(.bottom, indicator)
+                .ignoresSafeArea(.container, edges: .bottom)
+        }
+    }
+}
+
 /// 发现页：玻璃搜索栏/筛选 + 来源分类条浮在内容上，下方按来源横滑翻页（红果 / 黄果 / AI剧 / 已开启的长视频站 / 频道 / 漫画 / 小说），
 /// 分类条联动（选中项自动滚到居中、指示条跟随）。每页：二级榜单选择 → 竖海报 hero → 真实榜单分段。
 /// 横滑冲突：hero 轮播区域内的横滑归轮播；其它区域横滑翻来源页；首页是根页面，没有系统侧滑返回。
@@ -334,8 +350,7 @@ struct HomeView: View {
                     .frame(height: 36).allowsHitTesting(false)
             }
         }
-        .padding(.bottom, indicator)
-        .ignoresSafeArea(.container, edges: .bottom)
+        .modifier(HomeBottomSafeArea(indicator: indicator))
         .background { SpanReader(span: $safeSpan).ignoresSafeArea(.keyboard) }
         .overlay(alignment: .top) { header }
         .dsAmbient(visible: !pinned)
