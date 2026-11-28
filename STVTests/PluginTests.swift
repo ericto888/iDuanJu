@@ -327,10 +327,12 @@ final class PluginTests: XCTestCase {
                                      sourceURL: URL(string: "https://example.com/ping")!,
                                      sourcePolicy: DomainPolicy(["example.com"]),
                                      contentType: "application/json",
-                                     body: Data(#"{"sourceList":[{"type":"IMAGE","domain":[{"url":"https://bare-image-cdn.example.net","status":0}]}]}"#.utf8))
+                                     body: Data(#"{"sourceList":[{"type":"IMAGE","domain":[{"url":"https://bare-image-cdn.example.net","status":0},{"url":"bare-host-image-cdn.example.net","status":0}]}]}"#.utf8))
         XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: imageListID).isEmpty)
         _ = PluginMedia.ref(plugin: imageListID, url: "https://bare-image-cdn.example.net/poster")
-        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: imageListID), ["bare-image-cdn.example.net"])
+        _ = PluginMedia.ref(plugin: imageListID, url: "https://bare-host-image-cdn.example.net/poster")
+        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: imageListID).sorted(),
+                       ["bare-host-image-cdn.example.net", "bare-image-cdn.example.net"])
         PluginMediaDomainCache.clear(pluginID: imageListID)
 
         // Dynamic image permission is deliberately separate from host.http permission.
