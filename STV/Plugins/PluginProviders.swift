@@ -25,6 +25,82 @@ enum ContentFilter {
     }
 }
 
+/// Dynamic image CDN cache, scoped to one plugin and learned only from successful responses
+/// fetched from that plugin's explicitly authorized HTTP origins. It never expands host.http policy.
+enum PluginMediaDomainCache {
+    private static let lock = NSLock()
+    private static let keyPrefix = "stv.plugin.learnedImageDomains."
+    private static let ttl: TimeInterval = 24 * 60 * 60
+    private static let maxDomains = 64
+
+    static func domains(pluginID: String, now: Date = Date()) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        let key = keyPrefix + pluginID
+        let stored = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+        let valid = stored.filter { $0.value > now.timeIntervalSince1970 }
+        if valid.count != stored.count { UserDefaults.standard.set(valid, forKey: key) }
+        return valid.keys.sorted()
+    }
+
+    static func clear(pluginID: String) {
+        lock.lock(); defer { lock.unlock() }
+        UserDefaults.standard.removeObject(forKey: keyPrefix + pluginID)
+    }
+
+    static func learn(pluginID: String, sourceURL: URL, sourcePolicy: DomainPolicy,
+                      contentType: String, body: Data, now: Date = Date()) {
+        guard let sourceHost = sourceURL.host?.lowercased(), sourcePolicy.allows(sourceHost) else { return }
+        let type = contentType.lowercased()
+        guard type.contains("text/html") || type.contains("json") || type.contains("javascript") else { return }
+        guard let raw = String(data: body, encoding: .utf8), !raw.isEmpty else { return }
+
+        // Nuxt/JSON payloads commonly escape URL slashes.
+        let text = raw.replacingOccurrences(of: #"\/"#, with: "/")
+            .replacingOccurrences(of: #"\\u002[fF]"#, with: "/", options: .regularExpression)
+        let ns = text as NSString
+        let pattern = #"https://[A-Za-z0-9.-]+(?::443)?/[^\s"'<>\\]*"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return }
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return }
+
+        var discovered = Set<String>()
+        for match in matches {
+            var candidate = ns.substring(with: match.range)
+            while let last = candidate.last, ".,;)]}".contains(last) { candidate.removeLast() }
+            guard let components = URLComponents(string: candidate),
+                  components.scheme?.lowercased() == "https",
+                  components.user == nil, components.password == nil,
+                  components.port == nil || components.port == 443,
+                  let host = components.host?.lowercased(),
+                  host != sourceHost, !NetGuard.isIPLiteral(host),
+                  DomainRule(host) != nil else { continue }
+
+            let ext = URL(string: candidate)?.pathExtension.lowercased() ?? ""
+            let imageExtension = ["jpg", "jpeg", "png", "webp", "gif", "avif", "bmp"].contains(ext)
+            let left = max(0, match.range.location - 120)
+            let right = min(ns.length, match.range.location + match.range.length + 40)
+            let context = ns.substring(with: NSRange(location: left, length: right - left)).lowercased()
+            let imageField = context.range(of: #"(cover|poster|image|img|pic|thumb|thumbnail|avatar|banner|src)"#,
+                                           options: .regularExpression) != nil
+            guard imageExtension || imageField else { continue }
+            discovered.insert(host)
+        }
+        guard !discovered.isEmpty else { return }
+
+        lock.lock(); defer { lock.unlock() }
+        let key = keyPrefix + pluginID
+        var stored = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+        let expiry = now.timeIntervalSince1970 + ttl
+        for host in discovered { stored[host] = expiry }
+        stored = stored.filter { $0.value > now.timeIntervalSince1970 }
+        if stored.count > maxDomains {
+            let keep = stored.sorted { $0.value > $1.value }.prefix(maxDomains)
+            stored = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
+        }
+        UserDefaults.standard.set(stored, forKey: key)
+    }
+}
+
 /// Plugin-provided images go through `idjimg://` refs so that every fetch is checked against that plugin's
 /// media allow-list, uses only that plugin's cookies, and applies declared transforms natively.
 enum PluginMedia {
@@ -54,13 +130,22 @@ enum PluginMedia {
     }
 
     private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
-        let policy: DomainPolicy
+        let explicitPolicy: DomainPolicy
+        let learnedHosts: Set<String>
         var blocked: String?
-        init(policy: DomainPolicy) { self.policy = policy }
+        init(explicitPolicy: DomainPolicy, learnedHosts: Set<String>) {
+            self.explicitPolicy = explicitPolicy
+            self.learnedHosts = learnedHosts
+        }
+        private func allows(_ url: URL) -> Bool {
+            guard let host = url.host?.lowercased(), url.scheme == "https" || url.scheme == "http" else { return false }
+            let explicitlyAllowed = explicitPolicy.allows(host)
+            let dynamicallyAllowed = url.scheme == "https" && learnedHosts.contains(host)
+            return (explicitlyAllowed || dynamicallyAllowed) && !NetGuard.isIPLiteral(host) && !NetGuard.resolvesToBlocked(host)
+        }
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest) async -> URLRequest? {
-            guard let u = request.url, let h = u.host, u.scheme == "https" || u.scheme == "http", policy.allows(h),
-                  !NetGuard.isIPLiteral(h), !NetGuard.resolvesToBlocked(h) else { blocked = request.url?.host; return nil }
+            guard let url = request.url, allows(url) else { blocked = request.url?.host; return nil }
             return request
         }
     }
@@ -78,10 +163,16 @@ enum PluginMedia {
     static func load(_ ref: String) async throws -> Data {
         guard let r = parse(ref) else { throw ProviderError.invalid("图片地址无效") }
         guard let rec = PluginStore.snapshot(r.plugin), rec.enabled else { throw ProviderError.invalid("插件未启用") }
-        let policy = DomainPolicy(rec.manifest.mediaDomains + rec.manifest.httpDomains + rec.extraDomains)
-        guard let host = r.url.host, r.url.scheme == "https" || r.url.scheme == "http", policy.allows(host), !NetGuard.isIPLiteral(host) else {
-            PluginLog.add(r.plugin, "✕ 图片域名未授权 \(r.url.host ?? "?")")
-            throw ProviderError.invalid("图片域名未授权：\(r.url.host ?? "")")
+        let explicitPolicy = DomainPolicy(rec.manifest.mediaDomains + rec.manifest.httpDomains + rec.extraDomains)
+        let learnedHosts = Set(PluginMediaDomainCache.domains(pluginID: r.plugin))
+        guard let host = r.url.host?.lowercased(), r.url.scheme == "https" || r.url.scheme == "http" else {
+            throw ProviderError.invalid("图片地址无效")
+        }
+        let explicitlyAllowed = explicitPolicy.allows(host)
+        let dynamicallyAllowed = r.url.scheme == "https" && learnedHosts.contains(host)
+        guard (explicitlyAllowed || dynamicallyAllowed), !NetGuard.isIPLiteral(host) else {
+            PluginLog.add(r.plugin, "✕ 图片域名未授权 \(host)")
+            throw ProviderError.invalid("图片域名未授权：\(host)")
         }
         let blocked = await Task.detached { NetGuard.resolvesToBlocked(host) }.value
         if blocked { throw ProviderError.invalid("图片地址解析到内网") }
@@ -93,7 +184,7 @@ enum PluginMedia {
             for (k, v) in r.headers where allowedHeaders.contains(k.lowercased()) { req.setValue(v, forHTTPHeaderField: k) }
             let cs = PluginRuntime.jar(r.plugin).cookies(for: r.url)
             for (k, v) in HTTPCookie.requestHeaderFields(with: cs) { req.setValue(v, forHTTPHeaderField: k) }
-            let guardD = RedirectGuard(policy: policy)
+            let guardD = RedirectGuard(explicitPolicy: explicitPolicy, learnedHosts: learnedHosts)
             let (d, resp) = try await session.data(for: req, delegate: guardD)
             if let b = guardD.blocked { throw ProviderError.invalid("图片跳转到未授权域名 \(b)") }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
