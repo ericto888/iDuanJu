@@ -73,6 +73,22 @@ struct DramaSource: RawRepresentable, Hashable, Codable, Identifiable, Sendable 
     }
 }
 
+struct LiveMatchTeam: Hashable, Codable {
+    var name: String
+    var logo: String? = nil
+}
+
+struct LiveMatchInfo: Hashable, Codable {
+    var home: LiveMatchTeam
+    var away: LiveMatchTeam
+    var homeScore: Int? = nil
+    var awayScore: Int? = nil
+    /// scheduled | live | finished
+    var status: String
+    var kickoff: String? = nil
+    var statusText: String? = nil
+}
+
 struct HGSeries: Identifiable, Hashable, Codable {
     var source: DramaSource = .hongguo
     /// hongguo: numeric seriesId. huangguo: "<sub-source>:<sourceId>" reference.
@@ -91,7 +107,7 @@ struct HGSeries: Identifiable, Hashable, Codable {
     var orientation: String? = nil
     var isNew: Bool = false
     var tags: [String] = []
-    /// huangguo detail page URL, if any.
+    /// Optional live-event metadata. Nil for ordinary video/short-drama items.\n    var liveMatch: LiveMatchInfo? = nil\n    /// huangguo detail page URL, if any.
     var page: String? = nil
     var id: String { source.rawValue + ":" + seriesId }
     /// Long-video sites use 16:9 thumbnails; grids switch to 2 columns.

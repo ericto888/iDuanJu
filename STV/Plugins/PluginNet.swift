@@ -117,18 +117,25 @@ enum NetGuard {
     }
 
     /// True when any address the host resolves to is in a blocked range. Blocking call (plugin thread).
-    static func resolvesToBlocked(_ host: String) -> Bool {
+    static func resolvesToBlocked(_ host: String, useCache: Bool = true) -> Bool {
         let h = host.lowercased()
         if h == "localhost" || h.hasSuffix(".localhost") || h.hasSuffix(".local") { return true }
-        cacheLock.lock()
-        if let (t, v) = cache[h], !v, Date().timeIntervalSince(t) < 300 { cacheLock.unlock(); return false }
-        cacheLock.unlock()
+        if useCache {
+            cacheLock.lock()
+            if let (t, v) = cache[h], !v, Date().timeIntervalSince(t) < 300 {
+                cacheLock.unlock()
+                return false
+            }
+            cacheLock.unlock()
+        }
         let addrs = resolverOverride?(h) ?? resolve(h)
+        // Fail closed: a hostname with no usable DNS answer must not be treated as safe.
+        guard !addrs.isEmpty else { return true }
         let hasAllowed = addrs.contains { !isBlockedIP($0) }
         // Proxy Fake-IP (Clash / sing-box) often returns a 198.18.x.x IPv4 paired with an fc00::/18 IPv6;
         // do not block the whole host for the companion Fake-IPv6 when an allowed address is present.
         let blocked = addrs.contains { isBlockedIP($0) && !(hasAllowed && isIPv6ULA($0)) }
-        if !blocked && !addrs.isEmpty {
+        if !blocked && useCache {
             cacheLock.lock(); cache[h] = (Date(), false); cacheLock.unlock()
         }
         return blocked
@@ -222,6 +229,9 @@ final class PluginNet: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     /// Synchronous on purpose: runs on the plugin's own thread while the script waits.
     func perform(_ req0: URLRequest, follow: Bool = true, timeout: TimeInterval = 20) throws -> Response {
         guard let url = req0.url else { throw PluginError.runtime(code: "E_PERMISSION", message: "地址无效") }
+        // Prevent a response started under an old plugin version from repopulating
+        // the learned-domain cache after update, uninstall or Clear Data.
+        let mediaLearningGeneration = PluginMediaDomainCache.generation(pluginID: pluginID)
         do { try check(url) } catch { log("✕ 拦截 \(url.host ?? "?") · \(error.localizedDescription)"); throw error }
         try rateLimit()
         var req = req0
@@ -231,6 +241,15 @@ final class PluginNet: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         let start = Date()
         if let fx = PluginFixtures.responder {
             guard let r = fx(req) else { throw PluginError.runtime(code: "E_NETWORK", message: "fixture missing \(url.absoluteString)") }
+            if (200..<300).contains(r.status) {
+                let contentType = r.headers.first(where: { $0.key.lowercased() == "content-type" })?.value ?? ""
+                PluginMediaDomainCache.learn(pluginID: pluginID, sourceURL: url, sourcePolicy: policy(),
+                                             contentType: contentType, body: r.body,
+                                             expectedGeneration: mediaLearningGeneration)
+                PluginMediaDomainCache.observeEncryptedPayloads(pluginID: pluginID, sourceURL: url,
+                                                                 sourcePolicy: policy(), contentType: contentType,
+                                                                 body: r.body, expectedGeneration: mediaLearningGeneration)
+            }
             log("\(r.status) \(req.httpMethod ?? "GET") \(url.host ?? "")\(url.path) · fixture")
             return Response(status: r.status, url: url, headers: r.headers, body: r.body)
         }
@@ -261,6 +280,15 @@ final class PluginNet: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
             if data.count > Self.maxBody { throw PluginError.runtime(code: "E_NETWORK", message: "响应超过 20MB") }
             var headers: [String: String] = [:]
             for (k, v) in http.allHeaderFields { if let k = k as? String { headers[k.lowercased()] = "\(v)" } }
+            if (200..<300).contains(http.statusCode) {
+                let contentType = headers["content-type"] ?? ""
+                PluginMediaDomainCache.learn(pluginID: pluginID, sourceURL: final, sourcePolicy: policy(),
+                                             contentType: contentType, body: data,
+                                             expectedGeneration: mediaLearningGeneration)
+                PluginMediaDomainCache.observeEncryptedPayloads(pluginID: pluginID, sourceURL: final,
+                                                                 sourcePolicy: policy(), contentType: contentType,
+                                                                 body: data, expectedGeneration: mediaLearningGeneration)
+            }
             log("\(http.statusCode) \(req.httpMethod ?? "GET") \(final.host ?? "")\(final.path) · \(data.count)B · \(Int(Date().timeIntervalSince(start) * 1000))ms")
             return Response(status: http.statusCode, url: final, headers: headers, body: data)
         }

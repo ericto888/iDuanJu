@@ -108,6 +108,9 @@ final class PluginHostContext: @unchecked Sendable {
                 let r = try PluginCrypto.aes(encrypt: enc, mode: a["mode"] as? String ?? "cbc", key: key,
                                              iv: try iv.map { try PluginCrypto.decode($0, a["ivEncoding"] as? String ?? kenc) },
                                              data: data, padding: (a["padding"] as? String ?? "pkcs7") != "none")
+                if !enc {
+                    PluginMediaDomainCache.learnDecryptedPayload(pluginID: id, ciphertext: data, plaintext: r)
+                }
                 return .success(try out(try PluginCrypto.encode(r, a["out"] as? String ?? (enc ? "base64" : "utf8"))))
             case "crypto.rsa":
                 let pem = str("publicKeyPem")

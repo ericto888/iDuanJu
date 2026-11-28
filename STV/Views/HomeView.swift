@@ -395,7 +395,8 @@ struct HomeView: View {
                     scrollSourceKey = next.key
                 }
             }
-        }        .compatOnChange(of: scrollSourceKey) { nextKey in
+        }
+        .compatOnChange(of: scrollSourceKey) { nextKey in
             guard let nextKey, nextKey != source.key,
                   let next = sources.first(where: { $0.key == nextKey }) else { return }
             if !visited.contains(next) { visited.insert(next) }
@@ -785,7 +786,8 @@ private struct HomeFeedPage: View {
             } else {
                 self.boards.forEach { BoardCache.shared.feed($0).load(force: true) }
             }
-        }        .task(id: tab) {
+        }
+        .task(id: tab) {
             if case .site(let site) = tab, usesCategoryShelves(site) {
                 let requestID = UUID()
                 pluginHomeRequestID = requestID
@@ -1184,7 +1186,8 @@ struct HomeChannelBar<T: Hashable>: View {
                 }
                 .padding(.horizontal, 20)
                 .animation(DS.select, value: selection)
-                .animation(DS.select, value: items)            }
+                .animation(DS.select, value: items)
+            }
             .accessibilityIdentifier("home.channels")
             .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.93),
                                          .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))

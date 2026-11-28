@@ -25,14 +25,272 @@ enum ContentFilter {
     }
 }
 
+/// Dynamic image CDN cache, scoped to one plugin and learned only from successful responses
+/// fetched from that plugin's explicitly authorized HTTP origins. It never expands host.http policy.
+enum PluginMediaDomainCache {
+    private static let lock = NSLock()
+    private static let keyPrefix = "stv.plugin.learnedImageDomains."
+    private static let ttl: TimeInterval = 24 * 60 * 60
+    private static let maxDomains = 64
+    private static var generations: [String: UInt64] = [:]
+    /// HTTPS hosts seen in successful, authorized source responses. They are
+    /// candidates only; a provider must later classify an exact URL as an image.
+    private static var observedHosts: [String: [String: TimeInterval]] = [:]
+    private struct EncryptedPayload {
+        let sourceURL: URL
+        let sourcePolicy: DomainPolicy
+        let generation: UInt64
+        let expiresAt: TimeInterval
+        let bytes: Data
+    }
+    /// Encoded payload fragments from successful authorized responses. A decrypt result
+    /// is inspected only when its exact ciphertext bytes came from one of these responses.
+    private static var encryptedPayloads: [String: [EncryptedPayload]] = [:]
+
+    static func generation(pluginID: String) -> UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        return generations[pluginID, default: 0]
+    }
+
+    static func domains(pluginID: String, now: Date = Date()) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        let key = keyPrefix + pluginID
+        let stored = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+        let valid = stored.filter { $0.value > now.timeIntervalSince1970 }
+        if valid.count != stored.count { UserDefaults.standard.set(valid, forKey: key) }
+        return valid.keys.sorted()
+    }
+
+    /// Short-lived candidates may authorize a redirect only when the redirect
+    /// originates from an already-authorized image request.
+    static func candidates(pluginID: String, now: Date = Date()) -> Set<String> {
+        lock.lock(); defer { lock.unlock() }
+        let timestamp = now.timeIntervalSince1970
+        let valid = observedHosts[pluginID, default: [:]].filter { $0.value > timestamp }
+        observedHosts[pluginID] = valid
+        return Set(valid.keys)
+    }
+
+    static func clear(pluginID: String) {
+        lock.lock(); defer { lock.unlock() }
+        generations[pluginID, default: 0] &+= 1
+        observedHosts.removeValue(forKey: pluginID)
+        encryptedPayloads.removeValue(forKey: pluginID)
+        UserDefaults.standard.removeObject(forKey: keyPrefix + pluginID)
+    }
+
+    /// Record bounded base64 payloads embedded in a successful authorized JSON response.
+    /// These are provenance tokens, not permissions; a later decrypt must use matching bytes.
+    static func observeEncryptedPayloads(pluginID: String, sourceURL: URL, sourcePolicy: DomainPolicy,
+                                          contentType: String, body: Data, expectedGeneration: UInt64? = nil,
+                                          now: Date = Date()) {
+        guard sourceURL.scheme?.lowercased() == "https",
+              let sourceHost = sourceURL.host?.lowercased(), sourcePolicy.allows(sourceHost),
+              contentType.lowercased().contains("json"), body.count <= 8 << 20,
+              let root = try? JSONSerialization.jsonObject(with: body, options: [.fragmentsAllowed]) else { return }
+
+        var payloads: [Data] = []
+        var totalBytes = 0
+        // Bound total traversal work, not just recursion depth and per-array width.
+        // JSON objects can contain millions of shallow keys, so depth alone is insufficient.
+        var remainingNodes = 4_096
+        func visit(_ value: Any, depth: Int) {
+            guard remainingNodes > 0, depth <= 16, payloads.count < 64, totalBytes < 4 << 20 else { return }
+            remainingNodes -= 1
+            if let object = value as? [String: Any] {
+                for child in object.values {
+                    guard remainingNodes > 0, payloads.count < 64, totalBytes < 4 << 20 else { break }
+                    visit(child, depth: depth + 1)
+                }
+            } else if let array = value as? [Any] {
+                for child in array.prefix(512) {
+                    guard remainingNodes > 0, payloads.count < 64, totalBytes < 4 << 20 else { break }
+                    visit(child, depth: depth + 1)
+                }
+            } else if let string = value as? String {
+                var encoded = string.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .filter { !$0.isWhitespace }
+                    .replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+                guard encoded.count >= 32, encoded.count <= 3 << 20 else { return }
+                while encoded.count % 4 != 0 { encoded += "=" }
+                guard let bytes = Data(base64Encoded: encoded), bytes.count >= 16,
+                      bytes.count <= 2 << 20, totalBytes + bytes.count <= 4 << 20 else { return }
+                payloads.append(bytes)
+                totalBytes += bytes.count
+            }
+        }
+        visit(root, depth: 0)
+        guard !payloads.isEmpty else { return }
+
+        lock.lock()
+        if let expectedGeneration, generations[pluginID, default: 0] != expectedGeneration {
+            lock.unlock()
+            return
+        }
+        let timestamp = now.timeIntervalSince1970
+        var entries = encryptedPayloads[pluginID, default: []].filter { $0.expiresAt > timestamp }
+        for bytes in payloads {
+            entries.append(EncryptedPayload(sourceURL: sourceURL, sourcePolicy: sourcePolicy,
+                                            generation: generations[pluginID, default: 0],
+                                            expiresAt: timestamp + 10 * 60, bytes: bytes))
+        }
+        var storedBytes = entries.reduce(0) { $0 + $1.bytes.count }
+        while entries.count > 128 || storedBytes > 8 << 20 {
+            guard !entries.isEmpty else { break }
+            storedBytes -= entries.removeFirst().bytes.count
+        }
+        encryptedPayloads[pluginID] = entries
+        lock.unlock()
+    }
+
+    /// Inspect decrypted text only when the exact input bytes are contained in a
+    /// base64 payload observed in a successful authorized response for this plugin.
+    static func learnDecryptedPayload(pluginID: String, ciphertext: Data, plaintext: Data, now: Date = Date()) {
+        guard ciphertext.count >= 16, plaintext.count <= 8 << 20,
+              String(data: plaintext, encoding: .utf8) != nil else { return }
+        let timestamp = now.timeIntervalSince1970
+        lock.lock()
+        var entries = encryptedPayloads[pluginID, default: []].filter { $0.expiresAt > timestamp }
+        encryptedPayloads[pluginID] = entries
+        let match = entries.first { entry in
+            generations[pluginID, default: 0] == entry.generation && entry.bytes.range(of: ciphertext) != nil
+        }
+        lock.unlock()
+        guard let match else { return }
+        learn(pluginID: pluginID, sourceURL: match.sourceURL, sourcePolicy: match.sourcePolicy,
+              contentType: "application/json", body: plaintext, expectedGeneration: match.generation, now: now)
+    }
+
+    /// A provider has already classified this value as an image (cover, poster,
+    /// thumbnail or comic page). Learn its HTTPS host at the point where that
+    /// semantic image reference is created; serialized Nuxt payloads do not
+    /// necessarily keep the image key adjacent to the URL string.
+    static func learnImageURL(pluginID: String, url: String, now: Date = Date()) {
+        guard let components = URLComponents(string: url),
+              components.scheme?.lowercased() == "https",
+              components.user == nil, components.password == nil,
+              components.port == nil || components.port == 443,
+              let host = components.host?.lowercased(),
+              !NetGuard.isIPLiteral(host), DomainRule(host) != nil else { return }
+
+        lock.lock()
+        let observedExpiry = observedHosts[pluginID]?[host] ?? 0
+        guard observedExpiry > now.timeIntervalSince1970 else {
+            lock.unlock()
+            return
+        }
+        let key = keyPrefix + pluginID
+        var stored = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+        let timestamp = now.timeIntervalSince1970
+        stored = stored.filter { $0.value > timestamp }
+        let isNew = stored[host] == nil
+        stored[host] = timestamp + ttl
+        if stored.count > maxDomains {
+            let keep = stored.sorted {
+                if $0.value != $1.value { return $0.value > $1.value }
+                return $0.key < $1.key
+            }.prefix(maxDomains)
+            stored = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
+        }
+        UserDefaults.standard.set(stored, forKey: key)
+        lock.unlock()
+
+        if isNew {
+            PluginLog.add(pluginID, "📝 动态授权图片 CDN（24 小时）：\(host)")
+        }
+    }
+
+    static func learn(pluginID: String, sourceURL: URL, sourcePolicy: DomainPolicy,
+                      contentType: String, body: Data, expectedGeneration: UInt64? = nil,
+                      now: Date = Date()) {
+        guard sourceURL.scheme == "https",
+              let sourceHost = sourceURL.host?.lowercased(), sourcePolicy.allows(sourceHost) else { return }
+        let type = contentType.lowercased()
+        guard type.contains("text/html") || type.contains("json") || type.contains("javascript") else { return }
+        // Keep synchronous scanning bounded; normal HTML/JSON API payloads are far smaller.
+        guard body.count <= 8 << 20,
+              let raw = String(data: body, encoding: .utf8), !raw.isEmpty else { return }
+
+        // Nuxt/JSON payloads commonly escape URL slashes.
+        let text = raw.replacingOccurrences(of: #"\/"#, with: "/")
+            .replacingOccurrences(of: #"\\u002[fF]"#, with: "/", options: .regularExpression)
+        let ns = text as NSString
+        var observed = Set<String>()
+        let scanRange = NSRange(location: 0, length: ns.length)
+
+        // Enumerate lazily and stop as soon as the per-response candidate budget is
+        // reached. matches(in:) allocates an array for every match in the body first.
+        let pattern = #"https://[A-Za-z0-9.-]+(?::443)?(?:/[^\s"'<>\\]*)?"#
+        if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+            regex.enumerateMatches(in: text, range: scanRange) { match, _, stop in
+                guard observed.count < maxDomains, let match else {
+                    stop.pointee = true
+                    return
+                }
+                var candidate = ns.substring(with: match.range)
+                while let last = candidate.last, ".,;)]}".contains(last) { candidate.removeLast() }
+                guard let components = URLComponents(string: candidate),
+                      components.scheme?.lowercased() == "https",
+                      components.user == nil, components.password == nil,
+                      components.port == nil || components.port == 443,
+                      let host = components.host?.lowercased(),
+                      host != sourceHost, !NetGuard.isIPLiteral(host),
+                      DomainRule(host) != nil else { return }
+                observed.insert(host)
+                if observed.count >= maxDomains { stop.pointee = true }
+            }
+        }
+
+        // Some APIs return CDN origins as bare host strings rather than URLs.
+        // This second lazy pass shares the same budget with URL matches.
+        let bareHostPattern = #"(?<![A-Za-z0-9.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}(?![A-Za-z0-9.-])"#
+        if observed.count < maxDomains,
+           let hostRegex = try? NSRegularExpression(pattern: bareHostPattern, options: [.caseInsensitive]) {
+            hostRegex.enumerateMatches(in: text, range: scanRange) { match, _, stop in
+                guard observed.count < maxDomains, let match else {
+                    stop.pointee = true
+                    return
+                }
+                let host = ns.substring(with: match.range).lowercased()
+                guard host != sourceHost, !NetGuard.isIPLiteral(host), DomainRule(host) != nil else { return }
+                observed.insert(host)
+                if observed.count >= maxDomains { stop.pointee = true }
+            }
+        }
+        guard !observed.isEmpty else { return }
+
+        lock.lock()
+        if let expectedGeneration, generations[pluginID, default: 0] != expectedGeneration {
+            lock.unlock()
+            return
+        }
+        let timestamp = now.timeIntervalSince1970
+        var candidates = observedHosts[pluginID, default: [:]].filter { $0.value > timestamp }
+        for host in observed { candidates[host] = timestamp + 10 * 60 }
+        if candidates.count > maxDomains {
+            let keep = candidates.sorted {
+                if $0.value != $1.value { return $0.value > $1.value }
+                return $0.key < $1.key
+            }.prefix(maxDomains)
+            candidates = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
+        }
+        observedHosts[pluginID] = candidates
+        lock.unlock()
+    }
+}
+
 /// Plugin-provided images go through `idjimg://` refs so that every fetch is checked against that plugin's
-/// media allow-list, uses only that plugin's cookies, and applies declared transforms natively.
+/// manifest permissions plus that plugin's learned image CDN hosts, uses only its cookies, and applies transforms natively.
 enum PluginMedia {
     static let scheme = "idjimg://"
     static let allowedHeaders: Set<String> = ["referer", "user-agent", "origin", "accept", "accept-language"]
 
     static func ref(plugin: String, url: String, headers: [String: String]? = nil, transform: [String: Any]? = nil) -> String {
         guard !url.isEmpty else { return "" }
+        // This API is used only for provider-classified image references. It is
+        // the reliable signal for Nuxt/table payloads where JSON keys and URL
+        // strings are separated by an index-based serialization format.
+        PluginMediaDomainCache.learnImageURL(pluginID: plugin, url: url)
         var o: [String: Any] = ["u": url]
         if let h = headers?.filter({ allowedHeaders.contains($0.key.lowercased()) }), !h.isEmpty { o["h"] = h }
         if let transform, !transform.isEmpty { o["t"] = transform }
@@ -53,14 +311,62 @@ enum PluginMedia {
         return (plugin, url, o["h"] as? [String: String] ?? [:], o["t"] as? [String: Any])
     }
 
+    static func allows(_ url: URL, explicitPolicy: DomainPolicy, learnedHosts: Set<String>) -> Bool {
+        guard let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http",
+              url.user == nil, url.password == nil,
+              let host = url.host?.lowercased(), !host.isEmpty,
+              !NetGuard.isIPLiteral(host) else { return false }
+
+        // Match PluginNet's transport boundary: HTTPS 443 and HTTP 80 only.
+        // Explicit HTTP remains available for legacy manifests; learned hosts are HTTPS-only.
+        if let port = url.port {
+            guard (scheme == "https" && port == 443) || (scheme == "http" && port == 80) else { return false }
+        }
+        let explicitlyAllowed = explicitPolicy.allows(host)
+        let dynamicallyAllowed = scheme == "https"
+            && (url.port == nil || url.port == 443)
+            && learnedHosts.contains(host)
+        return explicitlyAllowed || dynamicallyAllowed
+    }
+
+    /// Redirects are evaluated in the context of an already-classified image request.
+    /// A short-lived candidate may be promoted only after its exact redirect URL passes
+    /// HTTPS/port and fresh DNS checks.
+    static func allowsRedirect(pluginID: String, url: URL, explicitPolicy: DomainPolicy,
+                               learnedHosts: Set<String>) -> Bool {
+        let host = url.host?.lowercased() ?? ""
+        let candidates = PluginMediaDomainCache.candidates(pluginID: pluginID)
+        let allowed = allows(url, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts.union(candidates))
+        guard allowed, !NetGuard.resolvesToBlocked(host, useCache: false) else { return false }
+        if candidates.contains(host) {
+            PluginMediaDomainCache.learnImageURL(pluginID: pluginID, url: url.absoluteString)
+        }
+        return true
+    }
+
     private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
-        let policy: DomainPolicy
+        let pluginID: String
+        let explicitPolicy: DomainPolicy
+        let learnedHosts: Set<String>
         var blocked: String?
-        init(policy: DomainPolicy) { self.policy = policy }
+        private var redirectHops = 0
+        init(pluginID: String, explicitPolicy: DomainPolicy, learnedHosts: Set<String>) {
+            self.pluginID = pluginID
+            self.explicitPolicy = explicitPolicy
+            self.learnedHosts = learnedHosts
+        }
+        private func allows(_ url: URL) -> Bool {
+            PluginMedia.allowsRedirect(pluginID: pluginID, url: url,
+                                       explicitPolicy: explicitPolicy, learnedHosts: learnedHosts)
+        }
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest) async -> URLRequest? {
-            guard let u = request.url, let h = u.host, u.scheme == "https" || u.scheme == "http", policy.allows(h),
-                  !NetGuard.isIPLiteral(h), !NetGuard.resolvesToBlocked(h) else { blocked = request.url?.host; return nil }
+            redirectHops += 1
+            guard redirectHops <= 10, let url = request.url, allows(url) else {
+                blocked = request.url?.host ?? "redirect-limit"
+                return nil
+            }
             return request
         }
     }
@@ -76,32 +382,90 @@ enum PluginMedia {
 
     /// Final image bytes (transform applied).
     static func load(_ ref: String) async throws -> Data {
-        guard let r = parse(ref) else { throw ProviderError.invalid("图片地址无效") }
-        guard let rec = PluginStore.snapshot(r.plugin), rec.enabled else { throw ProviderError.invalid("插件未启用") }
-        let policy = DomainPolicy(rec.manifest.mediaDomains + rec.manifest.httpDomains + rec.extraDomains)
-        guard let host = r.url.host, r.url.scheme == "https" || r.url.scheme == "http", policy.allows(host), !NetGuard.isIPLiteral(host) else {
-            PluginLog.add(r.plugin, "✕ 图片域名未授权 \(r.url.host ?? "?")")
-            throw ProviderError.invalid("图片域名未授权：\(r.url.host ?? "")")
+        guard let r = parse(ref) else {
+            let rawPlugin = String(ref.dropFirst(scheme.count)).split(separator: "/", maxSplits: 1).first.map(String.init) ?? "unknown"
+            PluginLog.add(rawPlugin, "✕ 原生图片加载失败：图片引用解析失败")
+            throw ProviderError.invalid("图片地址无效")
         }
-        let blocked = await Task.detached { NetGuard.resolvesToBlocked(host) }.value
-        if blocked { throw ProviderError.invalid("图片地址解析到内网") }
+        let pluginID = r.plugin
+        let host = r.url.host?.lowercased() ?? "?"
+        PluginLog.add(pluginID, "🖼️ 原生图片加载开始：\(r.url.scheme ?? "?")://\(host)")
+
+        guard let rec = PluginStore.snapshot(pluginID), rec.enabled else {
+            PluginLog.add(pluginID, "✕ 原生图片加载失败：插件未安装或已停用")
+            throw ProviderError.invalid("插件未启用")
+        }
+        let explicitPolicy = DomainPolicy(rec.manifest.mediaDomains + rec.manifest.httpDomains + rec.extraDomains)
+        let learnedHosts = Set(PluginMediaDomainCache.domains(pluginID: pluginID))
+        guard r.url.scheme == "https" || r.url.scheme == "http" else {
+            PluginLog.add(pluginID, "✕ 图片 URL 协议不支持：\(r.url.scheme ?? "nil")")
+            throw ProviderError.invalid("图片地址无效")
+        }
+        let explicitlyAllowed = explicitPolicy.allows(host)
+        let dynamicallyAllowed = learnedHosts.contains(host) && r.url.scheme == "https"
+        guard allows(r.url, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts) else {
+            PluginLog.add(pluginID, "✕ 图片域名授权检查失败：host=\(host)，显式授权=\(explicitlyAllowed)，动态授权=\(dynamicallyAllowed)，已学习域名数=\(learnedHosts.count)")
+            throw ProviderError.invalid("图片域名未授权：\(host)")
+        }
+        PluginLog.add(pluginID, "✓ 图片域名授权通过：host=\(host)，方式=\(explicitlyAllowed ? "manifest" : "dynamic")")
+
+        let blocked = await Task.detached { NetGuard.resolvesToBlocked(host, useCache: false) }.value
+        if blocked {
+            PluginLog.add(pluginID, "✕ 图片 DNS 安全检查拦截：\(host)（解析失败或命中内网地址）")
+            throw ProviderError.invalid("图片地址解析到内网")
+        }
+
         var data: Data
-        if let fx = PluginFixtures.responder, let reply = fx(URLRequest(url: r.url)) { data = reply.body }
-        else {
+        if let fx = PluginFixtures.responder, let reply = fx(URLRequest(url: r.url)) {
+            data = reply.body
+            PluginLog.add(pluginID, "✓ 图片测试响应：bytes=\(data.count)")
+        } else {
             var req = URLRequest(url: r.url)
             req.setValue(rec.learnedUA ?? PluginHostContext.defaultUA, forHTTPHeaderField: "User-Agent")
             for (k, v) in r.headers where allowedHeaders.contains(k.lowercased()) { req.setValue(v, forHTTPHeaderField: k) }
-            let cs = PluginRuntime.jar(r.plugin).cookies(for: r.url)
+            let cs = PluginRuntime.jar(pluginID).cookies(for: r.url)
             for (k, v) in HTTPCookie.requestHeaderFields(with: cs) { req.setValue(v, forHTTPHeaderField: k) }
-            let guardD = RedirectGuard(policy: policy)
-            let (d, resp) = try await session.data(for: req, delegate: guardD)
-            if let b = guardD.blocked { throw ProviderError.invalid("图片跳转到未授权域名 \(b)") }
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            guard (200..<300).contains(code), !d.isEmpty else { throw ProviderError.upstream("图片 HTTP \(code) · \(host)") }
-            guard d.count <= 30 << 20 else { throw ProviderError.upstream("图片太大") }
-            data = d
+            let guardD = RedirectGuard(pluginID: pluginID, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts)
+            var receivedResponse = false
+            do {
+                let (d, resp) = try await session.data(for: req, delegate: guardD)
+                receivedResponse = true
+                if let b = guardD.blocked {
+                    PluginLog.add(pluginID, "✕ 图片重定向被拦截：\(host) → \(b)")
+                    throw ProviderError.invalid("图片跳转到未授权域名 \(b)")
+                }
+                let http = resp as? HTTPURLResponse
+                let code = http?.statusCode ?? 0
+                let mime = http?.value(forHTTPHeaderField: "Content-Type") ?? "unknown"
+                PluginLog.add(pluginID, "图片 HTTP 响应：status=\(code)，final=\(http?.url?.host ?? host)，mime=\(mime)，bytes=\(d.count)")
+                guard (200..<300).contains(code), !d.isEmpty else {
+                    PluginLog.add(pluginID, "✕ 图片 HTTP 下载失败：status=\(code)，host=\(http?.url?.host ?? host)")
+                    throw ProviderError.upstream("图片 HTTP \(code) · \(host)")
+                }
+                guard d.count <= 30 << 20 else {
+                    PluginLog.add(pluginID, "✕ 图片响应超过 30MB：bytes=\(d.count)")
+                    throw ProviderError.upstream("图片太大")
+                }
+                data = d
+            } catch {
+                if guardD.blocked == nil && !receivedResponse {
+                    let ns = error as NSError
+                    PluginLog.add(pluginID, "✕ 图片网络请求异常：\(ns.domain)(\(ns.code))")
+                }
+                throw error
+            }
         }
-        if let t = r.transform { data = try apply(t, data) }
+
+        PluginLog.add(pluginID, "图片下载完成：bytes=\(data.count)，transform=\(r.transform?["type"] as? String ?? "none")")
+        if let t = r.transform {
+            do {
+                data = try apply(t, data)
+                PluginLog.add(pluginID, "✓ 图片处理完成：type=\(t["type"] as? String ?? "unknown")，bytes=\(data.count)")
+            } catch {
+                PluginLog.add(pluginID, "✕ 图片处理失败：\(error.localizedDescription)")
+                throw error
+            }
+        }
         return data
     }
 
@@ -329,8 +693,36 @@ struct JSVideoProvider: SiteProvider {
         guard !ContentFilter.isBlocked([title] + tags) else { return nil }
         let cover = PluginMedia.ref(plugin: pluginID, url: PluginOut.url(o["cover"]), headers: PluginOut.headers(o["coverHeaders"]),
                                     transform: PluginOut.mediaTransform(o["coverTransform"]))
+        let liveMatch: LiveMatchInfo? = {
+            guard let raw = o["liveMatch"] as? [String: Any],
+                  let homeRaw = raw["home"] as? [String: Any],
+                  let awayRaw = raw["away"] as? [String: Any] else { return nil }
+            let homeName = PluginOut.s(homeRaw["name"], max: 80)
+            let awayName = PluginOut.s(awayRaw["name"], max: 80)
+            guard !homeName.isEmpty, !awayName.isEmpty else { return nil }
+            func logo(_ team: [String: Any]) -> String? {
+                let url = PluginOut.url(team["logo"])
+                guard !url.isEmpty else { return nil }
+                return PluginMedia.ref(plugin: pluginID, url: url, headers: PluginOut.headers(team["logoHeaders"]))
+            }
+            let statusRaw = PluginOut.s(raw["status"], max: 20).lowercased()
+            let status = ["scheduled", "live", "finished"].contains(statusRaw) ? statusRaw : "scheduled"
+            let homeScore = raw["homeScore"] as? Int
+            let awayScore = raw["awayScore"] as? Int
+            let hasScore = homeScore.map { $0 >= 0 } == true && awayScore.map { $0 >= 0 } == true
+            return LiveMatchInfo(
+                home: LiveMatchTeam(name: homeName, logo: logo(homeRaw)),
+                away: LiveMatchTeam(name: awayName, logo: logo(awayRaw)),
+                homeScore: hasScore ? homeScore : nil,
+                awayScore: hasScore ? awayScore : nil,
+                status: status,
+                kickoff: PluginOut.s(raw["kickoff"], max: 40).nilIfEmpty,
+                statusText: PluginOut.s(raw["statusText"], max: 30).nilIfEmpty
+            )
+        }()
         return HGSeries(source: source, seriesId: id, title: title, cover: cover, subtitle: PluginOut.s(o["remarks"], max: 40).nilIfEmpty,
-                        actors: PluginOut.strings(o["actors"]), orientation: (o["orientation"] as? String) == "portrait" ? "portrait" : nil, tags: tags)
+                        actors: PluginOut.strings(o["actors"]), orientation: (o["orientation"] as? String) == "portrait" ? "portrait" : nil, tags: tags,
+                        liveMatch: liveMatch)
     }
 
     private func page(_ v: Any, _ p: Int) -> HGPage {
@@ -429,16 +821,21 @@ struct JSVideoProvider: SiteProvider {
             streams.append(HGStream(streamId: "p\(i)", quality: PluginOut.s(st["name"], max: 40).nonEmptyOr(host), url: u, key: key,
                                     kind: (!key.isEmpty || fmt == "cenc") ? .mp4Cenc : (fmt == "hls" ? .hls : .mp4Clear), headers: h))
         }
-        guard let first = streams.first else { throw ProviderError.upstream("插件没有返回可播放的地址（需 https 且在 media 白名单内）") }
-        let danmakuURL = PluginDanmaku.capturePlayDanmaku(
-            raw: o["danmaku"],
-            pluginID: pluginID,
-            seriesId: s.seriesId,
+
+        guard let first = streams.first else {
+            throw ProviderError.upstream("插件没有返回可播放的地址（需 https 且在 media 白名单内）")
+        }
+        let danmaku = PluginOut.url(o["danmaku"])
+        return HGResolvedVideo(
             vid: ep.vid,
-            rec: rec
+            url: first.url,
+            key: first.key.isEmpty ? nil : first.key,
+            duration: nil,
+            expiresAt: o["expiresAt"] as? Int,
+            err: nil,
+            streams: streams,
+            danmaku: danmaku.isEmpty ? nil : danmaku
         )
-        return HGResolvedVideo(vid: ep.vid, url: first.url, key: nil, duration: nil, expiresAt: (o["expiresAt"] as? Int), err: nil, streams: streams,
-                               danmaku: danmakuURL)
     }
 }
 

@@ -160,6 +160,7 @@ final class PluginStore: ObservableObject {
         plugins.removeAll { $0.id == rec.id }
         plugins.append(rec)
         save()
+        PluginMediaDomainCache.clear(pluginID: rec.id)
         PluginRuntime.unload(rec.id)
         PluginLog.add(rec.id, p.existing == nil ? "安装 \(p.manifest.version)（来源 \(p.origin)）" : "更新到 \(p.manifest.version)")
     }
@@ -167,6 +168,7 @@ final class PluginStore: ObservableObject {
     func uninstall(_ id: String) {
         guard let rec = plugin(id) else { return }
         PluginRuntime.unload(id)
+        PluginMediaDomainCache.clear(pluginID: id)
         PluginSecrets.removeAll(id, keys: (rec.manifest.settings ?? []).map(\.key))
         try? FileManager.default.removeItem(at: PluginPaths.dir(id))
         Task { await PluginCF.removeStore(id) }
@@ -203,6 +205,7 @@ final class PluginStore: ObservableObject {
         PluginRuntime.unload(id)
         let dir = PluginPaths.dir(id)
         for f in ["cookies.plist", "storage.json"] { try? FileManager.default.removeItem(at: dir.appendingPathComponent(f)) }
+        PluginMediaDomainCache.clear(pluginID: id)
         mutate(id) { $0.learnedUA = nil; $0.cachedCategories = [] }
         Task { await PluginCF.removeStore(id) }
         PluginLog.add(id, "已清除 cookie / 存储 / 浏览器数据")
