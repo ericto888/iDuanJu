@@ -710,7 +710,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     }
 
     @objc private func remotePause(_ event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
-        setPaused(true)
+        setPaused(true, userInitiated: true)
         return .success
     }
 
@@ -1431,11 +1431,13 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         // Interrupted: playback is already stopped whatever the button shows, so this tap means ▶.
         let failed = current.flatMap { errors[$0] } != nil
         let nextPaused = failed || interrupted || (readyIndex != nil && engine.isPaused && !engine.isWaiting) ? false : wantsPlayback
-        manuallyPaused = nextPaused
-        setPaused(nextPaused)
+        setPaused(nextPaused, userInitiated: true)
     }
 
-    private func setPaused(_ value: Bool) {
+    private func setPaused(_ value: Bool, userInitiated: Bool = false) {
+        // Only an explicit pause action may show the centre play button.
+        // Any internal pause or resume clears stale user-pause state.
+        manuallyPaused = userInitiated && value
         let wasInterrupted = interrupted
         if !value {
             interrupted = false
