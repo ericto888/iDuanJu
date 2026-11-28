@@ -1,5 +1,16 @@
 import SwiftUI
 
+private struct HomeScrollChromeHiddenKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var homeScrollChromeHidden: Bool {
+        get { self[HomeScrollChromeHiddenKey.self] }
+        set { self[HomeScrollChromeHiddenKey.self] = newValue }
+    }
+}
+
 /// 四个根页面 + 窄屏底部悬浮玻璃胶囊 / 平板宽屏左侧悬浮玻璃导航轨（系统 TabBar 隐藏）。
 /// 导航栏只在根页面显示；进入详情 / 播放器等二级页面时隐藏。
 struct RootTabView: View {
@@ -34,10 +45,11 @@ struct RootTabView: View {
                     Stack(path: $paths[4]) { SearchView() }.tag(4)
                 }
                 .tint(STVTheme.accent)
+                .environment(\.homeScrollChromeHidden, tabBarHidden)
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
                         .onChanged { value in
-                            guard showNav && !metrics.useRail else { return }
+                            guard showNav && tab == 0 && !metrics.useRail else { return }
                             let dy = value.translation.height
                             let dx = value.translation.width
                             guard abs(dy) > abs(dx) * 1.2 else { return }
