@@ -23,67 +23,29 @@ final class StatusBarGate: ObservableObject {
     }
 }
 
-/// iPhone starts portrait-locked; confirmed landscape episodes opt into device rotation, while
-/// portrait episodes and an explicit fullscreen exit remain portrait-locked. iPad supports all orientations.
+/// Portrait by default on iPhone; unlock all orientations on iPad and while the player is on screen.
 final class OrientationGate: NSObject, UIApplicationDelegate {
     private static var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     static var mask: UIInterfaceOrientationMask = UIDevice.current.userInterfaceIdiom == .pad ? .all : .portrait
     private static var rotationGeneration = 0
-
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         Self.isPad ? .all : Self.mask
     }
 
-    @MainActor private static func foregroundScene() -> UIWindowScene? {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        return scenes.first(where: { $0.activationState == .foregroundActive })
-            ?? scenes.first(where: { $0.activationState == .foregroundInactive })
-            ?? scenes.first
-    }
-
-    /// Request after UIKit has observed the updated app-delegate orientation mask.
-    @MainActor private static func request(_ orientation: UIInterfaceOrientationMask,
-                                           in scene: UIWindowScene,
-                                           generation: Int) {
-        Task { @MainActor in
-            await Task.yield()
-            guard generation == rotationGeneration else { return }
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation)) { error in
-                NSLog("[OrientationGate] geometry update to %@ failed: %@", String(describing: orientation), error.localizedDescription)
-            }
-        }
-    }
-
-    /// Allow the system to follow physical device rotation. This changes only the supported mask;
-    /// it deliberately does not request a new orientation or force the phone to rotate.
-    @MainActor static func allowDeviceRotation() {
+    @MainActor static func unlock() {
         rotationGeneration += 1
         mask = isPad ? .all : .allButUpsideDown
         refresh()
     }
-
-    /// Freeze the current interface orientation while a new episode is loading.
-    /// No geometry request is issued, so the existing player layout is not moved.
-    @MainActor static func freezeCurrentOrientation() {
-        rotationGeneration += 1
-        guard !isPad else { mask = .all; refresh(); return }
-        let orientation = foregroundScene()?.interfaceOrientation
-        mask = orientation?.isLandscape == true ? .landscape : .portrait
-        refresh()
-    }
-    /// Enter fullscreen and keep the iPhone in landscape until the explicit exit button is pressed.
+    /// 横屏 button: rotate now; rotation stays unlocked so turning the phone back to portrait exits.
     @MainActor static func enterLandscape() {
         rotationGeneration += 1
-        let generation = rotationGeneration
-        mask = isPad ? .all : .landscape
+        mask = isPad ? .all : .allButUpsideDown
         refresh()
-        if let scene = foregroundScene() {
-            request(.landscapeRight, in: scene, generation: generation)
-        } else {
-            NSLog("[OrientationGate] no foreground UIWindowScene for landscape request")
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
         }
     }
-
     /// 退出横屏 button.
     @MainActor static func exitLandscape() {
         rotationGeneration += 1
@@ -93,37 +55,34 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
             refresh()
             return
         }
-        // An explicit exit is a user override: return to portrait and keep it there.
-        // Sensor rotation is re-enabled only after the next episode's aspect is known.
+        // UIKit may ignore a portrait geometry request made while the supported mask remains unrestricted.
+        // Constrain during the rotation, then restore sensor rotation after the transition completes.
         mask = .portrait
         refresh()
-        if let scene = foregroundScene() {
-            request(.portrait, in: scene, generation: generation)
-        } else {
-            NSLog("[OrientationGate] no foreground UIWindowScene for portrait request")
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState == .foregroundActive }) {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
+        }
+        // `requestGeometryUpdate`'s closure is an errorHandler (never called on success).
+        // Restore sensor rotation after the portrait transition settles.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 550_000_000)
+            // A dismissed player must not unlock a subsequent portrait-only screen.
+            if generation == rotationGeneration { mask = .allButUpsideDown; refresh() }
         }
     }
-
-    /// Called only when the player route itself is dismissed (not when its series identity changes).
-    @MainActor static func endPlayerSession() {
-        lockPortrait()
-    }
-
     @MainActor static func lockPortrait() {
         rotationGeneration += 1
-        let generation = rotationGeneration
         if isPad {
             mask = .all
             refresh()
             return
         }
         mask = .portrait
-        refresh()
-        if let scene = foregroundScene() {
-            request(.portrait, in: scene, generation: generation)
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait))
         }
+        refresh()
     }
-
     @MainActor private static func refresh() {
         for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
             for win in scene.windows {
