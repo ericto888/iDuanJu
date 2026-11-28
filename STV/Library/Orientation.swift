@@ -64,7 +64,7 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
     @MainActor static func enterLandscape() {
         rotationGeneration += 1
         if fullscreenSnapshot == nil {
-            fullscreenSnapshot = (mask, activeScene?.interfaceOrientation)
+            fullscreenSnapshot = (mask, activeScene?.interfaceOrientation ?? .portrait)
         }
         mask = isPad ? .all : .landscape
         refresh()
