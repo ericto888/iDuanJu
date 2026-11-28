@@ -853,11 +853,17 @@ struct LiveMatchCard: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(statusColor)
                     Spacer()
-                    if let kickoff = series.liveMatch?.kickoff, !kickoff.isEmpty {
-                        Text(kickoff).font(.system(size: 11, weight: .medium)).foregroundStyle(STVTheme.secondary)
-                    } else {
-                        Text(series.title).font(.system(size: 11, weight: .medium)).foregroundStyle(STVTheme.secondary).lineLimit(1)
+                    HStack(spacing: 6) {
+                        if let date = series.liveMatch?.matchDate, !date.isEmpty {
+                            Text(date)
+                        }
+                        if let kickoff = series.liveMatch?.kickoff, !kickoff.isEmpty {
+                            Text(kickoff)
+                        }
                     }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(STVTheme.secondary)
+                    .lineLimit(1)
                 }
                 HStack(spacing: 8) {
                     team(series.liveMatch?.home, trailing: false)
