@@ -33,6 +33,9 @@ enum PluginMediaDomainCache {
     private static let ttl: TimeInterval = 24 * 60 * 60
     private static let maxDomains = 64
     private static var generations: [String: UInt64] = [:]
+    /// HTTPS hosts seen in successful, authorized source responses. They are
+    /// candidates only; a provider must later classify an exact URL as an image.
+    private static var observedHosts: [String: [String: TimeInterval]] = [:]
 
     static func generation(pluginID: String) -> UInt64 {
         lock.lock(); defer { lock.unlock() }
@@ -51,6 +54,7 @@ enum PluginMediaDomainCache {
     static func clear(pluginID: String) {
         lock.lock(); defer { lock.unlock() }
         generations[pluginID, default: 0] &+= 1
+        observedHosts.removeValue(forKey: pluginID)
         UserDefaults.standard.removeObject(forKey: keyPrefix + pluginID)
     }
 
@@ -67,6 +71,11 @@ enum PluginMediaDomainCache {
               !NetGuard.isIPLiteral(host), DomainRule(host) != nil else { return }
 
         lock.lock()
+        let observedExpiry = observedHosts[pluginID]?[host] ?? 0
+        guard observedExpiry > now.timeIntervalSince1970 else {
+            lock.unlock()
+            return
+        }
         let key = keyPrefix + pluginID
         var stored = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
         let timestamp = now.timeIntervalSince1970
@@ -108,6 +117,7 @@ enum PluginMediaDomainCache {
         let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
         guard !matches.isEmpty else { return }
 
+        var observed = Set<String>()
         var discovered = Set<String>()
         for match in matches {
             var candidate = ns.substring(with: match.range)
@@ -119,6 +129,10 @@ enum PluginMediaDomainCache {
                   let host = components.host?.lowercased(),
                   host != sourceHost, !NetGuard.isIPLiteral(host),
                   DomainRule(host) != nil else { continue }
+            // Remember only that this host appeared in a successful authorized
+            // response. This does not grant access by itself; PluginMedia.ref
+            // promotes it only when the provider classifies a URL as an image.
+            observed.insert(host)
 
             // A file extension alone is not evidence that a URL is an image: API,
             // tracking and video URLs can also end in familiar suffixes. Only learn
@@ -138,10 +152,18 @@ enum PluginMediaDomainCache {
             guard jsonImageField || htmlImageField else { continue }
             discovered.insert(host)
         }
-        guard !discovered.isEmpty else { return }
+        guard !observed.isEmpty else { return }
 
         lock.lock()
         if let expectedGeneration, generations[pluginID, default: 0] != expectedGeneration {
+            lock.unlock()
+            return
+        }
+        let timestamp = now.timeIntervalSince1970
+        var candidates = observedHosts[pluginID, default: [:]].filter { $0.value > timestamp }
+        for host in observed { candidates[host] = timestamp + 10 * 60 }
+        observedHosts[pluginID] = candidates
+        guard !discovered.isEmpty else {
             lock.unlock()
             return
         }
