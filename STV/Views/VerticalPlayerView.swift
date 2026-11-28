@@ -673,8 +673,14 @@ struct PlayerScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Keep transport and playback information visible when a landscape video is viewed
+    /// in the portrait player layout; hiding the chrome would otherwise leave too little context.
+    private var keepsChromeVisible: Bool {
+        !landscape && aspect >= 1.0
+    }
+
     private var controlsVisible: Bool {
-        !speedMode && (showChrome || scrubbing || panel != nil || voiceOver)
+        !speedMode && (keepsChromeVisible || showChrome || scrubbing || panel != nil || voiceOver)
     }
 
     // MARK: Chrome
