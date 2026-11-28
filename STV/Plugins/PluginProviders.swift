@@ -434,11 +434,10 @@ enum PluginMedia {
                 }
                 let http = resp as? HTTPURLResponse
                 let code = http?.statusCode ?? 0
-                let finalURL = http?.url?.absoluteString ?? r.url.absoluteString
                 let mime = http?.value(forHTTPHeaderField: "Content-Type") ?? "unknown"
                 PluginLog.add(pluginID, "图片 HTTP 响应：status=\(code)，final=\(http?.url?.host ?? host)，mime=\(mime)，bytes=\(d.count)")
                 guard (200..<300).contains(code), !d.isEmpty else {
-                    PluginLog.add(pluginID, "✕ 图片 HTTP 下载失败：status=\(code)，finalURL=\(finalURL)")
+                    PluginLog.add(pluginID, "✕ 图片 HTTP 下载失败：status=\(code)，host=\(http?.url?.host ?? host)")
                     throw ProviderError.upstream("图片 HTTP \(code) · \(host)")
                 }
                 guard d.count <= 30 << 20 else {
@@ -449,7 +448,7 @@ enum PluginMedia {
             } catch {
                 if guardD.blocked == nil {
                     let ns = error as NSError
-                    PluginLog.add(pluginID, "✕ 图片网络请求异常：\(ns.domain)(\(ns.code)) \(error.localizedDescription)")
+                    PluginLog.add(pluginID, "✕ 图片网络请求异常：\(ns.domain)(\(ns.code))")
                 }
                 throw error
             }
