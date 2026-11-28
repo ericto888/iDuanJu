@@ -324,7 +324,7 @@ struct HomeView: View {
                         Color.clear
                     }
                 }
-                .environment(\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: homeTabBarHidden ? 0 : bottomInset - indicator, onScrolled: { v in
+                .environment(\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: 0, onScrolled: { v in
                     guard s == source else { return }
                     if scrolled[s] != v { scrolled[s] = v }
                 }))
