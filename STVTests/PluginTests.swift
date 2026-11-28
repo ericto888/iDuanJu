@@ -234,6 +234,38 @@ final class PluginTests: XCTestCase {
         XCTAssertNil(PluginOut.mediaTransform("aes"))
     }
 
+    func testDynamicImageDomainsAreLearnedPerPluginFromAuthorizedSourceResponses() async throws {
+        let pluginID = "com.test.sandbox"
+        PluginMediaDomainCache.clear(pluginID: pluginID)
+        let payload = #"{"cover":"https:\/\/img-cdn.example.net/posters/cover","stream":"https://video-cdn.example.net/index.m3u8","api":"https://api-cdn.example.net/data","legacy":"http://old-image.example.net/cover.jpg"}"#
+        PluginFixtures.responder = { _ in
+            PluginFixtures.Reply(status: 200, headers: ["content-type": "application/json"], body: Data(payload.utf8))
+        }
+        let p = try instance()
+        defer {
+            p.shutdown()
+            PluginFixtures.responder = nil
+            PluginMediaDomainCache.clear(pluginID: pluginID)
+        }
+
+        let status = try await p.evalForTest("(async () => (await host.http.get('https://example.com/payload')).status)()")
+        XCTAssertEqual(status as? Int, 200)
+        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: pluginID), ["img-cdn.example.net"])
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: "com.test.other").isEmpty,
+                      "learned image hosts must not cross plugin boundaries")
+
+        // Dynamic image permission is deliberately separate from host.http permission.
+        await expectCode("E_PERMISSION") {
+            try await p.evalForTest("(async () => (await host.http.get('https://img-cdn.example.net/cover.webp')).status)()")
+        }
+
+        // A response from a host outside this plugin's HTTP manifest cannot teach new image domains.
+        PluginMediaDomainCache.learn(pluginID: pluginID, sourceURL: URL(string: "https://evil.example.net/page")!,
+                                     sourcePolicy: DomainPolicy(["example.com"]), contentType: "application/json",
+                                     body: Data(#"{"cover":"https://evil-cdn.example.net/cover.jpg"}"#.utf8))
+        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: pluginID), ["img-cdn.example.net"])
+    }
+
     func testCryptoAndCodec() async throws {
         let p = try instance()
         defer { p.shutdown() }
