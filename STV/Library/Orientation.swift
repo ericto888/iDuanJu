@@ -74,7 +74,6 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
     /// Exit fullscreen to portrait, then release the orientation lock so device rotation works again.
     @MainActor static func exitLandscape() {
         rotationGeneration += 1
-        guard fullscreenSnapshot != nil else { return }
         fullscreenSnapshot = nil
         mask = isPad ? .all : .allButUpsideDown
         refresh()
