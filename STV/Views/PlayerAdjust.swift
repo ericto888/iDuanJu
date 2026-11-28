@@ -19,7 +19,7 @@ final class PlayerAdjuster: ObservableObject {
     weak var volumeView: MPVolumeView?
     weak var volumeSlider: UISlider?
 
-    /// Outer 28% strips in portrait (preserving middle 44% for episode swiping), full halves in landscape.
+    /// Outer 20% strips on both sides in portrait and landscape; the middle 60% remains for episode swiping.
     static func zone(x: CGFloat, width: CGFloat, landscape: Bool, edge: CGFloat) -> AdjustSide? {
         guard width > 0, x >= edge, x <= width - 8 else { return nil }
         // Keep the same narrow side zones in both portrait and landscape:
