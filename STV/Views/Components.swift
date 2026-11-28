@@ -143,7 +143,7 @@ struct NumberedGrid: View {
     var body: some View {
         if items.contains(where: { $0.liveMatch != nil }) {
             LazyVStack(spacing: 10) {
-                ForEach(Array(items.enumerated()), id: \\.element.id) { i, series in
+                ForEach(Array(items.enumerated()), id: \.element.id) { i, series in
                     if series.liveMatch != nil {
                         LiveMatchCard(series: series)
                     } else {
@@ -153,7 +153,7 @@ struct NumberedGrid: View {
                         Color.clear.frame(height: 1).onAppear { loadMore() }
                     }
                 }
-                if loading { ForEach(0..<3, id: \\.self) { _ in ShimmerBlock().frame(height: 112).clipShape(RoundedRectangle(cornerRadius: 14)) } }
+                if loading { ForEach(0..<3, id: \.self) { _ in ShimmerBlock().frame(height: 112).clipShape(RoundedRectangle(cornerRadius: 14)) } }
             }
             .padding(.horizontal, 16)
             if !hasMore && !loading && !items.isEmpty {
