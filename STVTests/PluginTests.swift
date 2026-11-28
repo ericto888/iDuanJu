@@ -867,4 +867,37 @@ final class PluginTests: XCTestCase {
             XCTAssertFalse(ContentFilter.isBlocked(ok), "\(ok)")
         }
     }
+    func testPluginMediaRejectsCredentialsAndNonStandardPortsForExplicitAndLearnedHosts() {
+        let explicit = DomainPolicy(["example.com"])
+        let learned: Set<String> = ["cdn.example.net"]
+        for raw in [
+            "https://user:pass@example.com/image.jpg",
+            "https://example.com:8443/image.jpg",
+            "http://example.com:8080/image.jpg",
+            "https://user:pass@cdn.example.net/image.jpg",
+            "https://cdn.example.net:9443/image.jpg",
+            "http://cdn.example.net/image.jpg"
+        ] {
+            XCTAssertFalse(PluginMedia.allows(URL(string: raw)!, explicitPolicy: explicit, learnedHosts: learned), raw)
+        }
+        XCTAssertTrue(PluginMedia.allows(URL(string: "https://example.com/image.jpg")!, explicitPolicy: explicit, learnedHosts: learned))
+        XCTAssertTrue(PluginMedia.allows(URL(string: "http://example.com/image.jpg")!, explicitPolicy: explicit, learnedHosts: learned),
+                      "explicit legacy HTTP on port 80 remains supported")
+        XCTAssertTrue(PluginMedia.allows(URL(string: "https://cdn.example.net/image.jpg")!, explicitPolicy: explicit, learnedHosts: learned))
+    }
+
+    func testNetGuardCanBypassPositiveDNSCacheAndFailsClosedOnEmptyResolution() {
+        var count = 0
+        NetGuard.resolverOverride = { _ in
+            count += 1
+            return count == 1 ? ["93.184.216.34"] : ["192.168.1.20"]
+        }
+        XCTAssertFalse(NetGuard.resolvesToBlocked("cdn.example.net", useCache: false))
+        XCTAssertTrue(NetGuard.resolvesToBlocked("cdn.example.net", useCache: false),
+                      "media requests must re-resolve instead of reusing a previous positive DNS result")
+        NetGuard.resolverOverride = { _ in [] }
+        XCTAssertTrue(NetGuard.resolvesToBlocked("unresolved.example.net", useCache: false),
+                      "DNS failure must fail closed")
+    }
+
 }
