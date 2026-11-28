@@ -95,9 +95,11 @@ extension View {
             self
                 .onScrollPhaseChange { oldPhase, newPhase in
                     if newPhase == .interacting {
-                        action(true)
+                        reportScrollActivity(true, action: action)
                     } else if newPhase == .decelerating || (oldPhase == .interacting && newPhase == .idle) {
-                        action(false)
+                        // Deceleration begins when the finger lifts: start the restore
+                        // delay here rather than waiting for momentum scrolling to finish.
+                        reportScrollActivity(false, action: action)
                     }
                 }
                 .simultaneousGesture(
@@ -105,17 +107,31 @@ extension View {
                         .onChanged { value in
                             let dx = abs(value.translation.width)
                             let dy = abs(value.translation.height)
-                            if dy > dx * 1.2 { action(true) }
+                            if dy > dx * 1.2 {
+                                reportScrollActivity(true, action: action)
+                            }
                         }
                         .onEnded { value in
                             let dx = abs(value.translation.width)
                             let dy = abs(value.translation.height)
-                            if dy > dx * 1.2 { action(false) }
+                            if dy > dx * 1.2 {
+                                reportScrollActivity(false, action: action)
+                            }
                         }
                 )
         } else {
             self
         }
+    }
+
+    /// The scroll phase and drag recognizer can report the same transition.
+    /// Emit only state changes so duplicate finger-up events do not restart the 450ms timer.
+    @State private var isScrollActive = false
+
+    private func reportScrollActivity(_ active: Bool, action: (Bool) -> Void) {
+        guard isScrollActive != active else { return }
+        isScrollActive = active
+        action(active)
     }
 
     /// iOS 16+ replacement for `.onScrollGeometryChange(for: CGFloat.self)` scroll Y reporting.
