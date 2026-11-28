@@ -43,9 +43,8 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
             mask = .portrait
             activeScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
         } else {
-            // Landscape video must allow iOS to follow the device's physical rotation.
-            // Keeping the current portrait mask here prevents the first auto-rotation
-            // when playback is entered from a portrait detail page.
+            // Allow iOS to follow the device's physical rotation for landscape video.
+            // Do not force an immediate rotation when playback starts.
             mask = .allButUpsideDown
         }
         refresh()
