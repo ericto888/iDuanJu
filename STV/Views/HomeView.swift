@@ -302,6 +302,7 @@ private struct HomeBottomSafeArea: ViewModifier {
 struct HomeView: View {
     @Environment(\.homeScrollChromeHidden) private var homeScrollChromeHidden
     @Environment(\.homeScrollActivity) private var homeScrollActivity
+    @Environment(\.homeScrollEnded) private var homeScrollEnded
     @ObservedObject private var gate = SourceGate.shared
     @ObservedObject private var pluginStore = PluginStore.shared
     @ObservedObject private var cmsStore = CMSStore.shared
