@@ -99,6 +99,7 @@ enum PluginMediaDomainCache {
                 for child in array.prefix(512) { visit(child, depth: depth + 1) }
             } else if let string = value as? String {
                 var encoded = string.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .filter { !$0.isWhitespace }
                     .replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
                 guard encoded.count >= 32, encoded.count <= 3 << 20 else { return }
                 while encoded.count % 4 != 0 { encoded += "=" }
