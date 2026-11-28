@@ -430,7 +430,8 @@ enum PluginInstaller {
         guard problems.isEmpty else { throw PluginError.invalidManifest(problems) }
         guard let text = String(data: source, encoding: .utf8) else { throw PluginError.install("脚本不是 UTF-8 文本") }
         let hash = PluginManifest.fileHash(source)
-        if let declared = m.integrity?.files?[m.entry], !declared.isEmpty, !declared.contains("<"), declared != hash {
+        let declared = m.integrity?.files?[m.entry] ?? m.integrity?.hash
+        if let declared, !declared.isEmpty, !declared.contains("<"), declared != hash {
             throw PluginError.integrity("\(m.entry) 的哈希与 manifest 声明不一致")
         }
         let existing = PluginStore.snapshot(m.id)
