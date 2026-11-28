@@ -676,7 +676,7 @@ struct PlayerScreen: View {
     /// Keep transport and playback information visible when a landscape video is viewed
     /// in the portrait player layout; hiding the chrome would otherwise leave too little context.
     private var keepsChromeVisible: Bool {
-        !landscape && aspect >= 1.0
+        !landscape && aspect > 1.0
     }
 
     private var controlsVisible: Bool {
