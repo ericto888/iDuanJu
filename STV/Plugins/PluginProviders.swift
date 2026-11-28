@@ -53,7 +53,9 @@ enum PluginMediaDomainCache {
               let sourceHost = sourceURL.host?.lowercased(), sourcePolicy.allows(sourceHost) else { return }
         let type = contentType.lowercased()
         guard type.contains("text/html") || type.contains("json") || type.contains("javascript") else { return }
-        guard let raw = String(data: body, encoding: .utf8), !raw.isEmpty else { return }
+        // Keep synchronous scanning bounded; normal HTML/JSON API payloads are far smaller.
+        guard body.count <= 8 << 20,
+              let raw = String(data: body, encoding: .utf8), !raw.isEmpty else { return }
 
         // Nuxt/JSON payloads commonly escape URL slashes.
         let text = raw.replacingOccurrences(of: #"\/"#, with: "/")
@@ -76,12 +78,13 @@ enum PluginMediaDomainCache {
                   host != sourceHost, !NetGuard.isIPLiteral(host),
                   DomainRule(host) != nil else { continue }
 
-            let ext = URL(string: candidate)?.pathExtension.lowercased() ?? ""
-            let imageExtension = ["jpg", "jpeg", "png", "webp", "gif", "avif", "bmp"].contains(ext)
+            // A file extension alone is not evidence that a URL is an image: API,
+            // tracking and video URLs can also end in familiar suffixes. Only learn
+            // hosts when the URL is attached to an explicit image-bearing field.
             let prefix = ns.substring(to: match.range.location)
-            let imageFieldPattern = #""(?:cover|poster|image|img|pic|thumb|thumbnail|avatar|banner|src)"\s*:\s*["']?$|(?:data-(?:src|original|lazy-src)|src|poster)\s*=\s*["']?$"#
+            let imageFieldPattern = #""(?:cover|coverUrl|poster|posterUrl|image|imageUrl|img|pic|picUrl|thumb|thumbnail|avatar|banner|src)"\s*:\s*["']?$|(?:data-(?:src|original|lazy-src)|src|poster)\s*=\s*["']?$"#
             let imageField = prefix.range(of: imageFieldPattern, options: .regularExpression) != nil
-            guard imageExtension || imageField else { continue }
+            guard imageField else { continue }
             discovered.insert(host)
         }
         guard !discovered.isEmpty else { return }
@@ -98,7 +101,10 @@ enum PluginMediaDomainCache {
         for host in discovered { stored[host] = expiry }
         stored = stored.filter { $0.value > nowTimestamp }
         if stored.count > maxDomains {
-            let keep = stored.sorted { $0.value > $1.value }.prefix(maxDomains)
+            let keep = stored.sorted {
+                if $0.value != $1.value { return $0.value > $1.value }
+                return $0.key < $1.key
+            }.prefix(maxDomains)
             stored = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
         }
         UserDefaults.standard.set(stored, forKey: key)
