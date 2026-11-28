@@ -117,8 +117,15 @@ struct RootTabView: View {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
                         .onChanged { value in
-                            if #available(iOS 18.0, *) { return }
-                            guard showNav && tab == 0 && !metrics.useRail else { return }
+                            guard showNav && !metrics.useRail else { return }
+
+                            // 首页 iOS 18+ 由 HomePageInset 的滚动活动回调负责，
+                            // 保证同一次手势内反向下滑不会提前显示搜索框和导航栏。
+                            if tab == 0 {
+                                if #available(iOS 18.0, *) { return }
+                            }
+
+                            // 非首页恢复上游通用导航行为；首页仅在旧系统使用此兼容路径。
                             let dy = value.translation.height
                             let dx = value.translation.width
                             guard abs(dy) > abs(dx) * 1.2 else { return }
@@ -131,9 +138,22 @@ struct RootTabView: View {
                             }
                         }
                         .onEnded { _ in
-                            if #available(iOS 18.0, *) { return }
-                            guard showNav && tab == 0 && !metrics.useRail else { return }
-                            restoreHomeChromeAfterScrollEnd()
+                            guard showNav && !metrics.useRail else { return }
+
+                            if tab == 0 {
+                                if #available(iOS 18.0, *) { return }
+                                restoreHomeChromeAfterScrollEnd()
+                                return
+                            }
+
+                            // 与 upstream/dev-v1.6.45 一致：松手后延迟 450ms 恢复。
+                            guard tabBarHidden else { return }
+                            restoreTask?.cancel()
+                            restoreTask = Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 450_000_000)
+                                guard !Task.isCancelled else { return }
+                                tabBarHidden = false
+                            }
                         }
                 )
                 .overlay(alignment: .bottom) {
