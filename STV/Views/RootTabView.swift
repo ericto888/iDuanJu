@@ -22,6 +22,17 @@ extension EnvironmentValues {
     }
 }
 
+private struct HomeScrollBeganKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+
+extension EnvironmentValues {
+    var homeScrollBegan: () -> Void {
+        get { self[HomeScrollBeganKey.self] }
+        set { self[HomeScrollBeganKey.self] = newValue }
+    }
+}
+
 private struct HomeScrollEndedKey: EnvironmentKey {
     static let defaultValue: () -> Void = {}
 }
@@ -93,6 +104,11 @@ struct RootTabView: View {
                 .environment(\.homeScrollActivity) { scrollingUp in
                     guard showNav && tab == 0 && !metrics.useRail else { return }
                     updateHomeChromeForScrollDirection(scrollingUp)
+                }
+                .environment(\.homeScrollBegan) {
+                    guard showNav && tab == 0 && !metrics.useRail else { return }
+                    restoreTask?.cancel()
+                    restoreTask = nil
                 }
                 .environment(\.homeScrollEnded) {
                     guard showNav && tab == 0 && !metrics.useRail else { return }
