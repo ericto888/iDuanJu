@@ -21,14 +21,14 @@ struct ProfileView: View {
                 HongguoAccountCard(message: $message, login: $showHongguoLogin)
                 ProfileLibrary()
                 ProfileLinks(refreshTick: refreshTick)
-                DSSection("播放设置", footer: "横屏全屏时可隐藏播控收起后的底部细进度条；关闭跳过片头后，播放器不再显示跳过片头按钮。", separatorInset: 20) {
-                    Toggle("隐藏横屏底部进度条", isOn: $hideLandscapeProgress).toggleStyle(DSSwitch())
-                    Toggle("启用跳过片头", isOn: $skipIntroEnabled).toggleStyle(DSSwitch())
+                DSSection("播放设置", footer: "横屏全屏时可隐藏播控收起后的底部细进度条；关闭跳过片头后，播放器不再显示跳过片头按钮。", separatorInset: 58) {
+                    DSToggleRow("隐藏横屏底部进度条", isOn: $hideLandscapeProgress, icon: "rectangle.bottomthird.inset.filled")
+                    DSToggleRow("启用跳过片头", isOn: $skipIntroEnabled, icon: "forward.end")
                 }
-                DSSection("首页导航显示", footer: "关闭后仅从首页顶部来源导航中隐藏对应入口，不会删除频道、小说或漫画数据。", separatorInset: 20) {
-                    Toggle("显示频道", isOn: $showChannelSource).toggleStyle(DSSwitch())
-                    Toggle("显示小说", isOn: $showNovelSource).toggleStyle(DSSwitch())
-                    Toggle("显示漫画", isOn: $showMangaSource).toggleStyle(DSSwitch())
+                DSSection("首页导航显示", footer: "关闭后仅从首页顶部来源导航中隐藏对应入口，不会删除频道、小说或漫画数据。", separatorInset: 58) {
+                    DSToggleRow("显示频道", isOn: $showChannelSource, icon: "tv")
+                    DSToggleRow("显示小说", isOn: $showNovelSource, icon: "book")
+                    DSToggleRow("显示漫画", isOn: $showMangaSource, icon: "book.closed")
                 }
                 DSSection(
                     "数据备份与迁移",

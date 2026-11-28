@@ -204,7 +204,6 @@ struct HomeHeader {
     var pagerTop: CGFloat = 0
     var tabBar: CGFloat = 0
     var onScrolled: (Bool) -> Void = { _ in }
-    var onScrollActivity: (Bool) -> Void = { _ in }
     var onScrollDirection: (Bool) -> Void = { _ in }
 }
 
@@ -220,6 +219,7 @@ extension EnvironmentValues {
 /// compares where its content would start and end with where the header and the tab bar really are.
 private struct HomePageInset: ViewModifier {
     @Environment(\.homeHeader) private var header
+    @Environment(\.homeScrollChromeHidden) private var chromeHidden
     @State private var own: VSpan?
     @State private var lastScrollY: CGFloat?
     /// A cell that is not on screen yet can report a frame of its own coordinate space: only believe plausible ones.
@@ -240,15 +240,31 @@ private struct HomePageInset: ViewModifier {
                 .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: bottom) }
                 .compatOnScrolled(threshold: 6) { header.onScrolled($0) }
                 .compatOnScrollY { y in
-                    defer { lastScrollY = y }
-                    guard let previous = lastScrollY, abs(y - previous) > 0.5 else { return }
-                    header.onScrollDirection(y > previous)
+                    guard let previous = lastScrollY else {
+                        lastScrollY = y
+                        return
+                    }
+                    let delta = y - previous
+                    lastScrollY = y
+                    // Ignore tiny geometry noise and top-edge bounce. Revealing the header
+                    // while the scroll view is rubber-banding changes its inset mid-gesture.
+                    guard abs(delta) > 2 else { return }
+                    if delta > 0 {
+                        header.onScrollDirection(true)
+                    } else if y > 12 {
+                        header.onScrollDirection(false)
+                    }
                 }
                 .compatOnScrollActivity { active in
-                    if !active {
-                        lastScrollY = nil
-                        header.onScrollActivity(false)
-                    }
+                    // Scroll becoming idle is not a request to reveal the chrome.
+                    // Only an actual downward gesture should restore it.
+                    if !active { lastScrollY = nil }
+                }
+                .compatOnChange(of: chromeHidden) { _ in
+                    // Collapsing the floating header changes the scroll view's top inset.
+                    // Reset the baseline so that inset compensation is never interpreted
+                    // as a reverse user gesture (the source of the first-scroll flash).
+                    lastScrollY = nil
                 }
                 .background { SpanReader(span: $own) }
         } else {
@@ -350,9 +366,6 @@ struct HomeView: View {
             if scrolled[s] != v {
                 withAnimation(DS.select) { scrolled[s] = v }
             }
-        }, onScrollActivity: { active in
-            guard s == source else { return }
-            homeScrollActivity(active)
         }, onScrollDirection: { scrollingUp in
             guard s == source else { return }
             homeScrollActivity(scrollingUp)
@@ -479,14 +492,15 @@ struct HomeView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .transition(.move(edge: .top).combined(with: .opacity))
+                // Collapse without animating the scroll view's top inset.
             }
             HomeChannelBar(items: sources, selection: $source, label: \.label, ink: STVTheme.text)
                 .padding(.top, homeScrollChromeHidden ? 0 : 12)
         }
         .padding(.top, homeScrollChromeHidden ? 0 : 8)
         .padding(.bottom, 8)
-        .animation(DS.select, value: homeScrollChromeHidden)
+        // Avoid animating header height: changing the top inset during deceleration
+        // can feed back into scroll geometry and repeatedly reverse the hide state.
         .background { LiquidEdgeFade(visible: pinned) }
         .background { SpanReader(span: $headerSpan) }
     }
