@@ -237,6 +237,7 @@ final class PluginTests: XCTestCase {
     func testDynamicImageDomainsAreLearnedPerPluginFromAuthorizedSourceResponses() async throws {
         let pluginID = "com.test.sandbox"
         PluginMediaDomainCache.clear(pluginID: pluginID)
+        PluginMediaDomainCache.clear(pluginID: "com.test.other")
         let payload = #"{"cover":"https:\/\/img-cdn.example.net/posters/cover","stream":"https://video-cdn.example.net/index.m3u8","api":"https://api-cdn.example.net/data","legacy":"http://old-image.example.net/cover.jpg"}"#
         PluginFixtures.responder = { _ in
             PluginFixtures.Reply(status: 200, headers: ["content-type": "application/json"], body: Data(payload.utf8))
