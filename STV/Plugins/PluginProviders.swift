@@ -130,7 +130,10 @@ enum PluginMedia {
     static func allows(_ url: URL, explicitPolicy: DomainPolicy, learnedHosts: Set<String>) -> Bool {
         guard let host = url.host?.lowercased(), url.scheme == "https" || url.scheme == "http" else { return false }
         let explicitlyAllowed = explicitPolicy.allows(host)
-        let dynamicallyAllowed = url.scheme == "https" && learnedHosts.contains(host)
+        let dynamicallyAllowed = url.scheme == "https"
+            && url.user == nil && url.password == nil
+            && (url.port == nil || url.port == 443)
+            && learnedHosts.contains(host)
         return (explicitlyAllowed || dynamicallyAllowed) && !NetGuard.isIPLiteral(host)
     }
 
