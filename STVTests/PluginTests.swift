@@ -279,6 +279,15 @@ final class PluginTests: XCTestCase {
         // Integrity mismatch
         let bad = try m(["integrity": ["files": ["main.js": "sha256-AAAA"]]])
         XCTAssertThrowsError(try PluginInstaller.validate(manifest: bad, source: Data(Self.stub.utf8), origin: "test"))
+
+        // Shorthand flat-string integrity form used by some third-party plugin packs.
+        let goodHash = PluginManifest.fileHash(Data(Self.stub.utf8))
+        let flatGood = try m(["integrity": goodHash])
+        XCTAssertEqual(flatGood.integrity?.hash, goodHash)
+        XCTAssertNoThrow(try PluginInstaller.validate(manifest: flatGood, source: Data(Self.stub.utf8), origin: "test"))
+        let flatBad = try m(["integrity": "sha256-AAAA"])
+        XCTAssertThrowsError(try PluginInstaller.validate(manifest: flatBad, source: Data(Self.stub.utf8), origin: "test"))
+        XCTAssertFalse(PluginNet.forbiddenHeaders.contains("authorization"))
         // Permission diff
         let v2 = try m(["version": "1.1.0", "permissions": ["http": ["example.com", "new.example.net"], "cloudflare": true]])
         let diff = PermissionDiff(old: try m([:]), new: v2)
