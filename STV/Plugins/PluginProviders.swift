@@ -113,7 +113,11 @@ enum PluginMediaDomainCache {
                                             generation: generations[pluginID, default: 0],
                                             expiresAt: timestamp + 10 * 60, bytes: bytes))
         }
-        if entries.count > 128 { entries = Array(entries.suffix(128)) }
+        var storedBytes = entries.reduce(0) { $0 + $1.bytes.count }
+        while entries.count > 128 || storedBytes > 8 << 20 {
+            guard !entries.isEmpty else { break }
+            storedBytes -= entries.removeFirst().bytes.count
+        }
         encryptedPayloads[pluginID] = entries
         lock.unlock()
     }
