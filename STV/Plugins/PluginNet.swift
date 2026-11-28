@@ -222,6 +222,9 @@ final class PluginNet: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     /// Synchronous on purpose: runs on the plugin's own thread while the script waits.
     func perform(_ req0: URLRequest, follow: Bool = true, timeout: TimeInterval = 20) throws -> Response {
         guard let url = req0.url else { throw PluginError.runtime(code: "E_PERMISSION", message: "地址无效") }
+        // Prevent a response started under an old plugin version from repopulating
+        // the learned-domain cache after update, uninstall or Clear Data.
+        let mediaLearningGeneration = PluginMediaDomainCache.generation(pluginID: pluginID)
         do { try check(url) } catch { log("✕ 拦截 \(url.host ?? "?") · \(error.localizedDescription)"); throw error }
         try rateLimit()
         var req = req0
@@ -234,7 +237,7 @@ final class PluginNet: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
             if (200..<300).contains(r.status) {
                 PluginMediaDomainCache.learn(pluginID: pluginID, sourceURL: url, sourcePolicy: policy(),
                                              contentType: r.headers.first(where: { $0.key.lowercased() == "content-type" })?.value ?? "",
-                                             body: r.body)
+                                             body: r.body, expectedGeneration: mediaLearningGeneration)
             }
             log("\(r.status) \(req.httpMethod ?? "GET") \(url.host ?? "")\(url.path) · fixture")
             return Response(status: r.status, url: url, headers: r.headers, body: r.body)
@@ -268,7 +271,8 @@ final class PluginNet: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
             for (k, v) in http.allHeaderFields { if let k = k as? String { headers[k.lowercased()] = "\(v)" } }
             if (200..<300).contains(http.statusCode) {
                 PluginMediaDomainCache.learn(pluginID: pluginID, sourceURL: final, sourcePolicy: policy(),
-                                             contentType: headers["content-type"] ?? "", body: data)
+                                             contentType: headers["content-type"] ?? "", body: data,
+                                             expectedGeneration: mediaLearningGeneration)
             }
             log("\(http.statusCode) \(req.httpMethod ?? "GET") \(final.host ?? "")\(final.path) · \(data.count)B · \(Int(Date().timeIntervalSince(start) * 1000))ms")
             return Response(status: http.statusCode, url: final, headers: headers, body: data)
