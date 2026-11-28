@@ -892,9 +892,10 @@ final class PluginTests: XCTestCase {
             count += 1
             return count == 1 ? ["93.184.216.34"] : ["192.168.1.20"]
         }
-        XCTAssertFalse(NetGuard.resolvesToBlocked("cdn.example.net", useCache: false))
+        XCTAssertFalse(NetGuard.resolvesToBlocked("cdn.example.net"),
+                        "the first public resolution may populate the normal positive cache")
         XCTAssertTrue(NetGuard.resolvesToBlocked("cdn.example.net", useCache: false),
-                      "media requests must re-resolve instead of reusing a previous positive DNS result")
+                      "media requests must bypass a previous positive DNS cache entry")
         NetGuard.resolverOverride = { _ in [] }
         XCTAssertTrue(NetGuard.resolvesToBlocked("unresolved.example.net", useCache: false),
                       "DNS failure must fail closed")
