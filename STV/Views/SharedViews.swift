@@ -36,6 +36,8 @@ enum Fmt {
 struct BoardSpec: Hashable, Identifiable {
     enum Kind: Hashable { case hongguo(HGRankGenre, HGRankSub), huangguo(HuangguoChannel), site(DramaSource, SiteCategory) }
     let kind: Kind
+    /// Full-list rank numbering; plugin sources opt in through manifest.homeFeatures.
+    var numbered: Bool = true
     var id: String {
         switch kind {
         case .hongguo(let g, let s): "hg-\(g.rawValue)-\(s.rawValue)"
