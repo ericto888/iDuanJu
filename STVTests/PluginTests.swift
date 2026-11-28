@@ -259,6 +259,20 @@ final class PluginTests: XCTestCase {
             try await p.evalForTest("(async () => (await host.http.get('https://img-cdn.example.net/cover.webp')).status)()")
         }
 
+        let explicitMedia = DomainPolicy(["static-cdn.example.net"])
+        let learned = Set(["img-cdn.example.net"])
+        XCTAssertTrue(PluginMedia.allows(URL(string: "https://img-cdn.example.net/cover.webp")!,
+                                         explicitPolicy: explicitMedia, learnedHosts: learned))
+        XCTAssertFalse(PluginMedia.allows(URL(string: "http://img-cdn.example.net/cover.webp")!,
+                                          explicitPolicy: explicitMedia, learnedHosts: learned),
+                       "dynamically learned CDN hosts are HTTPS-only")
+        XCTAssertFalse(PluginMedia.allows(URL(string: "https://evil.img-cdn.example.net/cover.webp")!,
+                                          explicitPolicy: explicitMedia, learnedHosts: learned),
+                       "learned permissions are exact hosts, not wildcard suffixes")
+        XCTAssertTrue(PluginMedia.allows(URL(string: "http://static-cdn.example.net/cover.webp")!,
+                                         explicitPolicy: explicitMedia, learnedHosts: learned),
+                      "explicit manifest media permissions retain existing HTTP compatibility")
+
         // A response from a host outside this plugin's HTTP manifest cannot teach new image domains.
         PluginMediaDomainCache.learn(pluginID: pluginID, sourceURL: URL(string: "https://evil.example.net/page")!,
                                      sourcePolicy: DomainPolicy(["example.com"]), contentType: "application/json",
