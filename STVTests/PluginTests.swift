@@ -284,6 +284,24 @@ final class PluginTests: XCTestCase {
                                      sourcePolicy: DomainPolicy(["example.com"]), contentType: "application/json",
                                      body: Data(#"{"cover":"https://evil-cdn.example.net/cover.jpg"}"#.utf8))
         XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: pluginID), ["img-cdn.example.net"])
+
+        // Learning requires HTTPS at the trusted source as well as HTTPS at the CDN.
+        let httpSourceID = "com.test.http-source"
+        PluginMediaDomainCache.learn(pluginID: httpSourceID, sourceURL: URL(string: "http://example.com/page")!,
+                                     sourcePolicy: DomainPolicy(["example.com"]), contentType: "text/html",
+                                     body: Data(#"<img src="https://http-source-cdn.example.net/cover.jpg">"#.utf8))
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: httpSourceID).isEmpty)
+        PluginMediaDomainCache.clear(pluginID: httpSourceID)
+
+        // Cached permissions expire after 24 hours.
+        let expiryID = "com.test.expiry"
+        let old = Date(timeIntervalSince1970: 1_000)
+        PluginMediaDomainCache.learn(pluginID: expiryID, sourceURL: URL(string: "https://example.com/page")!,
+                                     sourcePolicy: DomainPolicy(["example.com"]), contentType: "application/json",
+                                     body: Data(#"{"cover":"https://expiry-cdn.example.net/cover.jpg"}"#.utf8), now: old)
+        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: expiryID, now: old), ["expiry-cdn.example.net"])
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: expiryID, now: Date(timeIntervalSince1970: 1_000 + 24 * 60 * 60 + 1)).isEmpty)
+        PluginMediaDomainCache.clear(pluginID: expiryID)
     }
 
     func testCryptoAndCodec() async throws {
