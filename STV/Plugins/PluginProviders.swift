@@ -90,7 +90,10 @@ enum PluginMediaDomainCache {
         let key = keyPrefix + pluginID
         var stored = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
         let nowTimestamp = now.timeIntervalSince1970
-        let fresh = discovered.filter { stored[$0].map { $0 <= nowTimestamp } ?? (stored[$0] == nil) }
+        let fresh = discovered.filter { host in
+            guard let expiresAt = stored[host] else { return true }
+            return expiresAt <= nowTimestamp
+        }
         let expiry = nowTimestamp + ttl
         for host in discovered { stored[host] = expiry }
         stored = stored.filter { $0.value > nowTimestamp }
