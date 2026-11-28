@@ -28,10 +28,10 @@ struct RootTabView: View {
                 .animation(DS.select, value: showNav && metrics.useRail)
                 TabView(selection: $tab) {
                     Stack(path: $paths[0], reserveBottomBar: false) { HomeView() }.tag(0)
-                    Stack(path: $paths[1], reserveBottomBar: false) { TVBoxHubView() }.tag(1)
-                    Stack(path: $paths[2], reserveBottomBar: false) { CategoryView() }.tag(2)
-                    Stack(path: $paths[3], reserveBottomBar: false) { ProfileView() }.tag(3)
-                    Stack(path: $paths[4], reserveBottomBar: false) { SearchView() }.tag(4)
+                    Stack(path: $paths[1]) { TVBoxHubView() }.tag(1)
+                    Stack(path: $paths[2]) { CategoryView() }.tag(2)
+                    Stack(path: $paths[3]) { ProfileView() }.tag(3)
+                    Stack(path: $paths[4]) { SearchView() }.tag(4)
                 }
                 .tint(STVTheme.accent)
                 .simultaneousGesture(
@@ -122,7 +122,7 @@ struct GlassTabBar: View {
                 HStack(spacing: 4) {
                     ForEach(items.indices, id: \.self) { i in
                         NavBarItem(title: items[i].0, symbol: items[i].1, on: i == selection, height: 48, ns: ns) { pick(i) }
-                            .accessibilityIdentifier("tab.\(i)")
+                            .accessibilityIdentifier("tab.\\(i)")
                     }
                 }
                 .padding(6)
@@ -208,7 +208,7 @@ struct GlassNavigationRail: View {
                 VStack(spacing: 6) {
                     ForEach(items.indices, id: \.self) { i in
                         NavBarItem(title: items[i].0, symbol: items[i].1, on: i == selection, height: 56, ns: ns) { pick(i) }
-                            .accessibilityIdentifier("tab.\(i)")
+                            .accessibilityIdentifier("tab.\\(i)")
                     }
                 }
                 .padding(6)
