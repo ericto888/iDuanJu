@@ -1346,7 +1346,7 @@ struct PlayerScreen: View {
         else { flashChrome() }
     }
 
-    /// Double tap: left third −10 s, right third +10 s, middle play / pause.
+    /// Double tap: outer 20% on the left/right seeks −10/+10 s; the middle 60% toggles play / pause.
     private func handleDoubleTap(_ x: CGFloat) {
         guard !locked else { return }
         if !co.isLive, x < 0.20 || x > 0.80 {
