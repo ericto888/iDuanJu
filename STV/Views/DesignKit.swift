@@ -842,6 +842,86 @@ struct PosterArt: View {
     }
 }
 
+/// Full-width native score card for live sports items. Navigation remains the standard series route.
+struct LiveMatchCard: View {
+    let series: HGSeries
+    var body: some View {
+        NavigationLink(value: Route.series(series)) {
+            VStack(spacing: 10) {
+                HStack {
+                    Text(series.liveMatch?.statusText ?? statusLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(statusColor)
+                    Spacer()
+                    if let kickoff = series.liveMatch?.kickoff, !kickoff.isEmpty {
+                        Text(kickoff).font(.system(size: 11, weight: .medium)).foregroundStyle(STVTheme.secondary)
+                    } else {
+                        Text(series.title).font(.system(size: 11, weight: .medium)).foregroundStyle(STVTheme.secondary).lineLimit(1)
+                    }
+                }
+                HStack(spacing: 8) {
+                    team(series.liveMatch?.home, trailing: false)
+                    Spacer(minLength: 2)
+                    score
+                    Spacer(minLength: 2)
+                    team(series.liveMatch?.away, trailing: true)
+                }
+            }
+            .padding(14)
+            .background(STVTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(STVTheme.cardBorder, lineWidth: 0.7))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(PressScale(scale: 0.985))
+    }
+
+    @ViewBuilder private func team(_ value: LiveMatchTeam?, trailing: Bool) -> some View {
+        VStack(spacing: 6) {
+            if let logo = value?.logo, !logo.isEmpty {
+                CoverView(url: logo, corner: 0, maxPixelSize: CoverPixels.thumb)
+                    .frame(width: 42, height: 42)
+            } else {
+                Image(systemName: "shield.fill").font(.system(size: 30)).foregroundStyle(STVTheme.tertiary)
+                    .frame(width: 42, height: 42)
+            }
+            Text(value?.name ?? "未知球队")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(STVTheme.text)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: trailing ? .trailing : .leading)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder private var score: some View {
+        if let match = series.liveMatch, let home = match.homeScore, let away = match.awayScore {
+            Text("\(home) : \(away)")
+                .font(.system(size: 25, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(STVTheme.text)
+        } else {
+            Text("VS")
+                .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(STVTheme.text)
+        }
+    }
+
+    private var statusLabel: String {
+        switch series.liveMatch?.status {
+        case "live": "LIVE"
+        case "finished": "完场"
+        default: "未开赛"
+        }
+    }
+
+    private var statusColor: Color {
+        switch series.liveMatch?.status {
+        case "live": STVTheme.accentWarm
+        case "finished": STVTheme.secondary
+        default: STVTheme.tertiary
+        }
+    }
+}
+
 /// Grid / shelf cell: poster + 14 pt title + 12 pt subtitle (`.cell`).
 struct PosterCellView: View {
     let series: HGSeries
