@@ -234,6 +234,21 @@ final class PluginTests: XCTestCase {
         XCTAssertNil(PluginOut.mediaTransform("aes"))
     }
 
+    func testDynamicImageDomainScannerCapsCandidatesWithoutMaterializingAllMatches() {
+        let pluginID = "com.test.scan-budget"
+        PluginMediaDomainCache.clear(pluginID: pluginID)
+        defer { PluginMediaDomainCache.clear(pluginID: pluginID) }
+
+        let hosts = (0..<2_000).map { "https://cdn-\\($0).example.net/image" }.joined(separator: " ")
+        PluginMediaDomainCache.learn(pluginID: pluginID,
+                                     sourceURL: URL(string: "https://source.example.com/catalog")!,
+                                     sourcePolicy: DomainPolicy(["source.example.com"]),
+                                     contentType: "application/json",
+                                     body: Data(hosts.utf8))
+        XCTAssertLessThanOrEqual(PluginMediaDomainCache.candidates(pluginID: pluginID).count, 64,
+                                 "one response must never create more than the fixed candidate budget")
+    }
+
     func testDynamicImageDomainsAreLearnedPerPluginFromAuthorizedSourceResponses() async throws {
         let pluginID = "com.test.sandbox"
         PluginMediaDomainCache.clear(pluginID: pluginID)
