@@ -738,6 +738,7 @@ struct JSVideoProvider: SiteProvider {
             if h["User-Agent"] == nil { h["User-Agent"] = rec.learnedUA ?? PluginHostContext.defaultUA }
             streams.append(HGStream(streamId: "p\(i)", quality: PluginOut.s(st["name"], max: 40).nonEmptyOr(host), url: u, key: key,
                                     kind: (!key.isEmpty || fmt == "cenc") ? .mp4Cenc : (fmt == "hls" ? .hls : .mp4Clear), headers: h))
+        }
 
         guard let first = streams.first else {
             throw ProviderError.upstream("插件没有返回可播放的地址（需 https 且在 media 白名单内）")
