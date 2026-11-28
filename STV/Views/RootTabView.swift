@@ -33,6 +33,7 @@ struct RootTabView: View {
                     Stack(path: $paths[3], reserveBottomBar: !metrics.useRail) { ProfileView() }.tag(3)
                     Stack(path: $paths[4], reserveBottomBar: !metrics.useRail) { SearchView() }.tag(4)
                 }
+                .environment(\.homeTabBarHidden, tabBarHidden)
                 .tint(STVTheme.accent)
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
