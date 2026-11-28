@@ -22,11 +22,8 @@ final class PlayerAdjuster: ObservableObject {
     /// Outer 28% strips in portrait (preserving middle 44% for episode swiping), full halves in landscape.
     static func zone(x: CGFloat, width: CGFloat, landscape: Bool, edge: CGFloat) -> AdjustSide? {
         guard width > 0, x >= edge, x <= width - 8 else { return nil }
-        if landscape {
-            if x < width * 0.45 { return .brightness }
-            if x > width * 0.55 { return .volume }
-            return nil
-        }
+        // Keep the same narrow side zones in both portrait and landscape:
+        // outer 20% for brightness/volume, center 60% reserved for episode paging.
         if x < width * 0.20 { return .brightness }
         if x > width * 0.80 { return .volume }
         return nil
