@@ -233,7 +233,10 @@ private struct HomePageInset: ViewModifier {
                     header.onScrollDirection(y > previous)
                 }
                 .compatOnScrollActivity { active in
-                    if !active { header.onScrollActivity(false) }
+                    if !active {
+                        lastScrollY = nil
+                        header.onScrollActivity(false)
+                    }
                 }
                 .background { SpanReader(span: $own) }
         } else {
