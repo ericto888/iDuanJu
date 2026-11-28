@@ -86,20 +86,33 @@ extension View {
         }
     }
 
-    /// Reports active finger-driven scrolling and the moment that interaction ends on iOS 18+.
-    /// Deceleration begins after the finger is lifted, so it must not keep the chrome hidden.
+    /// Reports vertical finger interaction independently of scroll deceleration.
+    /// The drag recognizer provides a reliable finger-up signal; scroll phases remain
+    /// as a secondary signal for system-driven interaction transitions.
     @ViewBuilder
     func compatOnScrollActivity(action: @escaping (Bool) -> Void) -> some View {
         if #available(iOS 18.0, *) {
-            self.onScrollPhaseChange { oldPhase, newPhase in
-                if newPhase == .interacting {
-                    action(true)
-                } else if oldPhase == .interacting {
-                    // Fires as soon as the finger leaves the screen, whether scrolling
-                    // decelerates or goes directly back to idle.
-                    action(false)
+            self
+                .onScrollPhaseChange { oldPhase, newPhase in
+                    if newPhase == .interacting {
+                        action(true)
+                    } else if newPhase == .decelerating || (oldPhase == .interacting && newPhase == .idle) {
+                        action(false)
+                    }
                 }
-            }
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { value in
+                            let dx = abs(value.translation.width)
+                            let dy = abs(value.translation.height)
+                            if dy > dx * 1.2 { action(true) }
+                        }
+                        .onEnded { value in
+                            let dx = abs(value.translation.width)
+                            let dy = abs(value.translation.height)
+                            if dy > dx * 1.2 { action(false) }
+                        }
+                )
         } else {
             self
         }
