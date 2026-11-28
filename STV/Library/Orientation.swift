@@ -33,8 +33,8 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
         Self.isPad ? .all : Self.mask
     }
 
-    /// Apply the playback policy without rotating the device: portrait videos lock portrait;
-    /// landscape videos keep the orientation that was active when playback began.
+    /// Portrait videos lock portrait; landscape videos allow automatic device rotation
+    /// without forcing an immediate rotation when playback begins.
     @MainActor static func applyVideoOrientation(isPortrait: Bool) {
         guard fullscreenSnapshot == nil else { return }
         rotationGeneration += 1
