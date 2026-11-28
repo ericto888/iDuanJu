@@ -61,6 +61,16 @@ enum PluginMediaDomainCache {
         return valid.keys.sorted()
     }
 
+    /// Short-lived candidates may authorize a redirect only when the redirect
+    /// originates from an already-authorized image request.
+    static func candidates(pluginID: String, now: Date = Date()) -> Set<String> {
+        lock.lock(); defer { lock.unlock() }
+        let timestamp = now.timeIntervalSince1970
+        let valid = observedHosts[pluginID, default: [:]].filter { $0.value > timestamp }
+        observedHosts[pluginID] = valid
+        return Set(valid.keys)
+    }
+
     static func clear(pluginID: String) {
         lock.lock(); defer { lock.unlock() }
         generations[pluginID, default: 0] &+= 1
@@ -197,8 +207,6 @@ enum PluginMediaDomainCache {
         let pattern = #"https://[A-Za-z0-9.-]+(?::443)?(?:/[^\s"'<>\\]*)?"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return }
         let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
-        guard !matches.isEmpty else { return }
-
         var observed = Set<String>()
         for match in matches {
             var candidate = ns.substring(with: match.range)
@@ -218,6 +226,18 @@ enum PluginMediaDomainCache {
             // Every external HTTPS host in the trusted response is only a short-lived
             // candidate. It becomes usable only when the native provider classifies an
             // exact URL as an image and calls PluginMedia.ref.
+        }
+
+        // Some APIs return CDN origins as bare host strings rather than URLs.
+        // They remain candidates only; a provider must later construct and classify
+        // an exact HTTPS image URL before the host can be promoted.
+        let bareHostPattern = #"(?<![A-Za-z0-9.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}(?![A-Za-z0-9.-])"#
+        if let hostRegex = try? NSRegularExpression(pattern: bareHostPattern, options: [.caseInsensitive]) {
+            for match in hostRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                let host = ns.substring(with: match.range).lowercased()
+                guard host != sourceHost, !NetGuard.isIPLiteral(host), DomainRule(host) != nil else { continue }
+                observed.insert(host)
+            }
         }
         guard !observed.isEmpty else { return }
 
@@ -293,16 +313,25 @@ enum PluginMedia {
     }
 
     private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
+        let pluginID: String
         let explicitPolicy: DomainPolicy
         let learnedHosts: Set<String>
         var blocked: String?
-        init(explicitPolicy: DomainPolicy, learnedHosts: Set<String>) {
+        init(pluginID: String, explicitPolicy: DomainPolicy, learnedHosts: Set<String>) {
+            self.pluginID = pluginID
             self.explicitPolicy = explicitPolicy
             self.learnedHosts = learnedHosts
         }
         private func allows(_ url: URL) -> Bool {
-            PluginMedia.allows(url, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts)
-                && !NetGuard.resolvesToBlocked(url.host ?? "", useCache: false)
+            let host = url.host?.lowercased() ?? ""
+            let candidates = PluginMediaDomainCache.candidates(pluginID: pluginID)
+            let allowed = PluginMedia.allows(url, explicitPolicy: explicitPolicy,
+                                             learnedHosts: learnedHosts.union(candidates))
+            guard allowed, !NetGuard.resolvesToBlocked(host, useCache: false) else { return false }
+            if candidates.contains(host) {
+                PluginMediaDomainCache.learnImageURL(pluginID: pluginID, url: url.absoluteString)
+            }
+            return true
         }
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest) async -> URLRequest? {
@@ -343,7 +372,7 @@ enum PluginMedia {
             for (k, v) in r.headers where allowedHeaders.contains(k.lowercased()) { req.setValue(v, forHTTPHeaderField: k) }
             let cs = PluginRuntime.jar(r.plugin).cookies(for: r.url)
             for (k, v) in HTTPCookie.requestHeaderFields(with: cs) { req.setValue(v, forHTTPHeaderField: k) }
-            let guardD = RedirectGuard(explicitPolicy: explicitPolicy, learnedHosts: learnedHosts)
+            let guardD = RedirectGuard(pluginID: r.plugin, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts)
             let (d, resp) = try await session.data(for: req, delegate: guardD)
             if let b = guardD.blocked { throw ProviderError.invalid("图片跳转到未授权域名 \(b)") }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
