@@ -209,14 +209,21 @@ struct PluginsView: View {
         }
     }
 
+    private func resolvedManifestURL(_ manifest: String, base subURL: String?) -> String {
+        guard let subURL, let base = URL(string: subURL),
+              let absolute = URL(string: manifest, relativeTo: base)?.absoluteURL.absoluteString else { return manifest }
+        return absolute
+    }
+
     /// Downloads and validates every missing entry, then asks for consent once for the whole batch.
-    private func installAll(_ entries: [PluginSubscription.Entry], origin: String) {
+    private func installAll(_ entries: [PluginSubscription.Entry], subURL: String, origin: String) {
         busy = "prepare"; message = nil
         Task {
             var prepared: [PendingInstall] = []
             var failures: [String] = []
             for e in entries {
-                do { prepared.append(try await Task.detached { try await PluginInstaller.prepare(manifestURL: e.manifest, origin: origin) }.value) }
+                let targetURL = resolvedManifestURL(e.manifest, base: subURL)
+                do { prepared.append(try await Task.detached { try await PluginInstaller.prepare(manifestURL: targetURL, origin: origin) }.value) }
                 catch { failures.append("\(e.name)：\(error.localizedDescription)") }
             }
             busy = nil
@@ -318,19 +325,20 @@ struct PluginsView: View {
             if missing.count > 1 {
                 HStack {
                     Spacer(minLength: 0)
-                    Button { installAll(missing, origin: "订阅：" + s.url) } label: { MiniButtonLabel(title: "全部安装（\(missing.count)）") }
+                    Button { installAll(missing, subURL: s.url, origin: "订阅：" + s.url) } label: { MiniButtonLabel(title: "全部安装（\(missing.count)）") }
                         .buttonStyle(PressScale()).accessibilityIdentifier("plugins.sub.installAll")
                 }
                 .padding(.leading, 44)
             }
             ForEach(s.plugins.filter { !($0.adult ?? true) || gate.unlocked }) { e in
+                let targetURL = resolvedManifestURL(e.manifest, base: s.url)
                 HStack(spacing: 8) {
                     Text(e.name).dsFont(14, relativeTo: .subheadline).foregroundStyle(STVTheme.text)
                     if e.adult ?? true { DSTag(text: "18+") }
                     Spacer(minLength: 0)
                     if let installed = store.plugin(e.id) {
                         if let ver = e.version, PluginManifest.compare(ver, installed.manifest.version) > 0 {
-                            Button { prepare { try await PluginInstaller.prepare(manifestURL: e.manifest, origin: "订阅：" + s.url) } } label: { MiniButtonLabel(title: "更新 \(ver)") }
+                            Button { prepare { try await PluginInstaller.prepare(manifestURL: targetURL, origin: "订阅：" + s.url) } } label: { MiniButtonLabel(title: "更新 \(ver)") }
                                 .buttonStyle(PressScale())
                         } else {
                             Text("已安装").dsFont(12, relativeTo: .caption).foregroundStyle(STVTheme.secondary)
