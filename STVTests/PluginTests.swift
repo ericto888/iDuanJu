@@ -379,7 +379,7 @@ final class PluginTests: XCTestCase {
                                      sourcePolicy: DomainPolicy(["example.com"]), contentType: "application/json",
                                      body: Data(#"{"cover":"https://expiry-cdn.example.net/cover.jpg"}"#.utf8), now: old)
         XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: expiryID, now: old).isEmpty)
-        _ = PluginMedia.ref(plugin: expiryID, url: "https://expiry-cdn.example.net/cover.jpg", now: old)
+        PluginMediaDomainCache.learnImageURL(pluginID: expiryID, url: "https://expiry-cdn.example.net/cover.jpg", now: old)
         XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: expiryID, now: old), ["expiry-cdn.example.net"])
         XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: expiryID, now: Date(timeIntervalSince1970: 1_000 + 24 * 60 * 60 + 1)).isEmpty)
         PluginMediaDomainCache.clear(pluginID: expiryID)
