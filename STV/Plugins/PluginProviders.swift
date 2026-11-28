@@ -317,6 +317,7 @@ enum PluginMedia {
         let explicitPolicy: DomainPolicy
         let learnedHosts: Set<String>
         var blocked: String?
+        private var redirectHops = 0
         init(pluginID: String, explicitPolicy: DomainPolicy, learnedHosts: Set<String>) {
             self.pluginID = pluginID
             self.explicitPolicy = explicitPolicy
@@ -335,7 +336,11 @@ enum PluginMedia {
         }
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest) async -> URLRequest? {
-            guard let url = request.url, allows(url) else { blocked = request.url?.host; return nil }
+            redirectHops += 1
+            guard redirectHops <= 10, let url = request.url, allows(url) else {
+                blocked = request.url?.host ?? "redirect-limit"
+                return nil
+            }
             return request
         }
     }
