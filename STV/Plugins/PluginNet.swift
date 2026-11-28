@@ -242,9 +242,13 @@ final class PluginNet: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         if let fx = PluginFixtures.responder {
             guard let r = fx(req) else { throw PluginError.runtime(code: "E_NETWORK", message: "fixture missing \(url.absoluteString)") }
             if (200..<300).contains(r.status) {
+                let contentType = r.headers.first(where: { $0.key.lowercased() == "content-type" })?.value ?? ""
                 PluginMediaDomainCache.learn(pluginID: pluginID, sourceURL: url, sourcePolicy: policy(),
-                                             contentType: r.headers.first(where: { $0.key.lowercased() == "content-type" })?.value ?? "",
-                                             body: r.body, expectedGeneration: mediaLearningGeneration)
+                                             contentType: contentType, body: r.body,
+                                             expectedGeneration: mediaLearningGeneration)
+                PluginMediaDomainCache.observeEncryptedPayloads(pluginID: pluginID, sourceURL: url,
+                                                                 sourcePolicy: policy(), contentType: contentType,
+                                                                 body: r.body, expectedGeneration: mediaLearningGeneration)
             }
             log("\(r.status) \(req.httpMethod ?? "GET") \(url.host ?? "")\(url.path) · fixture")
             return Response(status: r.status, url: url, headers: r.headers, body: r.body)
@@ -277,9 +281,13 @@ final class PluginNet: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
             var headers: [String: String] = [:]
             for (k, v) in http.allHeaderFields { if let k = k as? String { headers[k.lowercased()] = "\(v)" } }
             if (200..<300).contains(http.statusCode) {
+                let contentType = headers["content-type"] ?? ""
                 PluginMediaDomainCache.learn(pluginID: pluginID, sourceURL: final, sourcePolicy: policy(),
-                                             contentType: headers["content-type"] ?? "", body: data,
+                                             contentType: contentType, body: data,
                                              expectedGeneration: mediaLearningGeneration)
+                PluginMediaDomainCache.observeEncryptedPayloads(pluginID: pluginID, sourceURL: final,
+                                                                 sourcePolicy: policy(), contentType: contentType,
+                                                                 body: data, expectedGeneration: mediaLearningGeneration)
             }
             log("\(http.statusCode) \(req.httpMethod ?? "GET") \(final.host ?? "")\(final.path) · \(data.count)B · \(Int(Date().timeIntervalSince(start) * 1000))ms")
             return Response(status: http.statusCode, url: final, headers: headers, body: data)
