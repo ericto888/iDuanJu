@@ -115,12 +115,8 @@ final class BoardFeed: ObservableObject {
     }
     let board: BoardSpec
     @Published private(set) var state: State = .idle
-    /// At most one active network request per board.
+    /// At most one network request per board; refresh dispatch never waits on the network.
     private var loadingTask: Task<[HGSeries], Never>?
-    private var loadingRequestID: UUID?
-    /// Multiple force-refresh callers join the same refresh queued behind an active request.
-    private var forcedRefreshTask: Task<[HGSeries], Never>?
-    private var forcedRefreshRequestID: UUID?
 
     init(_ b: BoardSpec) { board = b }
 
@@ -132,60 +128,24 @@ final class BoardFeed: ObservableObject {
         return true
     }
 
-    /// Normal callers reuse an in-flight request. A force refresh queues exactly one new
-    /// first-page fetch after that request finishes; concurrent force callers join it.
+    /// Concurrent callers reuse the active request; force only bypasses the loaded-state cache.
     func loadFirstPageIfNeeded(force: Bool = false) async -> [HGSeries] {
-        if force, let forcedRefreshTask {
-            return await forcedRefreshTask.value
-        }
-
-        if let activeTask = loadingTask {
-            guard force else { return await activeTask.value }
-
-            let requestID = UUID()
-            let refreshTask = Task { @MainActor in
-                _ = await activeTask.value
-                return await self.fetchFirstPage()
-            }
-            loadingTask = refreshTask
-            loadingRequestID = requestID
-            forcedRefreshTask = refreshTask
-            forcedRefreshRequestID = requestID
-
-            let result = await refreshTask.value
-            if loadingRequestID == requestID {
-                loadingTask = nil
-                loadingRequestID = nil
-            }
-            if forcedRefreshRequestID == requestID {
-                forcedRefreshTask = nil
-                forcedRefreshRequestID = nil
-            }
-            return result
-        }
-
+        if let loadingTask { return await loadingTask.value }
         if case .loaded = state, !force { return items }
 
-        let requestID = UUID()
-        let task = Task { @MainActor in await self.fetchFirstPage() }
+        let task = Task { @MainActor in
+            do {
+                state = .loaded(try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items)
+            } catch {
+                // A failed refresh keeps what is already on screen.
+                if items.isEmpty { state = .failed(error) }
+            }
+            return items
+        }
         loadingTask = task
-        loadingRequestID = requestID
         let result = await task.value
-        if loadingRequestID == requestID {
-            loadingTask = nil
-            loadingRequestID = nil
-        }
+        loadingTask = nil
         return result
-    }
-
-    private func fetchFirstPage() async -> [HGSeries] {
-        do {
-            state = .loaded(try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items)
-        } catch {
-            // A failed refresh keeps what is already on screen.
-            if items.isEmpty { state = .failed(error) }
-        }
-        return items
     }
 
     func load(force: Bool = false) {
@@ -806,31 +766,24 @@ private struct HomeFeedPage: View {
         .refreshable {
             if tab == .actorRank {
                 await ActorRankStore.shared.reload()
-            } else {
-                if case .site(let site) = tab, usesCategoryShelves(site) {
-                    let requestID = UUID()
-                    pluginHomeRequestID = requestID
-                    pluginHomeSource = nil
-                    pluginHomeError = nil
-                    fallbackHeroSource = nil
-                    fallbackHeroBoardID = nil
-                    // Refresh homepage data and previously loaded shelves concurrently. A slow
-                    // homeData() or first shelf must not serialize every other refresh request.
-                    let loadedFeeds = self.boards.compactMap { board -> BoardFeed? in
-                        let feed = BoardCache.shared.feed(board)
-                        return feed.hasAttemptedLoad ? feed : nil
-                    }
-                    async let homeRefresh: Void = loadPluginHome(site, requestID: requestID)
-                    async let shelfRefresh: Void = refreshPluginShelves(
-                        loadedFeeds, site: site, requestID: requestID
-                    )
-                    await homeRefresh
-                    await shelfRefresh
+            } else if case .site(let site) = tab, usesCategoryShelves(site) {
+                let requestID = UUID()
+                pluginHomeRequestID = requestID
+                pluginHomeSource = nil
+                pluginHomeError = nil
+                fallbackHeroSource = nil
+                fallbackHeroBoardID = nil
+
+                // Dispatch refreshes without making the pull-to-refresh gesture wait for
+                // every remote source. BoardFeed publishes each shelf as soon as it returns.
+                self.boards.forEach { BoardCache.shared.feed($0).load(force: true) }
+                Task { @MainActor in
+                    await loadPluginHome(site, requestID: requestID)
                     guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
                     await resolveFallbackHero(site, requestID: requestID)
-                } else {
-                    self.boards.forEach { BoardCache.shared.feed($0).load(force: true) }
                 }
+            } else {
+                self.boards.forEach { BoardCache.shared.feed($0).load(force: true) }
             }
         }        .task(id: tab) {
             if case .site(let site) = tab, usesCategoryShelves(site) {
@@ -852,18 +805,6 @@ private struct HomeFeedPage: View {
 
     private func isCurrentPluginHomeRequest(_ requestID: UUID, site: DramaSource) -> Bool {
         !Task.isCancelled && pluginHomeRequestID == requestID && tab == .site(site)
-    }
-
-    /// Refresh only shelves that have already started loading, concurrently.
-    private func refreshPluginShelves(_ feeds: [BoardFeed], site: DramaSource, requestID: UUID) async {
-        await withTaskGroup(of: Void.self) { group in
-            for feed in feeds {
-                group.addTask { @MainActor in
-                    guard self.isCurrentPluginHomeRequest(requestID, site: site) else { return }
-                    _ = await feed.loadFirstPageIfNeeded(force: true)
-                }
-            }
-        }
     }
 
     private func loadPluginHome(_ site: DramaSource, requestID: UUID) async {
