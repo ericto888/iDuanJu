@@ -183,7 +183,8 @@ struct PlayerScreen: View {
                     } else {
                         if locked {
                             if controlsVisible { lockOnly(full, ins: ins).transition(.opacity) }
-                        } else if co.paused, co.current != nil, co.readyIndex == co.current, panel == nil, !inPiP {
+                        } else if co.paused, co.current != nil, co.readyIndex == co.current,
+                                  feedSettled, !centerSuppressed, panel == nil, !inPiP {
                             Button {
                                 co.togglePause()
                                 flashChrome()
