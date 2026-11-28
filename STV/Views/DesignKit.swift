@@ -895,7 +895,7 @@ struct LiveMatchCard: View {
 
     @ViewBuilder private var score: some View {
         if let match = series.liveMatch, let home = match.homeScore, let away = match.awayScore {
-            Text("\\(home) : \\(away)")
+            Text("\(home) : \(away)")
                 .font(.system(size: 25, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(STVTheme.text)
         } else {
