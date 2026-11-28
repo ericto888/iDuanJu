@@ -333,7 +333,7 @@ struct PlayerScreen: View {
             StatusBarGate.shared.setHidden(false)
             co.teardown()
             adjuster.restoreBrightness()
-            OrientationGate.lockPortrait()
+            OrientationGate.unlock()
         }
         .compatOnChange(of: co.notice) { text in
             guard let text else { return }
@@ -706,7 +706,7 @@ struct PlayerScreen: View {
         StatusBarGate.shared.setHidden(false)
         co.teardown()
         adjuster.restoreBrightness()
-        OrientationGate.lockPortrait()
+        OrientationGate.unlock()
         dismiss()
     }
 
