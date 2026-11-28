@@ -192,6 +192,8 @@ struct HomeHeader {
     var pagerTop: CGFloat = 0
     var tabBar: CGFloat = 0
     var onScrolled: (Bool) -> Void = { _ in }
+    var onScrollActivity: (Bool) -> Void = { _ in }
+    var onScrollDirection: (Bool) -> Void = { _ in }
 }
 
 private struct HomeHeaderKey: EnvironmentKey { static let defaultValue = HomeHeader() }
@@ -207,6 +209,7 @@ extension EnvironmentValues {
 private struct HomePageInset: ViewModifier {
     @Environment(\.homeHeader) private var header
     @State private var own: VSpan?
+    @State private var lastScrollY: CGFloat?
     /// A cell that is not on screen yet can report a frame of its own coordinate space: only believe plausible ones.
     private var placed: VSpan? { own.flatMap { abs($0.top - header.pagerTop) < 40 ? $0 : nil } }
     private var top: CGFloat {
@@ -224,6 +227,17 @@ private struct HomePageInset: ViewModifier {
                 .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: top) }
                 .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: bottom) }
                 .compatOnScrolled(threshold: 6) { header.onScrolled($0) }
+                .compatOnScrollY { y in
+                    defer { lastScrollY = y }
+                    guard let previous = lastScrollY, abs(y - previous) > 0.5 else { return }
+                    header.onScrollDirection(y > previous)
+                }
+                .compatOnScrollActivity { active in
+                    if !active {
+                        lastScrollY = nil
+                        header.onScrollActivity(false)
+                    }
+                }
                 .background { SpanReader(span: $own) }
         } else {
             content
@@ -256,6 +270,8 @@ private struct HomeBottomSafeArea: ViewModifier {
 /// 分类条联动（选中项自动滚到居中、指示条跟随）。每页：二级榜单选择 → 竖海报 hero → 真实榜单分段。
 /// 横滑冲突：hero 轮播区域内的横滑归轮播；其它区域横滑翻来源页；首页是根页面，没有系统侧滑返回。
 struct HomeView: View {
+    @Environment(\.homeScrollChromeHidden) private var homeScrollChromeHidden
+    @Environment(\.homeScrollActivity) private var homeScrollActivity
     @ObservedObject private var gate = SourceGate.shared
     @ObservedObject private var pluginStore = PluginStore.shared
     @ObservedObject private var cmsStore = CMSStore.shared
@@ -319,7 +335,15 @@ struct HomeView: View {
         )
         .environment(\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: 0, onScrolled: { v in
             guard s == source else { return }
-            if scrolled[s] != v { scrolled[s] = v }
+            if scrolled[s] != v {
+                withAnimation(DS.select) { scrolled[s] = v }
+            }
+        }, onScrollActivity: { active in
+            guard s == source else { return }
+            homeScrollActivity(active)
+        }, onScrollDirection: { scrollingUp in
+            guard s == source else { return }
+            homeScrollActivity(scrollingUp)
         }))
     }
 
@@ -421,32 +445,36 @@ struct HomeView: View {
 
     private var header: some View {
         VStack(spacing: 0) {
-            LiquidGlassGroup(spacing: 10) {
-                HStack(spacing: 10) {
-                    NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
-                        DSSearchBarLabel()
+            if !homeScrollChromeHidden {
+                LiquidGlassGroup(spacing: 10) {
+                    HStack(spacing: 10) {
+                        NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
+                            DSSearchBarLabel()
+                                .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
+                                .liquidGlassCapsule(interactive: true)
+                        }
+                        .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
+                        Button { showChannels = true } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
+                                Text("筛选").font(.system(size: 14, weight: .medium))
+                            }
+                            .foregroundStyle(STVTheme.text)
                             .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
                             .liquidGlassCapsule(interactive: true)
-                    }
-                    .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
-                    Button { showChannels = true } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
-                            Text("筛选").font(.system(size: 14, weight: .medium))
                         }
-                        .foregroundStyle(STVTheme.text)
-                        .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
-                        .liquidGlassCapsule(interactive: true)
+                        .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
                     }
-                    .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
                 }
+                .padding(.horizontal, 16)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
-            .padding(.horizontal, 16)
             HomeChannelBar(items: sources, selection: $source, label: \.label, ink: STVTheme.text)
-                .padding(.top, 12)
+                .padding(.top, homeScrollChromeHidden ? 0 : 12)
         }
-        .padding(.top, 8)
+        .padding(.top, homeScrollChromeHidden ? 0 : 8)
         .padding(.bottom, 8)
+        .animation(DS.select, value: homeScrollChromeHidden)
         .background { LiquidEdgeFade(visible: pinned) }
         .background { SpanReader(span: $headerSpan) }
     }

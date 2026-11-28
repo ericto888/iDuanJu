@@ -86,6 +86,16 @@ extension View {
         }
     }
 
+    /// Reports the real scroll lifecycle on iOS 18+, including deceleration.
+    @ViewBuilder
+    func compatOnScrollActivity(action: @escaping (Bool) -> Void) -> some View {
+        if #available(iOS 18.0, *) {
+            self.onScrollPhaseChange { _, phase in action(phase != .idle) }
+        } else {
+            self
+        }
+    }
+
     /// iOS 16+ replacement for `.onScrollGeometryChange(for: CGFloat.self)` scroll Y reporting.
     @ViewBuilder
     func compatOnScrollY(action: @escaping (CGFloat) -> Void) -> some View {
