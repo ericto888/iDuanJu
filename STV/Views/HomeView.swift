@@ -193,6 +193,7 @@ struct HomeHeader {
     var tabBar: CGFloat = 0
     var onScrolled: (Bool) -> Void = { _ in }
     var onScrollActivity: (Bool) -> Void = { _ in }
+    var onScrollDirection: (Bool) -> Void = { _ in }
 }
 
 private struct HomeHeaderKey: EnvironmentKey { static let defaultValue = HomeHeader() }
@@ -208,6 +209,7 @@ extension EnvironmentValues {
 private struct HomePageInset: ViewModifier {
     @Environment(\.homeHeader) private var header
     @State private var own: VSpan?
+    @State private var lastScrollY: CGFloat?
     /// A cell that is not on screen yet can report a frame of its own coordinate space: only believe plausible ones.
     private var placed: VSpan? { own.flatMap { abs($0.top - header.pagerTop) < 40 ? $0 : nil } }
     private var top: CGFloat {
@@ -225,7 +227,14 @@ private struct HomePageInset: ViewModifier {
                 .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: top) }
                 .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: bottom) }
                 .compatOnScrolled(threshold: 6) { header.onScrolled($0) }
-                .compatOnScrollActivity { header.onScrollActivity($0) }
+                .compatOnScrollY { y in
+                    defer { lastScrollY = y }
+                    guard let previous = lastScrollY, abs(y - previous) > 0.5 else { return }
+                    header.onScrollDirection(y > previous)
+                }
+                .compatOnScrollActivity { active in
+                    if !active { header.onScrollActivity(false) }
+                }
                 .background { SpanReader(span: $own) }
         } else {
             content
@@ -329,6 +338,9 @@ struct HomeView: View {
         }, onScrollActivity: { active in
             guard s == source else { return }
             homeScrollActivity(active)
+        }, onScrollDirection: { scrollingUp in
+            guard s == source else { return }
+            homeScrollActivity(scrollingUp)
         }))
     }
 
