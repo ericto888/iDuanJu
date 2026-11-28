@@ -716,7 +716,8 @@ struct JSVideoProvider: SiteProvider {
                 homeScore: hasScore ? homeScore : nil,
                 awayScore: hasScore ? awayScore : nil,
                 status: status,
-                kickoff: PluginOut.s(raw["kickoff"], max: 40).nilIfEmpty,
+                matchDate: PluginOut.s(raw["date"], max: 24).nilIfEmpty,
+                kickoff: PluginOut.s(raw["kickoff"], max: 24).nilIfEmpty,
                 statusText: PluginOut.s(raw["statusText"], max: 30).nilIfEmpty
             )
         }()
