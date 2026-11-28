@@ -295,11 +295,14 @@ struct PlayerScreen: View {
             nextDramaPick = await NextDramaRecommender.shared.pickNextDrama(current: d, seasons: seasons, watched: watched)
         }
         .task {
-            // Portrait by default for everything (landscape videos play centred). Rotating the phone (when
-            // the system rotation lock is off) or the 横屏 button switches to landscape.
-            OrientationGate.unlock()
+            // Portrait videos lock portrait. Landscape videos retain the current orientation until
+            // the user explicitly taps the fullscreen control.
+            OrientationGate.applyVideoOrientation(isPortrait: aspect < 1)
             co.start()
             if co.current == nil { await load() }
+        }
+        .compatOnChange(of: aspect < 1) { isPortrait in
+            OrientationGate.applyVideoOrientation(isPortrait: isPortrait)
         }
         .task { await screenshotHooks() }
         .task(id: lastInteraction) {
