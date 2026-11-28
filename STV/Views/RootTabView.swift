@@ -27,7 +27,7 @@ struct RootTabView: View {
                 }
                 .animation(DS.select, value: showNav && metrics.useRail)
                 TabView(selection: $tab) {
-                    Stack(path: $paths[0], reserveBottomBar: !metrics.useRail) { HomeView() }.tag(0)
+                    Stack(path: $paths[0], reserveBottomBar: !metrics.useRail && !tabBarHidden) { HomeView() }.tag(0)
                     Stack(path: $paths[1], reserveBottomBar: !metrics.useRail) { TVBoxHubView() }.tag(1)
                     Stack(path: $paths[2], reserveBottomBar: !metrics.useRail) { CategoryView() }.tag(2)
                     Stack(path: $paths[3], reserveBottomBar: !metrics.useRail) { ProfileView() }.tag(3)
