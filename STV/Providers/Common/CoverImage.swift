@@ -204,7 +204,7 @@ actor CoverStore {
         }
         let pluginID = url.hasPrefix(PluginMedia.scheme) ? PluginMedia.parse(url)?.plugin : nil
         if let pluginID, let parsed = PluginMedia.parse(url) {
-            PluginLog.add(pluginID, "封面进入原生 CoverStore：host=\\(parsed.url.host ?? "?")")
+            PluginLog.add(pluginID, "封面进入原生 CoverStore：host=\(parsed.url.host ?? "?")")
         }
         let disk = Self.diskFile(url)
         if FileManager.default.fileExists(atPath: disk.path) {
