@@ -11,44 +11,6 @@ extension View {
     }
 }
 
-/// Compact landscape play/pause and elapsed/remaining time readout.
-struct PlayerCompactTimeControls: View {
-    let co: PlaybackCoordinator
-    @ObservedObject private var clock: PlaybackClock
-    let onInteract: () -> Void
-
-    init(co: PlaybackCoordinator, onInteract: @escaping () -> Void) {
-        self.co = co
-        self._clock = ObservedObject(wrappedValue: co.clock)
-        self.onInteract = onInteract
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button { co.togglePause(); onInteract() } label: {
-                Image(systemName: co.paused ? "play.fill" : "pause.fill")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 28, height: 34)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(co.paused ? "播放" : "暂停")
-            .accessibilityIdentifier("player.playPause")
-
-            let time = clock.scrubPreview ?? clock.sample.time
-            Text(Fmt.clock(Int(time)))
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
-                .fixedSize(horizontal: true, vertical: false)
-                .accessibilityIdentifier("player.time")
-            Text("−" + Fmt.clock(Int(max(0, clock.sample.duration - time))))
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
-                .fixedSize(horizontal: true, vertical: false)
-                .accessibilityIdentifier("player.remaining")
-        }
-        .foregroundStyle(.white.opacity(0.85))
-    }
-}
-
 // MARK: Tech strip
 
 /// One small muted line, not a collection of badges.
@@ -281,17 +243,13 @@ struct PlayerPortraitDock: View {
     var liveChannelsTitle: String = "频道"
     var liveGuideActive: Bool = false
     let onPlayPause: () -> Void
-    let onSeekBackward: () -> Void
-    let onSeekForward: () -> Void
-    var showSeekControls: Bool = true
     let onEpisodes: () -> Void
     let onRateOrGuide: () -> Void
     let onDanmakuOrQuality: () -> Void
-    var showFullscreen: Bool = true
     let onFullscreen: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Button(action: onPlayPause) {
                 Image(systemName: paused ? "play.fill" : "pause.fill")
                     .font(.system(size: 15, weight: .semibold))
@@ -305,21 +263,6 @@ struct PlayerPortraitDock: View {
             .buttonStyle(PressScale())
             .accessibilityLabel(paused ? "播放" : "暂停")
             .accessibilityIdentifier("player.playPause")
-
-            if !isLive && showSeekControls {
-                Button(action: onSeekBackward) {
-                    Image(systemName: "gobackward.10").font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(PlayerPalette.ivory).frame(width: 32, height: 36)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(PressScale()).accessibilityLabel("快退10秒").accessibilityIdentifier("player.back10")
-                Button(action: onSeekForward) {
-                    Image(systemName: "goforward.10").font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(PlayerPalette.ivory).frame(width: 32, height: 36)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(PressScale()).accessibilityLabel("快进10秒").accessibilityIdentifier("player.fwd10")
-            }
 
             Button(action: onEpisodes) {
                 HStack(spacing: 6) {
@@ -377,20 +320,18 @@ struct PlayerPortraitDock: View {
             .accessibilityLabel(isLive ? "线路" : (danmakuEnabled ? "关闭弹幕" : "开启弹幕"))
             .accessibilityIdentifier(isLive ? "player.quality" : "player.danmaku")
 
-            if showFullscreen {
-                Button(action: onFullscreen) {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(PlayerPalette.ivory)
-                        .frame(width: 36, height: 36)
-                        .background(Color.white.opacity(0.10), in: Circle())
-                        .overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
-                        .contentShape(Circle())
-                }
-                .buttonStyle(PressScale())
-                .accessibilityLabel("横屏全屏")
-                .accessibilityIdentifier("player.fullscreen")
+            Button(action: onFullscreen) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(PlayerPalette.ivory)
+                    .frame(width: 36, height: 36)
+                    .background(Color.white.opacity(0.10), in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+                    .contentShape(Circle())
             }
+            .buttonStyle(PressScale())
+            .accessibilityLabel("横屏全屏")
+            .accessibilityIdentifier("player.fullscreen")
         }
         .frame(height: 44)
     }
@@ -409,10 +350,7 @@ struct PlayerActionChips: View {
 }
 
 struct PlayerChip: View {
-    /// The landscape bottom tool row can use a clean, background-free treatment.
-    var glassBackground = true
     let action: PlayerAction
-
     var body: some View {
         let on = action.active || action.accent
         Button(action: action.action) {
@@ -424,7 +362,7 @@ struct PlayerChip: View {
                     .font(.system(size: 13)).lineLimit(1).fixedSize()
             }
             .padding(.horizontal, 13).frame(height: 36)
-            .modifier(PlayerChipGlassBackground(enabled: glassBackground))
+            .liquidGlassCapsule(tone: .clear, interactive: true, onMedia: true)
             .opacity(action.dimmed ? 0.45 : 1)
             .contentShape(Capsule())
             .animation(DS.select, value: on)
@@ -432,19 +370,6 @@ struct PlayerChip: View {
         .buttonStyle(PressScale())
         .accessibilityLabel(action.a11y).accessibilityIdentifier(action.id)
         .accessibilityAddTraits(on ? .isSelected : [])
-    }
-}
-
-private struct PlayerChipGlassBackground: ViewModifier {
-    let enabled: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if enabled {
-            content.liquidGlassCapsule(tone: .clear, interactive: true, onMedia: true)
-        } else {
-            content
-        }
     }
 }
 
