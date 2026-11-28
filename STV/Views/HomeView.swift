@@ -212,7 +212,12 @@ struct HomeHeader {
 }
 
 private struct HomeHeaderKey: EnvironmentKey { static let defaultValue = HomeHeader() }
+private struct HomeTabBarHiddenKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
+    var homeTabBarHidden: Bool {
+        get { self[HomeTabBarHiddenKey.self] }
+        set { self[HomeTabBarHiddenKey.self] = newValue }
+    }
     var homeHeader: HomeHeader {
         get { self[HomeHeaderKey.self] }
         set { self[HomeHeaderKey.self] = newValue }
@@ -256,6 +261,7 @@ extension View {
 /// 分类条联动（选中项自动滚到居中、指示条跟随）。每页：二级榜单选择 → 竖海报 hero → 真实榜单分段。
 /// 横滑冲突：hero 轮播区域内的横滑归轮播；其它区域横滑翻来源页；首页是根页面，没有系统侧滑返回。
 struct HomeView: View {
+    @Environment(\.homeTabBarHidden) private var homeTabBarHidden
     @ObservedObject private var gate = SourceGate.shared
     @ObservedObject private var pluginStore = PluginStore.shared
     @ObservedObject private var cmsStore = CMSStore.shared
@@ -317,7 +323,7 @@ struct HomeView: View {
                         Color.clear
                     }
                 }
-                .environment(\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: bottomInset - indicator, onScrolled: { v in
+                .environment(\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: homeTabBarHidden ? 0 : bottomInset - indicator, onScrolled: { v in
                     guard s == source else { return }
                     if scrolled[s] != v { scrolled[s] = v }
                 }))
