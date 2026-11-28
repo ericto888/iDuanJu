@@ -4,7 +4,7 @@ import MediaPlayer
 import AVFoundation
 
 /// Brightness (left) / volume (right) vertical-swipe adjustment for the player.
-/// Portrait uses narrow outer 1/5 strips, leaving the middle 3/5 for episode paging;
+/// Both portrait and landscape use the outer 20% strips, leaving the middle 60% for episode paging;
 /// the left edge-back strip is always excluded. Brightness is restored when the player goes away.
 enum AdjustSide { case brightness, volume }
 
