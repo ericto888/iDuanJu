@@ -95,6 +95,8 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     /// User intent survives buffering, episode replacement and system interruptions.
     @Published private var wantsPlayback = true
     @Published private var transportPaused = false
+    /// True only after a user-initiated pause; internal stalls/interruption never show the centre play button.
+    @Published private(set) var manuallyPaused = false
     var paused: Bool { !wantsPlayback || interrupted || transportPaused || current.flatMap { errors[$0] } != nil }
     /// Active playback rate (persisted across sessions; 1.0 default). Locked rate persists after speed-gesture ends.
     @Published private(set) var playbackRate: Double = {
@@ -472,6 +474,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         chosen[i] = stream
         readyIndex = nil
         wantsPlayback = true
+        manuallyPaused = false
         activate(i)
     }
 
@@ -503,6 +506,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         if next != i { attempts[next] = attempts.removeValue(forKey: i) }
         current = next
         wantsPlayback = true
+        manuallyPaused = false
         activate(next)
     }
 
@@ -787,6 +791,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         lastAdvanceWasAuto = autoAdvance
         current = index
         wantsPlayback = true
+        manuallyPaused = false
         transportPaused = false
         activate(index)
     }
@@ -1425,7 +1430,9 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     func togglePause() {
         // Interrupted: playback is already stopped whatever the button shows, so this tap means ▶.
         let failed = current.flatMap { errors[$0] } != nil
-        setPaused(failed || interrupted || (readyIndex != nil && engine.isPaused && !engine.isWaiting) ? false : wantsPlayback)
+        let nextPaused = failed || interrupted || (readyIndex != nil && engine.isPaused && !engine.isWaiting) ? false : wantsPlayback
+        manuallyPaused = nextPaused
+        setPaused(nextPaused)
     }
 
     private func setPaused(_ value: Bool) {
