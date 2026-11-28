@@ -399,6 +399,9 @@ struct PlayerScreen: View {
                 }
             }
         }
+        .compatOnChange(of: co.videoSize) { _ in
+            rememberConfirmedVideoOrientation()
+        }
         .compatOnChange(of: co.readyIndex) { index in
             guard index != nil else { return }
             showLoadingSpinner = false
