@@ -22,20 +22,44 @@ extension EnvironmentValues {
     }
 }
 
+private struct HomeScrollEndedKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+
+extension EnvironmentValues {
+    var homeScrollEnded: () -> Void {
+        get { self[HomeScrollEndedKey.self] }
+        set { self[HomeScrollEndedKey.self] = newValue }
+    }
+}
+
 /// 四个根页面 + 窄屏底部悬浮玻璃胶囊 / 平板宽屏左侧悬浮玻璃导航轨（系统 TabBar 隐藏）。
 /// 导航栏只在根页面显示；进入详情 / 播放器等二级页面时隐藏。
 struct RootTabView: View {
     @State private var tab = Int(ProcessInfo.processInfo.environment["STV_TAB"] ?? "") ?? 0
     @State private var paths = [NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath()]
     @State private var tabBarHidden = false
+    @State private var restoreTask: Task<Void, Never>?
 
-    /// The callback reports scroll direction: true = upward (hide), false = downward (reveal).
-    /// Idle/deceleration events are handled only by HomePageInset and must not restore the chrome.
+    /// iOS 18+: hide on upward movement only. A downward reversal during the
+    /// same finger interaction must not reveal the chrome; the interaction-end
+    /// callback is the single place that restores it.
     private func updateHomeChromeForScrollDirection(_ scrollingUp: Bool) {
-        if scrollingUp {
-            if !tabBarHidden { tabBarHidden = true }
-        } else if tabBarHidden {
+        guard scrollingUp else { return }
+        restoreTask?.cancel()
+        if !tabBarHidden { tabBarHidden = true }
+    }
+
+    /// Restore only after the scroll view reports that the user's touch/scroll activity has ended.
+    /// The short debounce avoids revealing the chrome between momentum-scroll phases.
+    private func restoreHomeChromeAfterScrollEnd() {
+        restoreTask?.cancel()
+        guard tabBarHidden else { return }
+        restoreTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
             withAnimation(DS.select) { tabBarHidden = false }
+            restoreTask = nil
         }
     }
     static let items: [(String, String)] = [("首页", "house.fill"), ("TVBox", "tv.fill"),
@@ -66,9 +90,13 @@ struct RootTabView: View {
                 }
                 .tint(STVTheme.accent)
                 .environment(\.homeScrollChromeHidden, tabBarHidden)
-                .environment(\.homeScrollActivity) { active in
+                .environment(\.homeScrollActivity) { scrollingUp in
                     guard showNav && tab == 0 && !metrics.useRail else { return }
-                    updateHomeChromeForScrollDirection(active)
+                    updateHomeChromeForScrollDirection(scrollingUp)
+                }
+                .environment(\.homeScrollEnded) {
+                    guard showNav && tab == 0 && !metrics.useRail else { return }
+                    restoreHomeChromeAfterScrollEnd()
                 }
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
@@ -79,10 +107,17 @@ struct RootTabView: View {
                             let dx = value.translation.width
                             guard abs(dy) > abs(dx) * 1.2 else { return }
                             if dy < -14 {
+                                restoreTask?.cancel()
                                 if !tabBarHidden { tabBarHidden = true }
                             } else if dy > 14 {
+                                restoreTask?.cancel()
                                 if tabBarHidden { tabBarHidden = false }
                             }
+                        }
+                        .onEnded { _ in
+                            if #available(iOS 18.0, *) { return }
+                            guard showNav && tab == 0 && !metrics.useRail else { return }
+                            restoreHomeChromeAfterScrollEnd()
                         }
                 )
                 .overlay(alignment: .bottom) {
@@ -97,10 +132,12 @@ struct RootTabView: View {
                     .animation(DS.select, value: showBottomBar)
                 }
                 .compatOnChange(of: tab) { _ in
+                    restoreTask?.cancel()
                     tabBarHidden = false
                 }
                 .compatOnChange(of: showNav) { visible in
                     if !visible {
+                        restoreTask?.cancel()
                         tabBarHidden = false
                     }
                 }

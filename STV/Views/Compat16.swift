@@ -86,11 +86,20 @@ extension View {
         }
     }
 
-    /// Reports the real scroll lifecycle on iOS 18+, including deceleration.
+    /// Reports active finger-driven scrolling and the moment that interaction ends on iOS 18+.
+    /// Deceleration begins after the finger is lifted, so it must not keep the chrome hidden.
     @ViewBuilder
     func compatOnScrollActivity(action: @escaping (Bool) -> Void) -> some View {
         if #available(iOS 18.0, *) {
-            self.onScrollPhaseChange { _, phase in action(phase != .idle) }
+            self.onScrollPhaseChange { oldPhase, newPhase in
+                if newPhase == .interacting {
+                    action(true)
+                } else if oldPhase == .interacting {
+                    // Fires as soon as the finger leaves the screen, whether scrolling
+                    // decelerates or goes directly back to idle.
+                    action(false)
+                }
+            }
         } else {
             self
         }
