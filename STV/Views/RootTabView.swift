@@ -41,14 +41,13 @@ struct RootTabView: View {
     @State private var tabBarHidden = false
     @State private var restoreTask: Task<Void, Never>?
 
-    /// Scroll direction: true = upward (hide), false = downward (reveal).
+    /// iOS 18+: hide on upward movement only. A downward reversal during the
+    /// same finger interaction must not reveal the chrome; the interaction-end
+    /// callback is the single place that restores it.
     private func updateHomeChromeForScrollDirection(_ scrollingUp: Bool) {
+        guard scrollingUp else { return }
         restoreTask?.cancel()
-        if scrollingUp {
-            if !tabBarHidden { tabBarHidden = true }
-        } else if tabBarHidden {
-            withAnimation(DS.select) { tabBarHidden = false }
-        }
+        if !tabBarHidden { tabBarHidden = true }
     }
 
     /// Restore only after the scroll view reports that the user's touch/scroll activity has ended.
