@@ -49,7 +49,8 @@ enum PluginMediaDomainCache {
 
     static func learn(pluginID: String, sourceURL: URL, sourcePolicy: DomainPolicy,
                       contentType: String, body: Data, now: Date = Date()) {
-        guard let sourceHost = sourceURL.host?.lowercased(), sourcePolicy.allows(sourceHost) else { return }
+        guard sourceURL.scheme == "https",
+              let sourceHost = sourceURL.host?.lowercased(), sourcePolicy.allows(sourceHost) else { return }
         let type = contentType.lowercased()
         guard type.contains("text/html") || type.contains("json") || type.contains("javascript") else { return }
         guard let raw = String(data: body, encoding: .utf8), !raw.isEmpty else { return }
