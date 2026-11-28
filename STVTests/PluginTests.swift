@@ -244,11 +244,21 @@ final class PluginTests: XCTestCase {
         // provider's typed cover reference is the authoritative image signal.
         let nuxtID = "com.test.nuxt-image"
         PluginMediaDomainCache.clear(pluginID: nuxtID)
+        PluginMediaDomainCache.learn(pluginID: nuxtID,
+                                     sourceURL: URL(string: "https://yeguodj.com/_payload.json")!,
+                                     sourcePolicy: DomainPolicy(["yeguodj.com"]),
+                                     contentType: "application/json",
+                                     body: Data(#"{"table":["cover","https://pic.vojggi.cn/no-extension"]}"#.utf8))
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: nuxtID).isEmpty,
+                      "observing a CDN in a trusted response alone must not grant image access")
         _ = PluginMedia.ref(plugin: nuxtID, url: "https://pic.vojggi.cn/no-extension")
         XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: nuxtID), ["pic.vojggi.cn"])
         XCTAssertTrue(PluginMedia.allows(URL(string: "https://pic.vojggi.cn/no-extension")!,
                                          explicitPolicy: DomainPolicy(["yeguodj.com"]),
                                          learnedHosts: Set(PluginMediaDomainCache.domains(pluginID: nuxtID))))
+        _ = PluginMedia.ref(plugin: nuxtID, url: "https://unobserved-cdn.example.net/no-extension")
+        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: nuxtID), ["pic.vojggi.cn"],
+                       "provider output cannot authorize a host absent from a trusted response")
         PluginMediaDomainCache.clear(pluginID: nuxtID)
 
         let insecureImageID = "com.test.insecure-image"
