@@ -54,6 +54,40 @@ enum PluginMediaDomainCache {
         UserDefaults.standard.removeObject(forKey: keyPrefix + pluginID)
     }
 
+    /// A provider has already classified this value as an image (cover, poster,
+    /// thumbnail or comic page). Learn its HTTPS host at the point where that
+    /// semantic image reference is created; serialized Nuxt payloads do not
+    /// necessarily keep the image key adjacent to the URL string.
+    static func learnImageURL(pluginID: String, url: String, now: Date = Date()) {
+        guard let components = URLComponents(string: url),
+              components.scheme?.lowercased() == "https",
+              components.user == nil, components.password == nil,
+              components.port == nil || components.port == 443,
+              let host = components.host?.lowercased(),
+              !NetGuard.isIPLiteral(host), DomainRule(host) != nil else { return }
+
+        lock.lock()
+        let key = keyPrefix + pluginID
+        var stored = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+        let timestamp = now.timeIntervalSince1970
+        stored = stored.filter { $0.value > timestamp }
+        let isNew = stored[host] == nil
+        stored[host] = timestamp + ttl
+        if stored.count > maxDomains {
+            let keep = stored.sorted {
+                if $0.value != $1.value { return $0.value > $1.value }
+                return $0.key < $1.key
+            }.prefix(maxDomains)
+            stored = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
+        }
+        UserDefaults.standard.set(stored, forKey: key)
+        lock.unlock()
+
+        if isNew {
+            PluginLog.add(pluginID, "📝 动态授权图片 CDN（24 小时）：\(host)")
+        }
+    }
+
     static func learn(pluginID: String, sourceURL: URL, sourcePolicy: DomainPolicy,
                       contentType: String, body: Data, expectedGeneration: UInt64? = nil,
                       now: Date = Date()) {
@@ -144,6 +178,10 @@ enum PluginMedia {
 
     static func ref(plugin: String, url: String, headers: [String: String]? = nil, transform: [String: Any]? = nil) -> String {
         guard !url.isEmpty else { return "" }
+        // This API is used only for provider-classified image references. It is
+        // the reliable signal for Nuxt/table payloads where JSON keys and URL
+        // strings are separated by an index-based serialization format.
+        PluginMediaDomainCache.learnImageURL(pluginID: plugin, url: url)
         var o: [String: Any] = ["u": url]
         if let h = headers?.filter({ allowedHeaders.contains($0.key.lowercased()) }), !h.isEmpty { o["h"] = h }
         if let transform, !transform.isEmpty { o["t"] = transform }
