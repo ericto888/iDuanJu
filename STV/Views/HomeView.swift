@@ -96,37 +96,43 @@ final class BoardFeed: ObservableObject {
     }
     let board: BoardSpec
     @Published private(set) var state: State = .idle
-    private var loading = false
+    /// At most one network request per board, matching upstream's in-flight guard.
+    private var loadingTask: Task<[HGSeries], Never>?
 
     init(_ b: BoardSpec) { board = b }
 
     var items: [HGSeries] { if case .loaded(let i) = state { return i }; return [] }
     var error: Error? { if case .failed(let e) = state { return e }; return nil }
     var hasAttemptedLoad: Bool {
-        if loading { return true }
+        if loadingTask != nil { return true }
         if case .idle = state { return false }
         return true
     }
 
-    /// Match upstream concurrency: one request per board at a time; overlapping loads are ignored.
-    /// The async form is retained for the local plugin fallback-hero resolver.
+    /// Concurrent callers await the same in-flight request; they never start a second fetch.
+    /// This keeps the plugin fallback-hero resolver deterministic without queuing refresh requests.
     func loadFirstPageIfNeeded(force: Bool = false) async -> [HGSeries] {
-        guard !loading else { return items }
+        if let loadingTask { return await loadingTask.value }
         if case .loaded = state, !force { return items }
-        loading = true
-        do {
-            state = .loaded(try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items)
-        } catch {
-            // A failed refresh keeps what is already on screen.
-            if items.isEmpty { state = .failed(error) }
+
+        let task = Task { @MainActor in
+            do {
+                state = .loaded(try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items)
+            } catch {
+                // A failed refresh keeps what is already on screen.
+                if items.isEmpty { state = .failed(error) }
+            }
+            return items
         }
-        loading = false
-        return items
+        loadingTask = task
+        let result = await task.value
+        loadingTask = nil
+        return result
     }
 
     func load(force: Bool = false) {
+        if loadingTask != nil { return }
         if case .loaded = state, !force { return }
-        guard !loading else { return }
         Task { _ = await loadFirstPageIfNeeded(force: force) }
     }
 }
