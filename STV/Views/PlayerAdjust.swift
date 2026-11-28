@@ -4,8 +4,8 @@ import MediaPlayer
 import AVFoundation
 
 /// Brightness (left) / volume (right) vertical-swipe adjustment for the player.
-/// Zones: outer 1/5 strips in both orientations (the middle keeps episode paging),
-/// always excluding the edge-back strip. Brightness is restored when the player goes away.
+/// Portrait uses narrow outer 1/5 strips, leaving the middle 3/5 for episode paging;
+/// the left edge-back strip is always excluded. Brightness is restored when the player goes away.
 enum AdjustSide { case brightness, volume }
 
 @MainActor
@@ -27,8 +27,8 @@ final class PlayerAdjuster: ObservableObject {
             if x > width * 0.55 { return .volume }
             return nil
         }
-        if x < width * 0.28 { return .brightness }
-        if x > width * 0.72 { return .volume }
+        if x < width * 0.20 { return .brightness }
+        if x > width * 0.80 { return .volume }
         return nil
     }
 
