@@ -312,6 +312,21 @@ enum PluginMedia {
         return explicitlyAllowed || dynamicallyAllowed
     }
 
+    /// Redirects are evaluated in the context of an already-classified image request.
+    /// A short-lived candidate may be promoted only after its exact redirect URL passes
+    /// HTTPS/port and fresh DNS checks.
+    static func allowsRedirect(pluginID: String, url: URL, explicitPolicy: DomainPolicy,
+                               learnedHosts: Set<String>) -> Bool {
+        let host = url.host?.lowercased() ?? ""
+        let candidates = PluginMediaDomainCache.candidates(pluginID: pluginID)
+        let allowed = allows(url, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts.union(candidates))
+        guard allowed, !NetGuard.resolvesToBlocked(host, useCache: false) else { return false }
+        if candidates.contains(host) {
+            PluginMediaDomainCache.learnImageURL(pluginID: pluginID, url: url.absoluteString)
+        }
+        return true
+    }
+
     private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
         let pluginID: String
         let explicitPolicy: DomainPolicy
@@ -324,15 +339,8 @@ enum PluginMedia {
             self.learnedHosts = learnedHosts
         }
         private func allows(_ url: URL) -> Bool {
-            let host = url.host?.lowercased() ?? ""
-            let candidates = PluginMediaDomainCache.candidates(pluginID: pluginID)
-            let allowed = PluginMedia.allows(url, explicitPolicy: explicitPolicy,
-                                             learnedHosts: learnedHosts.union(candidates))
-            guard allowed, !NetGuard.resolvesToBlocked(host, useCache: false) else { return false }
-            if candidates.contains(host) {
-                PluginMediaDomainCache.learnImageURL(pluginID: pluginID, url: url.absoluteString)
-            }
-            return true
+            PluginMedia.allowsRedirect(pluginID: pluginID, url: url,
+                                       explicitPolicy: explicitPolicy, learnedHosts: learnedHosts)
         }
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest) async -> URLRequest? {
