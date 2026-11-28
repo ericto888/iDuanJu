@@ -127,6 +127,13 @@ enum PluginMedia {
         return (plugin, url, o["h"] as? [String: String] ?? [:], o["t"] as? [String: Any])
     }
 
+    static func allows(_ url: URL, explicitPolicy: DomainPolicy, learnedHosts: Set<String>) -> Bool {
+        guard let host = url.host?.lowercased(), url.scheme == "https" || url.scheme == "http" else { return false }
+        let explicitlyAllowed = explicitPolicy.allows(host)
+        let dynamicallyAllowed = url.scheme == "https" && learnedHosts.contains(host)
+        return (explicitlyAllowed || dynamicallyAllowed) && !NetGuard.isIPLiteral(host)
+    }
+
     private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
         let explicitPolicy: DomainPolicy
         let learnedHosts: Set<String>
@@ -136,10 +143,8 @@ enum PluginMedia {
             self.learnedHosts = learnedHosts
         }
         private func allows(_ url: URL) -> Bool {
-            guard let host = url.host?.lowercased(), url.scheme == "https" || url.scheme == "http" else { return false }
-            let explicitlyAllowed = explicitPolicy.allows(host)
-            let dynamicallyAllowed = url.scheme == "https" && learnedHosts.contains(host)
-            return (explicitlyAllowed || dynamicallyAllowed) && !NetGuard.isIPLiteral(host) && !NetGuard.resolvesToBlocked(host)
+            PluginMedia.allows(url, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts)
+                && !NetGuard.resolvesToBlocked(url.host ?? "")
         }
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest) async -> URLRequest? {
@@ -166,9 +171,7 @@ enum PluginMedia {
         guard let host = r.url.host?.lowercased(), r.url.scheme == "https" || r.url.scheme == "http" else {
             throw ProviderError.invalid("图片地址无效")
         }
-        let explicitlyAllowed = explicitPolicy.allows(host)
-        let dynamicallyAllowed = r.url.scheme == "https" && learnedHosts.contains(host)
-        guard (explicitlyAllowed || dynamicallyAllowed), !NetGuard.isIPLiteral(host) else {
+        guard PluginMedia.allows(r.url, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts) else {
             PluginLog.add(r.plugin, "✕ 图片域名未授权 \(host)")
             throw ProviderError.invalid("图片域名未授权：\(host)")
         }
