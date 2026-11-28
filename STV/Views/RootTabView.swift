@@ -66,7 +66,10 @@ struct RootTabView: View {
                 }
                 .tint(STVTheme.accent)
                 .environment(\.homeScrollChromeHidden, tabBarHidden)
-                .environment(\.homeScrollActivity, restoreHomeChromeForScrollActivity)
+                .environment(\.homeScrollActivity) { active in
+                    guard showNav && tab == 0 && !metrics.useRail else { return }
+                    restoreHomeChromeForScrollActivity(active)
+                }
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
                         .onChanged { value in
