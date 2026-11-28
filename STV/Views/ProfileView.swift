@@ -5,6 +5,11 @@ struct ProfileView: View {
     @State private var showHongguoLogin = false
     @State private var backupBusy: String?
     @State private var refreshTick = 0
+    @AppStorage("stv.player.hideLandscapeCompactProgress") private var hideLandscapeProgress = false
+    @AppStorage("stv.player.skipIntroEnabled") private var skipIntroEnabled = true
+    @AppStorage("stv.home.showChannels") private var showChannelSource = true
+    @AppStorage("stv.home.showNovel") private var showNovelSource = true
+    @AppStorage("stv.home.showManga") private var showMangaSource = true
 
     @ObservedObject private var webdav = WebDAVSync.shared
 
@@ -16,6 +21,15 @@ struct ProfileView: View {
                 HongguoAccountCard(message: $message, login: $showHongguoLogin)
                 ProfileLibrary()
                 ProfileLinks(refreshTick: refreshTick)
+                DSSection("播放设置", footer: "横屏全屏时可隐藏播控收起后的底部细进度条；关闭跳过片头后，播放器不再显示跳过片头按钮。", separatorInset: 20) {
+                    Toggle("隐藏横屏底部进度条", isOn: $hideLandscapeProgress).toggleStyle(DSSwitch())
+                    Toggle("启用跳过片头", isOn: $skipIntroEnabled).toggleStyle(DSSwitch())
+                }
+                DSSection("首页导航显示", footer: "关闭后仅从首页顶部来源导航中隐藏对应入口，不会删除频道、小说或漫画数据。", separatorInset: 20) {
+                    Toggle("显示频道", isOn: $showChannelSource).toggleStyle(DSSwitch())
+                    Toggle("显示小说", isOn: $showNovelSource).toggleStyle(DSSwitch())
+                    Toggle("显示漫画", isOn: $showMangaSource).toggleStyle(DSSwitch())
+                }
                 DSSection(
                     "数据备份与迁移",
                     footer: "支持 WebDAV 多端同步进度与插件；换证书自签或换机前也可导出本地备份，退到后台会自动写入系统「文件 → 我的 iPhone → i短剧 → AutoBackup」防掉签。",
