@@ -775,15 +775,18 @@ private struct HomeFeedPage: View {
                     pluginHomeError = nil
                     fallbackHeroSource = nil
                     fallbackHeroBoardID = nil
-                    await loadPluginHome(site, requestID: requestID)
-                    guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
-                    // Refresh only feeds that were already active; do not eagerly request every
-                    // shelf just because the homepage was pulled down.
-                    for board in self.boards {
-                        guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
+                    // Refresh homepage data and previously loaded shelves concurrently. A slow
+                    // homeData() or first shelf must not serialize every other refresh request.
+                    let loadedFeeds = self.boards.compactMap { board -> BoardFeed? in
                         let feed = BoardCache.shared.feed(board)
-                        if feed.hasAttemptedLoad { _ = await feed.loadFirstPageIfNeeded(force: true) }
+                        return feed.hasAttemptedLoad ? feed : nil
                     }
+                    async let homeRefresh: Void = loadPluginHome(site, requestID: requestID)
+                    async let shelfRefresh: Void = refreshPluginShelves(
+                        loadedFeeds, site: site, requestID: requestID
+                    )
+                    await homeRefresh
+                    await shelfRefresh
                     guard isCurrentPluginHomeRequest(requestID, site: site) else { return }
                     await resolveFallbackHero(site, requestID: requestID)
                 } else {
@@ -810,6 +813,18 @@ private struct HomeFeedPage: View {
 
     private func isCurrentPluginHomeRequest(_ requestID: UUID, site: DramaSource) -> Bool {
         !Task.isCancelled && pluginHomeRequestID == requestID && tab == .site(site)
+    }
+
+    /// Refresh only shelves that have already started loading, concurrently.
+    private func refreshPluginShelves(_ feeds: [BoardFeed], site: DramaSource, requestID: UUID) async {
+        await withTaskGroup(of: Void.self) { group in
+            for feed in feeds {
+                group.addTask { @MainActor in
+                    guard self.isCurrentPluginHomeRequest(requestID, site: site) else { return }
+                    _ = await feed.loadFirstPageIfNeeded(force: true)
+                }
+            }
+        }
     }
 
     private func loadPluginHome(_ site: DramaSource, requestID: UUID) async {
