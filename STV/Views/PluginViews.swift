@@ -24,6 +24,18 @@ struct PluginsView: View {
         let plugins = store.visiblePlugins, recommended = self.recommended
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                NavigationLink { SourceStoreView() } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "storefront").font(.system(size: 20, weight: .semibold)).foregroundStyle(STVTheme.accent)
+                            .frame(width: 42, height: 42).background(STVTheme.accentSoft, in: RoundedRectangle(cornerRadius: 12))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("在线站源商店").font(.headline).foregroundStyle(STVTheme.text)
+                            Text("浏览、安装和更新社区站源").font(.caption).foregroundStyle(STVTheme.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(STVTheme.secondary)
+                    }.padding(14).background(STVTheme.surface, in: RoundedRectangle(cornerRadius: 14)).padding(.horizontal, 16)
+                }.buttonStyle(.plain).accessibilityIdentifier("plugins.onlineStore")
                 DSSection("已安装（\(plugins.count)）", footer: hiddenAdult > 0 ? "另有 \(hiddenAdult) 个成人插件已隐藏：在「片源管理」解锁后显示。" : nil, separatorInset: 58) {
                     if plugins.isEmpty {
                         Text("还没有插件。可以从下面的网址 / 文件 / 订阅添加，或安装内置推荐。").dsFont(14, relativeTo: .subheadline)
@@ -696,6 +708,7 @@ struct PluginLogView: View {
     let id: String
     @State private var lines: [String] = []
     @State private var message: String?
+    @State private var confirmClear = false
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 6) {
@@ -707,8 +720,15 @@ struct PluginLogView: View {
             .padding(.horizontal, 16).padding(.bottom, 32)
         }
         .dsNavigation("运行日志") {
-            DSBarButton(systemName: "doc.on.doc") { UIPasteboard.general.string = lines.joined(separator: "\n"); message = "已复制" }.accessibilityLabel("复制")
+            DSBarButton(systemName: "doc.on.doc") { UIPasteboard.general.string = lines.joined(separator: "\n"); message = "已复制" }
+                .accessibilityLabel("复制")
+            DSBarButton(systemName: "trash") { confirmClear = true }
+                .disabled(lines.isEmpty).accessibilityLabel("清空").accessibilityIdentifier("plugin.logs.clear")
         }
+        .confirmationDialog("清空此插件的运行日志？", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("清空日志", role: .destructive) { PluginLog.clear(id); lines = [] }
+            Button("取消", role: .cancel) {}
+        } message: { Text("只删除「\(PluginStore.shared.plugin(id)?.manifest.name ?? id)」的日志，不会清除 Cookie、存储或插件设置。") }
         .dsToast($message, icon: "checkmark.circle.fill")
         .task { lines = PluginLog.lines(id) }
         .onReceive(NotificationCenter.default.publisher(for: PluginLog.changed)) { _ in lines = PluginLog.lines(id) }
