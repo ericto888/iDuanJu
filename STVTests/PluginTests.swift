@@ -280,6 +280,9 @@ final class PluginTests: XCTestCase {
 
         let status = try await p.evalForTest("(async () => (await host.http.get('https://example.com/payload')).status)()")
         XCTAssertEqual(status as? Int, 200)
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: pluginID).isEmpty,
+                      "a trusted response creates candidates, not permissions")
+        _ = PluginMedia.ref(plugin: pluginID, url: "https://img-cdn.example.net/posters/cover")
         XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: pluginID), ["img-cdn.example.net"])
         XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: "com.test.other").isEmpty,
                       "learned image hosts must not cross plugin boundaries")
@@ -301,7 +304,8 @@ final class PluginTests: XCTestCase {
                                      sourcePolicy: DomainPolicy(["example.com"]),
                                      contentType: "application/json",
                                      body: Data(#"{"src":"https://json-src-cdn.example.net/file","poster":"https://json-poster-cdn.example.net/poster"}"#.utf8))
-        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: ambiguousID), ["json-poster-cdn.example.net"])
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: ambiguousID).isEmpty,
+                      "even explicit image-looking fields require native image classification")
         PluginMediaDomainCache.clear(pluginID: ambiguousID)
 
         let htmlID = "com.test.html-image-src"
@@ -310,9 +314,24 @@ final class PluginTests: XCTestCase {
                                      sourcePolicy: DomainPolicy(["example.com"]),
                                      contentType: "text/html",
                                      body: Data(#"<img class="cover" src="https://img-tag-cdn.example.net/no-extension"><video src="https://video-src-cdn.example.net/movie"><script src="https://script-src-cdn.example.net/app.js"></script><video poster="https://video-poster-cdn.example.net/poster">"#.utf8))
-        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: htmlID).sorted(),
-                       ["img-tag-cdn.example.net", "video-poster-cdn.example.net"])
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: htmlID).isEmpty,
+                      "HTML image tags are candidates, not direct permissions")
+        _ = PluginMedia.ref(plugin: htmlID, url: "https://img-tag-cdn.example.net/no-extension")
+        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: htmlID), ["img-tag-cdn.example.net"])
         PluginMediaDomainCache.clear(pluginID: htmlID)
+
+        // IMAGE CDN declarations may contain a bare origin URL with no path.
+        let imageListID = "com.test.image-list"
+        PluginMediaDomainCache.clear(pluginID: imageListID)
+        PluginMediaDomainCache.learn(pluginID: imageListID,
+                                     sourceURL: URL(string: "https://example.com/ping")!,
+                                     sourcePolicy: DomainPolicy(["example.com"]),
+                                     contentType: "application/json",
+                                     body: Data(#"{"sourceList":[{"type":"IMAGE","domain":[{"url":"https://bare-image-cdn.example.net","status":0}]}]}"#.utf8))
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: imageListID).isEmpty)
+        _ = PluginMedia.ref(plugin: imageListID, url: "https://bare-image-cdn.example.net/poster")
+        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: imageListID), ["bare-image-cdn.example.net"])
+        PluginMediaDomainCache.clear(pluginID: imageListID)
 
         // Dynamic image permission is deliberately separate from host.http permission.
         await expectCode("E_PERMISSION") {
@@ -359,6 +378,8 @@ final class PluginTests: XCTestCase {
         PluginMediaDomainCache.learn(pluginID: expiryID, sourceURL: URL(string: "https://example.com/page")!,
                                      sourcePolicy: DomainPolicy(["example.com"]), contentType: "application/json",
                                      body: Data(#"{"cover":"https://expiry-cdn.example.net/cover.jpg"}"#.utf8), now: old)
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: expiryID, now: old).isEmpty)
+        _ = PluginMedia.ref(plugin: expiryID, url: "https://expiry-cdn.example.net/cover.jpg", now: old)
         XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: expiryID, now: old), ["expiry-cdn.example.net"])
         XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: expiryID, now: Date(timeIntervalSince1970: 1_000 + 24 * 60 * 60 + 1)).isEmpty)
         PluginMediaDomainCache.clear(pluginID: expiryID)
@@ -375,6 +396,49 @@ final class PluginTests: XCTestCase {
                                      expectedGeneration: oldGeneration)
         XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: staleID).isEmpty)
         PluginMediaDomainCache.clear(pluginID: staleID)
+    }
+
+    func testEncryptedAuthorizedResponseCanTeachImageCDNOnlyAfterNativeImageClassification() async throws {
+        let pluginID = "com.test.encrypted-cdn"
+        PluginMediaDomainCache.clear(pluginID: pluginID)
+        let key = Data("0123456789abcdef".utf8)
+        let iv = Data("fedcba9876543210".utf8)
+        let plaintext = Data(#"{"sourceList":[{"type":"IMAGE","domain":[{"url":"https://encrypted-image-cdn.example.net","status":0}]}]}"#.utf8)
+        let ciphertext = try PluginCrypto.aes(encrypt: true, mode: "cbc", key: key, iv: iv,
+                                              data: plaintext, padding: true)
+        let envelope = try JSONSerialization.data(withJSONObject: ["data": ciphertext.base64EncodedString()])
+        PluginFixtures.responder = { _ in
+            PluginFixtures.Reply(status: 200, headers: ["content-type": "application/json"], body: envelope)
+        }
+        let p = try instance(manifest: Self.manifest(id: pluginID))
+        defer {
+            p.shutdown()
+            PluginFixtures.responder = nil
+            PluginMediaDomainCache.clear(pluginID: pluginID)
+        }
+
+        let decoded = try await p.evalForTest("""
+        (async () => {
+          const response = await host.http.get('https://example.com/encrypted');
+          const envelope = JSON.parse(response.body);
+          return host.crypto.aes({ op: 'decrypt', mode: 'cbc', padding: 'pkcs7',
+            key: '0123456789abcdef', iv: 'fedcba9876543210',
+            data: envelope.data, in: 'base64', out: 'utf8' });
+        })()
+        """)
+        XCTAssertTrue((decoded as? String)?.contains("encrypted-image-cdn.example.net") == true)
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: pluginID).isEmpty,
+                      "decrypting a trusted response still creates only a candidate")
+        _ = PluginMedia.ref(plugin: pluginID, url: "https://encrypted-image-cdn.example.net/poster")
+        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: pluginID), ["encrypted-image-cdn.example.net"])
+
+        let forgedID = "com.test.forged-decrypt"
+        PluginMediaDomainCache.clear(pluginID: forgedID)
+        PluginMediaDomainCache.learnDecryptedPayload(pluginID: forgedID, ciphertext: Data(repeating: 7, count: 32),
+                                                      plaintext: Data(#"{"cover":"https://forged-cdn.example.net/a"}"#.utf8))
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: forgedID).isEmpty,
+                      "plugin-created ciphertext without response provenance must not teach a CDN")
+        PluginMediaDomainCache.clear(pluginID: forgedID)
     }
 
     func testCryptoAndCodec() async throws {
