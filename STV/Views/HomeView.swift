@@ -72,13 +72,20 @@ enum HomeSource: Hashable, Identifiable {
         case .channels, .manga, .novel: []
         }
     }
+    private static func preferenceEnabled(_ key: String) -> Bool {
+        guard let value = UserDefaults.standard.object(forKey: key) as? Bool else { return true }
+        return value
+    }
     @MainActor static var defaultAll: [HomeSource] {
         let g = SourceGate.shared
         let nonTVBoxSites = g.visibleSites.filter { src in
             if let k = src.cmsKey, let s = CMSStore.site(k), s.origin == "TVBox" || s.origin.hasPrefix("TVBox") { return false }
             return true
         }
-        return [.hongguo] + (g.showHuangguo ? [.huangguo] : []) + [.ai] + nonTVBoxSites.map { .site($0) } + [.channels, .manga, .novel]
+        return [.hongguo] + (g.showHuangguo ? [.huangguo] : []) + [.ai] + nonTVBoxSites.map { .site($0) }
+            + (preferenceEnabled("stv.home.showChannels") ? [.channels] : [])
+            + (preferenceEnabled("stv.home.showManga") ? [.manga] : [])
+            + (preferenceEnabled("stv.home.showNovel") ? [.novel] : [])
     }
     @MainActor static var all: [HomeSource] {
         let raw = defaultAll
@@ -252,6 +259,9 @@ struct HomeView: View {
     @ObservedObject private var gate = SourceGate.shared
     @ObservedObject private var pluginStore = PluginStore.shared
     @ObservedObject private var cmsStore = CMSStore.shared
+    @AppStorage("stv.home.showChannels") private var showChannelSource = true
+    @AppStorage("stv.home.showNovel") private var showNovelSource = true
+    @AppStorage("stv.home.showManga") private var showMangaSource = true
     @State private var source: HomeSource
     @State private var scrollSourceKey: String?
     @State private var subs: [HomeSource: HomeTab]
@@ -274,7 +284,7 @@ struct HomeView: View {
     private var indicator: CGFloat { bottomInset >= GlassTabBar.clearance ? bottomInset - GlassTabBar.clearance : bottomInset }
     private var pinned: Bool { scrolled[source] ?? false }
     private var sourceRevisionToken: String {
-        "\(gate.revision)-\(pluginStore.revision)-\(cmsStore.revision)"
+        "\(gate.revision)-\(pluginStore.revision)-\(cmsStore.revision)-\(showChannelSource)-\(showNovelSource)-\(showMangaSource)"
     }
 
     init() {
