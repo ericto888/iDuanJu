@@ -243,7 +243,7 @@ enum PluginMediaDomainCache {
 
         // Some APIs return CDN origins as bare host strings rather than URLs.
         // This second lazy pass shares the same budget with URL matches.
-        let bareHostPattern = #"(?<![A-Za-z0-9.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}(?![A-Za-z0-9.-])"#
+        let bareHostPattern = #"(?<![A-Za-z0-9.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}(?![A-Za-z0-9.-])"#
         if observed.count < maxDomains,
            let hostRegex = try? NSRegularExpression(pattern: bareHostPattern, options: [.caseInsensitive]) {
             hostRegex.enumerateMatches(in: text, range: scanRange) { match, _, stop in
