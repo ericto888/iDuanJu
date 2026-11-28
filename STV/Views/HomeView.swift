@@ -97,10 +97,6 @@ final class BoardFeed: ObservableObject {
     let board: BoardSpec
     @Published private(set) var state: State = .idle
     private var loading = false
-    /// Waiters joining the current request (ordinary shelf/hero reads).
-    private var waiters: [CheckedContinuation<[HGSeries], Never>] = []
-    /// Explicit refreshes arriving during a request are coalesced into one follow-up fetch.
-    private var refreshWaiters: [CheckedContinuation<[HGSeries], Never>] = []
 
     init(_ b: BoardSpec) { board = b }
 
@@ -112,54 +108,28 @@ final class BoardFeed: ObservableObject {
         return true
     }
 
-    /// Await the shared first-page cache. Concurrent reads share one request; a refresh
-    /// arriving during that request is coalesced into exactly one subsequent fetch.
+    /// Match upstream concurrency: one request per board at a time; overlapping loads are ignored.
+    /// The async form is retained for the local plugin fallback-hero resolver.
     func loadFirstPageIfNeeded(force: Bool = false) async -> [HGSeries] {
-        if !force, case .loaded = state { return items }
-        return await withCheckedContinuation { continuation in
-            if loading {
-                if force { refreshWaiters.append(continuation) }
-                else { waiters.append(continuation) }
-                return
-            }
-            loading = true
-            waiters.append(continuation)
-            Task { await performFirstPageLoad() }
-        }
-    }
-
-    private func performFirstPageLoad() async {
+        guard !loading else { return items }
+        if case .loaded = state, !force { return items }
+        loading = true
         do {
-            let result = try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items
-            state = .loaded(result)
-            finishFirstPageLoad(with: result)
+            state = .loaded(try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items)
         } catch {
             // A failed refresh keeps what is already on screen.
             if items.isEmpty { state = .failed(error) }
-            finishFirstPageLoad(with: items)
         }
-    }
-
-    private func finishFirstPageLoad(with result: [HGSeries]) {
-        let completed = waiters
-        waiters.removeAll()
-        if refreshWaiters.isEmpty {
-            loading = false
-        } else {
-            // All refresh callers waiting on the previous request share this one fresh fetch.
-            waiters = refreshWaiters
-            refreshWaiters.removeAll()
-            Task { await performFirstPageLoad() }
-        }
-        completed.forEach { $0.resume(returning: result) }
+        loading = false
+        return items
     }
 
     func load(force: Bool = false) {
         if case .loaded = state, !force { return }
+        guard !loading else { return }
         Task { _ = await loadFirstPageIfNeeded(force: force) }
     }
 }
-
 /// Keeps the board feeds alive across page switches and re-entries.
 @MainActor
 final class BoardCache {
@@ -277,6 +247,7 @@ struct HomeView: View {
     @ObservedObject private var pluginStore = PluginStore.shared
     @ObservedObject private var cmsStore = CMSStore.shared
     @State private var source: HomeSource
+    @State private var scrollSourceKey: String?
     @State private var subs: [HomeSource: HomeTab]
     /// Cached: building it walks every site, plugin and 采集站, and it used to run several times per body.
     @State private var sources: [HomeSource] = HomeSource.all
@@ -313,6 +284,7 @@ struct HomeView: View {
         if e == "novel" { src = .novel }
         #endif
         _source = State(initialValue: src)
+        _scrollSourceKey = State(initialValue: src.key)
         _subs = State(initialValue: sub)
         _visited = State(initialValue: [src])
     }
@@ -323,27 +295,52 @@ struct HomeView: View {
         return abs(cur - idx) <= 1
     }
 
-    var body: some View {
-        TabView(selection: $source) {
-            ForEach(sources) { s in
-                // `Binding(get:)` reads eagerly, and 频道 / 漫画 / 小说 have no sub boards.
-                Group {
-                    if shouldMount(s) {
-                        HomePage(source: s, tab: Binding(get: { subs[s] ?? s.subs.first ?? .hongguo(.all) }, set: { subs[s] = $0 }))
-                    } else {
-                        Color.clear
+    private func pageCell(_ s: HomeSource) -> some View {
+        HomePageSlot(
+            source: s,
+            mounted: shouldMount(s),
+            tab: Binding(get: { subs[s] ?? s.subs.first ?? .hongguo(.all) }, set: { subs[s] = $0 })
+        )
+        .environment(\\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: 0, onScrolled: { v in
+            guard s == source else { return }
+            if scrolled[s] != v { scrolled[s] = v }
+        }))
+    }
+
+    @ViewBuilder
+    private var pagerContent: some View {
+        if #available(iOS 17.0, *) {
+            // Native paging avoids UIPageViewController selection desyncs when sources are added,
+            // removed, reordered, or mounted lazily.
+            GeometryReader { geo in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 0) {
+                        ForEach(sources, id: \\.key) { s in
+                            pageCell(s)
+                                .frame(width: geo.size.width, height: geo.size.height)
+                        }
                     }
+                    .scrollTargetLayout()
                 }
-                .environment(\.homeHeader, HomeHeader(active: true, rest: rest, pagerTop: safeSpan?.top ?? 0, tabBar: 0, onScrolled: { v in
-                    guard s == source else { return }
-                    if scrolled[s] != v { scrolled[s] = v }
-                }))
-                .tag(s)
+                .scrollTargetBehavior(.paging)
+                .scrollPosition(id: $scrollSourceKey)
+                .scrollIndicators(.hidden)
             }
+        } else {
+            TabView(selection: $source) {
+                ForEach(sources) { s in
+                    pageCell(s)
+                        .tag(s)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .id(sources.map(\\.key).joined(separator: "|"))
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        // Pages run under the floating tab bar and dissolve behind its lower edge. The pager stops at the home indicator:
-        // iOS 26 centres pages in the UIKit safe region, so overlapping the indicator lifts every page by half its inset.
+    }
+
+    var body: some View {
+        pagerContent
+        // Preserve the branch's iPhone system-safe-area handling and iPad layout compensation.
         .overlay(alignment: .bottom) {
             if bottomInset > indicator {
                 LinearGradient(colors: [STVTheme.bg.opacity(0), STVTheme.bg], startPoint: .top, endPoint: .bottom)
@@ -359,6 +356,21 @@ struct HomeView: View {
         .compatOnChange(of: sourceRevisionToken) { _ in refreshSources() }
         .compatOnChange(of: source) { next in
             if !visited.contains(next) { visited.insert(next) }
+            if scrollSourceKey != next.key {
+                let prevIdx = scrollSourceKey.flatMap { key in sources.firstIndex(where: { $0.key == key }) }
+                let nextIdx = sources.firstIndex(of: next)
+                if let prevIdx, let nextIdx, abs(prevIdx - nextIdx) == 1 {
+                    withAnimation(DS.select) { scrollSourceKey = next.key }
+                } else {
+                    scrollSourceKey = next.key
+                }
+            }
+        }
+        .compatOnChange(of: scrollSourceKey) { nextKey in
+            guard let nextKey, nextKey != source.key,
+                  let next = sources.first(where: { $0.key == nextKey }) else { return }
+            if !visited.contains(next) { visited.insert(next) }
+            source = next
         }
         .task {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
@@ -373,6 +385,7 @@ struct HomeView: View {
         if now != sources { sources = now }
         if !now.contains(source), let first = now.first { source = first }
         if !visited.contains(source) { visited.insert(source) }
+        if scrollSourceKey != source.key { scrollSourceKey = source.key }
     }
 
     /// Use the currently visible home source as the initial search provider.
@@ -587,6 +600,24 @@ struct HomeSourceOrderRows: View {
         var copy = sources
         copy.swapAt(idx, target)
         withAnimation(DS.select) { onChange(copy) }
+    }
+}
+
+/// Stable identity wrapper for lazily mounted pages in the native pager.
+private struct HomePageSlot: View {
+    let source: HomeSource
+    let mounted: Bool
+    @Binding var tab: HomeTab
+
+    var body: some View {
+        ZStack {
+            if mounted {
+                HomePage(source: source, tab: $tab)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
