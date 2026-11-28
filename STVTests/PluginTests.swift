@@ -335,6 +335,28 @@ final class PluginTests: XCTestCase {
                        ["bare-host-image-cdn.example.net", "bare-image-cdn.example.net"])
         PluginMediaDomainCache.clear(pluginID: imageListID)
 
+        // Redirects may use a newly observed CDN only in the context of an image request.
+        let redirectID = "com.test.image-redirect"
+        PluginMediaDomainCache.clear(pluginID: redirectID)
+        PluginMediaDomainCache.learn(pluginID: redirectID,
+                                     sourceURL: URL(string: "https://example.com/ping")!,
+                                     sourcePolicy: DomainPolicy(["example.com"]),
+                                     contentType: "application/json",
+                                     body: Data(#"{"cdn":"https://redirect-image-cdn.example.net"}"#.utf8))
+        NetGuard.resolverOverride = { _ in ["93.184.216.34"] }
+        XCTAssertTrue(PluginMedia.allowsRedirect(pluginID: redirectID,
+                                                 url: URL(string: "https://redirect-image-cdn.example.net/final.webp")!,
+                                                 explicitPolicy: DomainPolicy(["example.com"]),
+                                                 learnedHosts: []))
+        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: redirectID), ["redirect-image-cdn.example.net"])
+        XCTAssertFalse(PluginMedia.allowsRedirect(pluginID: redirectID,
+                                                  url: URL(string: "https://unobserved-redirect.example.net/steal")!,
+                                                  explicitPolicy: DomainPolicy(["example.com"]),
+                                                  learnedHosts: []),
+                       "an arbitrary public redirect target is still blocked")
+        NetGuard.resolverOverride = nil
+        PluginMediaDomainCache.clear(pluginID: redirectID)
+
         // Dynamic image permission is deliberately separate from host.http permission.
         await expectCode("E_PERMISSION") {
             try await p.evalForTest("(async () => (await host.http.get('https://img-cdn.example.net/cover.webp')).status)()")
