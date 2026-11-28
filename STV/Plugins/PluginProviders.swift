@@ -220,7 +220,7 @@ enum PluginMediaDomainCache {
 
         // Enumerate lazily and stop as soon as the per-response candidate budget is
         // reached. matches(in:) allocates an array for every match in the body first.
-        let pattern = #"https://[A-Za-z0-9.-]+(?::443)?(?:/[^\\s"'<>\\\\]*)?"#
+        let pattern = #"https://[A-Za-z0-9.-]+(?::443)?(?:/[^\s"'<>\\]*)?"#
         if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
             regex.enumerateMatches(in: text, range: scanRange) { match, _, stop in
                 guard observed.count < maxDomains, let match else {
@@ -738,20 +738,3 @@ struct JSVideoProvider: SiteProvider {
             if h["User-Agent"] == nil { h["User-Agent"] = rec.learnedUA ?? PluginHostContext.defaultUA }
             streams.append(HGStream(streamId: "p\(i)", quality: PluginOut.s(st["name"], max: 40).nonEmptyOr(host), url: u, key: key,
                                     kind: (!key.isEmpty || fmt == "cenc") ? .mp4Cenc : (fmt == "hls" ? .hls : .mp4Clear), headers: h))
-        }
-        guard let first = streams.first else { throw ProviderError.upstream("插件没有返回可播放的地址（需 https 且在 media 白名单内）") }
-        let danmakuURL = PluginDanmaku.capturePlayDanmaku(
-            raw: o["danmaku"],
-            pluginID: pluginID,
-            seriesId: s.seriesId,
-            vid: ep.vid,
-            rec: rec
-        )
-        return HGResolvedVideo(vid: ep.vid, url: first.url, key: nil, duration: nil, expiresAt: (o["expiresAt"] as? Int), err: nil, streams: streams,
-                               danmaku: danmakuURL)
-    }
-}
-
-extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
-}
