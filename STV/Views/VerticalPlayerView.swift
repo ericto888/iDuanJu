@@ -433,22 +433,24 @@ struct PlayerScreen: View {
                     .accessibilityValue(feedSettled ? "idle" : "scrolling")
                     .scrollDisabled(isScrollDisabled)
                     .onAppear {
-                        // The coordinator may already point at a non-zero episode before this
-                        // ScrollView is created. Explicitly align the actual viewport as well as
-                        // the shared render layer's initial offset.
+                        // Let the lazy stack establish its page layout before positioning the
+                        // viewport. feed.y is deliberately NOT pre-seeded here: it must always
+                        // represent the real ScrollView offset reported by onScrollGeometryChange.
                         guard let index = co.current else { return }
-                        feed.y = CGFloat(index) * feedGeometry.size.height
-                        var transaction = Transaction()
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) {
-                            proxy.scrollTo(index, anchor: .center)
+                        Task { @MainActor in
+                            await Task.yield()
+                            guard co.current == index else { return }
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) {
+                                proxy.scrollTo(index, anchor: .center)
+                            }
                         }
                     }
                     .compatOnChange(of: co.current) { index in
                         // Episode-picker selections happen while the feed is idle. During a
                         // user swipe, let paging own the position and avoid fighting its gesture.
                         guard let index, feedSettled else { return }
-                        feed.y = CGFloat(index) * feedGeometry.size.height
                         var transaction = Transaction()
                         transaction.disablesAnimations = true
                         withTransaction(transaction) {
