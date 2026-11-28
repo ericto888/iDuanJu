@@ -28,6 +28,8 @@ struct PlayerScreen: View {
     @AppStorage("stv.player.fill") private var fillScreen = false
     /// Technical info strip (⋯ → 技术信息).
     @AppStorage("stv.player.tech") private var showTech = true
+    @AppStorage("stv.player.hideLandscapeCompactProgress") private var hideLandscapeCompactProgress = false
+    @AppStorage("stv.player.skipIntroEnabled") private var skipIntroEnabled = true
     @State private var muted = false
     @State private var osd: String?
     @State private var verifyTarget: VerifyTarget?
@@ -703,7 +705,7 @@ struct PlayerScreen: View {
     private func compactChrome(_ full: CGSize, ins: EdgeInsets) -> some View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
-            if !co.isLive { PlayerCompactProgress(clock: co.clock) }
+            if !co.isLive && !(landscape && hideLandscapeCompactProgress) { PlayerCompactProgress(clock: co.clock) }
         }
         .frame(width: full.width, height: full.height)
         .allowsHitTesting(false)
@@ -1094,8 +1096,10 @@ struct PlayerScreen: View {
         return "线路 \(k + 1)/\(all.count)"
     }
 
-    private var skipIntroButton: some View {
-        PlayerSkipIntro(clock: co.clock, introEnd: introEnd, ready: co.readyIndex != nil, onSkip: skipIntro)
+    @ViewBuilder private var skipIntroButton: some View {
+        if skipIntroEnabled {
+            PlayerSkipIntro(clock: co.clock, introEnd: introEnd, ready: co.readyIndex != nil, onSkip: skipIntro)
+        }
     }
 
     private var introEnd: Double { series.source.isLongVideo ? 90 : 15 }
