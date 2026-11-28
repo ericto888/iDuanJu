@@ -85,6 +85,7 @@ struct LiveMatchInfo: Hashable, Codable {
     var awayScore: Int? = nil
     /// scheduled | live | finished
     var status: String
+    var matchDate: String? = nil
     var kickoff: String? = nil
     var statusText: String? = nil
 }
