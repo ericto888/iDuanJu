@@ -354,7 +354,22 @@ final class PluginTests: XCTestCase {
                                                   explicitPolicy: DomainPolicy(["example.com"]),
                                                   learnedHosts: []),
                        "an arbitrary public redirect target is still blocked")
+        let privateRedirectID = "com.test.private-image-redirect"
+        PluginMediaDomainCache.clear(pluginID: privateRedirectID)
+        PluginMediaDomainCache.learn(pluginID: privateRedirectID,
+                                     sourceURL: URL(string: "https://example.com/ping")!,
+                                     sourcePolicy: DomainPolicy(["example.com"]),
+                                     contentType: "application/json",
+                                     body: Data(#"{"cdn":"https://private-redirect-cdn.example.net"}"#.utf8))
+        NetGuard.resolverOverride = { _ in ["192.168.1.10"] }
+        XCTAssertFalse(PluginMedia.allowsRedirect(pluginID: privateRedirectID,
+                                                  url: URL(string: "https://private-redirect-cdn.example.net/final.webp")!,
+                                                  explicitPolicy: DomainPolicy(["example.com"]),
+                                                  learnedHosts: []),
+                       "a candidate redirect resolving to a private address must remain blocked")
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: privateRedirectID).isEmpty)
         NetGuard.resolverOverride = nil
+        PluginMediaDomainCache.clear(pluginID: privateRedirectID)
         PluginMediaDomainCache.clear(pluginID: redirectID)
 
         // Dynamic image permission is deliberately separate from host.http permission.
