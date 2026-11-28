@@ -269,6 +269,12 @@ final class PluginTests: XCTestCase {
         XCTAssertFalse(PluginMedia.allows(URL(string: "https://evil.img-cdn.example.net/cover.webp")!,
                                           explicitPolicy: explicitMedia, learnedHosts: learned),
                        "learned permissions are exact hosts, not wildcard suffixes")
+        XCTAssertFalse(PluginMedia.allows(URL(string: "https://user@img-cdn.example.net/cover.webp")!,
+                                          explicitPolicy: explicitMedia, learnedHosts: learned),
+                       "dynamic image URLs cannot carry credentials")
+        XCTAssertFalse(PluginMedia.allows(URL(string: "https://img-cdn.example.net:8443/cover.webp")!,
+                                          explicitPolicy: explicitMedia, learnedHosts: learned),
+                       "dynamic image URLs use standard HTTPS only")
         XCTAssertTrue(PluginMedia.allows(URL(string: "http://static-cdn.example.net/cover.webp")!,
                                          explicitPolicy: explicitMedia, learnedHosts: learned),
                       "explicit manifest media permissions retain existing HTTP compatibility")
