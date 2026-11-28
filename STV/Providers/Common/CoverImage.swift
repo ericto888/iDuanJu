@@ -203,17 +203,20 @@ actor CoverStore {
             return try await Self.offMain { try Self.decode(file: u, px: px) }
         }
         let pluginID = url.hasPrefix(PluginMedia.scheme) ? PluginMedia.parse(url)?.plugin : nil
+        if let pluginID, let parsed = PluginMedia.parse(url) {
+            PluginLog.add(pluginID, "封面进入原生 CoverStore：host=\\(parsed.url.host ?? "?")")
+        }
         let disk = Self.diskFile(url)
         if FileManager.default.fileExists(atPath: disk.path) {
             do {
                 let img = try await Self.offMain { try Self.decode(file: disk, px: px) }
                 if let pluginID {
-                    PluginLog.add(pluginID, "✓ 封面磁盘缓存解码成功：\\(img.cgImage?.width ?? 0)x\\(img.cgImage?.height ?? 0)")
+                    PluginLog.add(pluginID, "✓ 封面磁盘缓存解码成功：\(img.cgImage?.width ?? 0)x\(img.cgImage?.height ?? 0)")
                 }
                 return img
             } catch {
                 if let pluginID {
-                    PluginLog.add(pluginID, "⚠️ 封面磁盘缓存解码失败，将重新下载：\\(error.localizedDescription)")
+                    PluginLog.add(pluginID, "⚠️ 封面磁盘缓存解码失败，将重新下载：\(error.localizedDescription)")
                 }
             }
         }
@@ -223,12 +226,12 @@ actor CoverStore {
         do {
             let image = try await Self.offMain { try Self.decode(data: data, px: px) }
             if let pluginID {
-                PluginLog.add(pluginID, "✓ 封面 ImageIO 解码成功：\\(image.cgImage?.width ?? 0)x\\(image.cgImage?.height ?? 0)，bytes=\\(data.count)")
+                PluginLog.add(pluginID, "✓ 封面 ImageIO 解码成功：\(image.cgImage?.width ?? 0)x\(image.cgImage?.height ?? 0)，bytes=\(data.count)")
             }
             return image
         } catch {
             if let pluginID {
-                PluginLog.add(pluginID, "✕ 封面 ImageIO 解码失败：bytes=\\(data.count)，错误=\\(error.localizedDescription)")
+                PluginLog.add(pluginID, "✕ 封面 ImageIO 解码失败：bytes=\(data.count)，错误=\(error.localizedDescription)")
             }
             throw error
         }
