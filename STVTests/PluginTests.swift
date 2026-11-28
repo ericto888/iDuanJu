@@ -313,6 +313,19 @@ final class PluginTests: XCTestCase {
         XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: expiryID, now: old), ["expiry-cdn.example.net"])
         XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: expiryID, now: Date(timeIntervalSince1970: 1_000 + 24 * 60 * 60 + 1)).isEmpty)
         PluginMediaDomainCache.clear(pluginID: expiryID)
+
+        // An in-flight response from before Clear Data/update must not repopulate the cache.
+        let staleID = "com.test.stale-response"
+        let oldGeneration = PluginMediaDomainCache.generation(pluginID: staleID)
+        PluginMediaDomainCache.clear(pluginID: staleID)
+        PluginMediaDomainCache.learn(pluginID: staleID,
+                                     sourceURL: URL(string: "https://example.com/page")!,
+                                     sourcePolicy: DomainPolicy(["example.com"]),
+                                     contentType: "application/json",
+                                     body: Data(#"{"cover":"https://stale-cdn.example.net/cover"}"#.utf8),
+                                     expectedGeneration: oldGeneration)
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: staleID).isEmpty)
+        PluginMediaDomainCache.clear(pluginID: staleID)
     }
 
     func testCryptoAndCodec() async throws {
