@@ -414,22 +414,49 @@ struct PlayerScreen: View {
     private var episodeFeed: some View {
         let isScrollDisabled = locked || speedMode || scrubbing || co.pipActive || panel != nil || adjuster.hud != nil
         if #available(iOS 18.0, *) {
-            ScrollView(.vertical) {
-                LazyVStack(spacing: 0) {
-                    ForEach(co.episodes.indices, id: \.self) { i in
-                        stage(i).containerRelativeFrame([.horizontal, .vertical]).id(i)
+            GeometryReader { feedGeometry in
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) {
+                        LazyVStack(spacing: 0) {
+                            ForEach(co.episodes.indices, id: \.self) { i in
+                                stage(i).containerRelativeFrame([.horizontal, .vertical]).id(i)
+                            }
+                        }.scrollTargetLayout()
                     }
-                }.scrollTargetLayout()
+                    .scrollTargetBehavior(.paging)
+                    .scrollIndicators(.hidden)
+                    .scrollPosition(id: Binding(get: { co.current }, set: { co.select($0) }), anchor: .center)
+                    .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in feed.y = y }
+                    .compatOnChange(of: co.readyIndex) { releaseHeldIfSettled() }
+                    .onScrollPhaseChange { _, phase in feedSettled = phase == .idle; releaseHeldIfSettled() }
+                    .accessibilityIdentifier("player.feed")
+                    .accessibilityValue(feedSettled ? "idle" : "scrolling")
+                    .scrollDisabled(isScrollDisabled)
+                    .onAppear {
+                        // The coordinator may already point at a non-zero episode before this
+                        // ScrollView is created. Explicitly align the actual viewport as well as
+                        // the shared render layer's initial offset.
+                        guard let index = co.current else { return }
+                        feed.y = CGFloat(index) * feedGeometry.size.height
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            proxy.scrollTo(index, anchor: .center)
+                        }
+                    }
+                    .compatOnChange(of: co.current) { index in
+                        // Episode-picker selections happen while the feed is idle. During a
+                        // user swipe, let paging own the position and avoid fighting its gesture.
+                        guard let index, feedSettled else { return }
+                        feed.y = CGFloat(index) * feedGeometry.size.height
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            proxy.scrollTo(index, anchor: .center)
+                        }
+                    }
+                }
             }
-            .scrollTargetBehavior(.paging)
-            .scrollIndicators(.hidden)
-            .scrollPosition(id: Binding(get: { co.current }, set: { co.select($0) }), anchor: .center)
-            .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in feed.y = y }
-            .compatOnChange(of: co.readyIndex) { releaseHeldIfSettled() }
-            .onScrollPhaseChange { _, phase in feedSettled = phase == .idle; releaseHeldIfSettled() }
-            .accessibilityIdentifier("player.feed")
-            .accessibilityValue(feedSettled ? "idle" : "scrolling")
-            .scrollDisabled(isScrollDisabled)
         } else {
             GeometryReader { geo in
                 let pageH = max(1, geo.size.height)
