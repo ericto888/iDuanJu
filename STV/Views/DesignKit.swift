@@ -860,22 +860,22 @@ struct LiveMatchCard: View {
                     }
                 }
                 HStack(spacing: 8) {
-                    team(series.liveMatch?.home, alignment: .leading)
+                    team(series.liveMatch?.home, trailing: false)
                     Spacer(minLength: 2)
                     score
                     Spacer(minLength: 2)
-                    team(series.liveMatch?.away, alignment: .trailing)
+                    team(series.liveMatch?.away, trailing: true)
                 }
             }
             .padding(14)
             .background(STVTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(STVTheme.hairline, lineWidth: 0.7))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(STVTheme.cardBorder, lineWidth: 0.7))
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(PressScale(scale: 0.985))
     }
 
-    @ViewBuilder private func team(_ value: LiveMatchTeam?, alignment: HorizontalAlignment) -> some View {
+    @ViewBuilder private func team(_ value: LiveMatchTeam?, trailing: Bool) -> some View {
         VStack(spacing: 6) {
             if let logo = value?.logo, !logo.isEmpty {
                 CoverView(url: logo, corner: 0, maxPixelSize: CoverPixels.thumb)
@@ -888,7 +888,7 @@ struct LiveMatchCard: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(STVTheme.text)
                 .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
+                .frame(maxWidth: .infinity, alignment: trailing ? .trailing : .leading)
         }
         .frame(maxWidth: .infinity)
     }
@@ -899,7 +899,7 @@ struct LiveMatchCard: View {
                 .font(.system(size: 25, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(STVTheme.text)
         } else {
-            Text(series.liveMatch?.kickoff ?? "--:--")
+            Text("VS")
                 .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(STVTheme.text)
         }
