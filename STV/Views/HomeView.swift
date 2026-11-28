@@ -397,8 +397,7 @@ struct HomeView: View {
                     scrollSourceKey = next.key
                 }
             }
-        }
-        .compatOnChange(of: scrollSourceKey) { nextKey in
+        }        .compatOnChange(of: scrollSourceKey) { nextKey in
             guard let nextKey, nextKey != source.key,
                   let next = sources.first(where: { $0.key == nextKey }) else { return }
             if !visited.contains(next) { visited.insert(next) }
@@ -437,7 +436,6 @@ struct HomeView: View {
 
     private var header: some View {
         VStack(spacing: 0) {
-            if !homeScrollChromeHidden {
                 LiquidGlassGroup(spacing: 10) {
                     HStack(spacing: 10) {
                         NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
@@ -459,12 +457,11 @@ struct HomeView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                // Collapse without animating the scroll view's top inset.
-            }
+                // Keep the search header visible while the bottom tab bar follows the baseline scroll behavior.
             HomeChannelBar(items: sources, selection: $source, label: \.label, ink: STVTheme.text)
-                .padding(.top, homeScrollChromeHidden ? 0 : 12)
+                .padding(.top, 12)
         }
-        .padding(.top, homeScrollChromeHidden ? 0 : 8)
+        .padding(.top, 8)
         .padding(.bottom, 8)
         // Avoid animating header height: changing the top inset during deceleration
         // can feed back into scroll geometry and repeatedly reverse the hide state.
@@ -797,8 +794,7 @@ private struct HomeFeedPage: View {
                     self.boards.forEach { BoardCache.shared.feed($0).load(force: true) }
                 }
             }
-        }
-        .task(id: tab) {
+        }        .task(id: tab) {
             if case .site(let site) = tab, usesCategoryShelves(site) {
                 let requestID = UUID()
                 pluginHomeRequestID = requestID
@@ -1197,8 +1193,7 @@ struct HomeChannelBar<T: Hashable>: View {
                 }
                 .padding(.horizontal, 20)
                 .animation(DS.select, value: selection)
-                .animation(DS.select, value: items)
-            }
+                .animation(DS.select, value: items)            }
             .accessibilityIdentifier("home.channels")
             .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.93),
                                          .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
