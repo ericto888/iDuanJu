@@ -192,6 +192,7 @@ struct HomeHeader {
     var pagerTop: CGFloat = 0
     var tabBar: CGFloat = 0
     var onScrolled: (Bool) -> Void = { _ in }
+    var onScrollActivity: (Bool) -> Void = { _ in }
 }
 
 private struct HomeHeaderKey: EnvironmentKey { static let defaultValue = HomeHeader() }
@@ -224,6 +225,7 @@ private struct HomePageInset: ViewModifier {
                 .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: top) }
                 .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: bottom) }
                 .compatOnScrolled(threshold: 6) { header.onScrolled($0) }
+                .compatOnScrollActivity { header.onScrollActivity($0) }
                 .background { SpanReader(span: $own) }
         } else {
             content
@@ -257,6 +259,7 @@ private struct HomeBottomSafeArea: ViewModifier {
 /// 横滑冲突：hero 轮播区域内的横滑归轮播；其它区域横滑翻来源页；首页是根页面，没有系统侧滑返回。
 struct HomeView: View {
     @Environment(\.homeScrollChromeHidden) private var homeScrollChromeHidden
+    @Environment(\.homeScrollActivity) private var homeScrollActivity
     @ObservedObject private var gate = SourceGate.shared
     @ObservedObject private var pluginStore = PluginStore.shared
     @ObservedObject private var cmsStore = CMSStore.shared
@@ -323,6 +326,9 @@ struct HomeView: View {
             if scrolled[s] != v {
                 withAnimation(DS.select) { scrolled[s] = v }
             }
+        }, onScrollActivity: { active in
+            guard s == source else { return }
+            homeScrollActivity(active)
         }))
     }
 
