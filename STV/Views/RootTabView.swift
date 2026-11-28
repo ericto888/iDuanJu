@@ -28,11 +28,11 @@ struct RootTabView: View {
     @State private var tab = Int(ProcessInfo.processInfo.environment["STV_TAB"] ?? "") ?? 0
     @State private var paths = [NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath(), NavigationPath()]
     @State private var tabBarHidden = false
-    @State private var restoreTask: Task<Void, Never>?
 
-    private func restoreHomeChromeForScrollActivity(_ active: Bool) {
-        restoreTask?.cancel()
-        if active {
+    /// The callback reports scroll direction: true = upward (hide), false = downward (reveal).
+    /// Idle/deceleration events are handled only by HomePageInset and must not restore the chrome.
+    private func updateHomeChromeForScrollDirection(_ scrollingUp: Bool) {
+        if scrollingUp {
             if !tabBarHidden { tabBarHidden = true }
         } else if tabBarHidden {
             withAnimation(DS.select) { tabBarHidden = false }
@@ -68,7 +68,7 @@ struct RootTabView: View {
                 .environment(\.homeScrollChromeHidden, tabBarHidden)
                 .environment(\.homeScrollActivity) { active in
                     guard showNav && tab == 0 && !metrics.useRail else { return }
-                    restoreHomeChromeForScrollActivity(active)
+                    updateHomeChromeForScrollDirection(active)
                 }
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
@@ -79,21 +79,9 @@ struct RootTabView: View {
                             let dx = value.translation.width
                             guard abs(dy) > abs(dx) * 1.2 else { return }
                             if dy < -14 {
-                                restoreTask?.cancel()
                                 if !tabBarHidden { tabBarHidden = true }
                             } else if dy > 14 {
-                                restoreTask?.cancel()
-                                if tabBarHidden { tabBarHidden = false }
-                            }
-                        }
-                        .onEnded { _ in
-                            if #available(iOS 18.0, *) { return }
-                            guard tabBarHidden else { return }
-                            restoreTask?.cancel()
-                            restoreTask = Task { @MainActor in
-                                try? await Task.sleep(nanoseconds: 450_000_000)
-                                guard !Task.isCancelled else { return }
-                                tabBarHidden = false
+                                            if tabBarHidden { tabBarHidden = false }
                             }
                         }
                 )
@@ -114,7 +102,6 @@ struct RootTabView: View {
                 }
                 .compatOnChange(of: showNav) { visible in
                     if !visible {
-                        restoreTask?.cancel()
                         tabBarHidden = false
                     }
                 }
