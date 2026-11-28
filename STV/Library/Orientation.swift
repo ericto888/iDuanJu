@@ -40,9 +40,9 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
     /// 横屏 button: rotate now; rotation stays unlocked so turning the phone back to portrait exits.
     @MainActor static func enterLandscape() {
         rotationGeneration += 1
-        mask = isPad ? .all : .allButUpsideDown
+        mask = isPad ? .all : .landscape
         refresh()
-        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState == .foregroundActive }) {
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
         }
     }
