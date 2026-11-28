@@ -426,8 +426,10 @@ enum PluginMedia {
             let cs = PluginRuntime.jar(pluginID).cookies(for: r.url)
             for (k, v) in HTTPCookie.requestHeaderFields(with: cs) { req.setValue(v, forHTTPHeaderField: k) }
             let guardD = RedirectGuard(pluginID: pluginID, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts)
+            var receivedResponse = false
             do {
                 let (d, resp) = try await session.data(for: req, delegate: guardD)
+                receivedResponse = true
                 if let b = guardD.blocked {
                     PluginLog.add(pluginID, "✕ 图片重定向被拦截：\(host) → \(b)")
                     throw ProviderError.invalid("图片跳转到未授权域名 \(b)")
@@ -446,7 +448,7 @@ enum PluginMedia {
                 }
                 data = d
             } catch {
-                if guardD.blocked == nil {
+                if guardD.blocked == nil && !receivedResponse {
                     let ns = error as NSError
                     PluginLog.add(pluginID, "✕ 图片网络请求异常：\(ns.domain)(\(ns.code))")
                 }
