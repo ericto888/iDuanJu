@@ -204,7 +204,6 @@ struct HomeHeader {
     var pagerTop: CGFloat = 0
     var tabBar: CGFloat = 0
     var onScrolled: (Bool) -> Void = { _ in }
-    var onScrollActivity: (Bool) -> Void = { _ in }
     var onScrollDirection: (Bool) -> Void = { _ in }
 }
 
@@ -257,10 +256,9 @@ private struct HomePageInset: ViewModifier {
                     }
                 }
                 .compatOnScrollActivity { active in
-                    if !active {
-                        lastScrollY = nil
-                        header.onScrollActivity(false)
-                    }
+                    // Scroll becoming idle is not a request to reveal the chrome.
+                    // Only an actual downward gesture should restore it.
+                    if !active { lastScrollY = nil }
                 }
                 .compatOnChange(of: chromeHidden) { _ in
                     // Collapsing the floating header changes the scroll view's top inset.
@@ -368,9 +366,6 @@ struct HomeView: View {
             if scrolled[s] != v {
                 withAnimation(DS.select) { scrolled[s] = v }
             }
-        }, onScrollActivity: { active in
-            guard s == source else { return }
-            homeScrollActivity(active)
         }, onScrollDirection: { scrollingUp in
             guard s == source else { return }
             homeScrollActivity(scrollingUp)
