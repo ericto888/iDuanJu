@@ -81,7 +81,7 @@ struct RootTabView: View {
                             if dy < -14 {
                                 if !tabBarHidden { tabBarHidden = true }
                             } else if dy > 14 {
-                                            if tabBarHidden { tabBarHidden = false }
+                                if tabBarHidden { tabBarHidden = false }
                             }
                         }
                 )
@@ -97,7 +97,6 @@ struct RootTabView: View {
                     .animation(DS.select, value: showBottomBar)
                 }
                 .compatOnChange(of: tab) { _ in
-                    restoreTask?.cancel()
                     tabBarHidden = false
                 }
                 .compatOnChange(of: showNav) { visible in
