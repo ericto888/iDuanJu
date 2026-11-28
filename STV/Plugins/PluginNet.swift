@@ -231,6 +231,11 @@ final class PluginNet: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         let start = Date()
         if let fx = PluginFixtures.responder {
             guard let r = fx(req) else { throw PluginError.runtime(code: "E_NETWORK", message: "fixture missing \(url.absoluteString)") }
+            if (200..<300).contains(r.status) {
+                PluginMediaDomainCache.learn(pluginID: pluginID, sourceURL: url, sourcePolicy: policy(),
+                                             contentType: r.headers.first(where: { $0.key.lowercased() == "content-type" })?.value ?? "",
+                                             body: r.body)
+            }
             log("\(r.status) \(req.httpMethod ?? "GET") \(url.host ?? "")\(url.path) · fixture")
             return Response(status: r.status, url: url, headers: r.headers, body: r.body)
         }
@@ -261,6 +266,10 @@ final class PluginNet: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
             if data.count > Self.maxBody { throw PluginError.runtime(code: "E_NETWORK", message: "响应超过 20MB") }
             var headers: [String: String] = [:]
             for (k, v) in http.allHeaderFields { if let k = k as? String { headers[k.lowercased()] = "\(v)" } }
+            if (200..<300).contains(http.statusCode) {
+                PluginMediaDomainCache.learn(pluginID: pluginID, sourceURL: final, sourcePolicy: policy(),
+                                             contentType: headers["content-type"] ?? "", body: data)
+            }
             log("\(http.statusCode) \(req.httpMethod ?? "GET") \(final.host ?? "")\(final.path) · \(data.count)B · \(Int(Date().timeIntervalSince(start) * 1000))ms")
             return Response(status: http.statusCode, url: final, headers: headers, body: data)
         }
