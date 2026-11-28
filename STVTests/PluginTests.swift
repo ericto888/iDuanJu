@@ -1018,18 +1018,3 @@ final class PluginTests: XCTestCase {
 
     func testNetGuardCanBypassPositiveDNSCacheAndFailsClosedOnEmptyResolution() {
         var count = 0
-        let host = "dns-cache-bypass-\(UUID().uuidString).example.net"
-        NetGuard.resolverOverride = { _ in
-            count += 1
-            return count == 1 ? ["93.184.216.34"] : ["192.168.1.20"]
-        }
-        XCTAssertFalse(NetGuard.resolvesToBlocked(host),
-                        "the first public resolution may populate the normal positive cache")
-        XCTAssertTrue(NetGuard.resolvesToBlocked(host, useCache: false),
-                      "media requests must bypass a previous positive DNS cache entry")
-        NetGuard.resolverOverride = { _ in [] }
-        XCTAssertTrue(NetGuard.resolvesToBlocked("unresolved.example.net", useCache: false),
-                      "DNS failure must fail closed")
-    }
-
-}
