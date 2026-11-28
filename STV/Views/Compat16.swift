@@ -86,23 +86,52 @@ extension View {
         }
     }
 
-    /// Reports active finger-driven scrolling and the moment that interaction ends on iOS 18+.
-    /// Deceleration begins after the finger is lifted, so it must not keep the chrome hidden.
+    /// Reports vertical finger interaction independently of scroll deceleration.
+    /// The drag recognizer provides a reliable finger-up signal; scroll phases remain
+    /// as a secondary signal for system-driven interaction transitions.
     @ViewBuilder
     func compatOnScrollActivity(action: @escaping (Bool) -> Void) -> some View {
         if #available(iOS 18.0, *) {
-            self.onScrollPhaseChange { oldPhase, newPhase in
-                if newPhase == .interacting {
-                    action(true)
-                } else if oldPhase == .interacting {
-                    // Fires as soon as the finger leaves the screen, whether scrolling
-                    // decelerates or goes directly back to idle.
-                    action(false)
+            self
+                .onScrollPhaseChange { oldPhase, newPhase in
+                    if newPhase == .interacting {
+                        reportScrollActivity(true, action: action)
+                    } else if newPhase == .decelerating || (oldPhase == .interacting && newPhase == .idle) {
+                        // Deceleration begins when the finger lifts: start the restore
+                        // delay here rather than waiting for momentum scrolling to finish.
+                        reportScrollActivity(false, action: action)
+                    }
                 }
-            }
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { value in
+                            let dx = abs(value.translation.width)
+                            let dy = abs(value.translation.height)
+                            if dy > dx * 1.2 {
+                                reportScrollActivity(true, action: action)
+                            }
+                        }
+                        .onEnded { value in
+                            let dx = abs(value.translation.width)
+                            let dy = abs(value.translation.height)
+                            if dy > dx * 1.2 {
+                                reportScrollActivity(false, action: action)
+                            }
+                        }
+                )
         } else {
             self
         }
+    }
+
+    /// The scroll phase and drag recognizer can report the same transition.
+    /// Emit only state changes so duplicate finger-up events do not restart the 450ms timer.
+    @State private var isScrollActive = false
+
+    private func reportScrollActivity(_ active: Bool, action: (Bool) -> Void) {
+        guard isScrollActive != active else { return }
+        isScrollActive = active
+        action(active)
     }
 
     /// iOS 16+ replacement for `.onScrollGeometryChange(for: CGFloat.self)` scroll Y reporting.
