@@ -225,13 +225,22 @@ enum PluginMedia {
     }
 
     static func allows(_ url: URL, explicitPolicy: DomainPolicy, learnedHosts: Set<String>) -> Bool {
-        guard let host = url.host?.lowercased(), url.scheme == "https" || url.scheme == "http" else { return false }
+        guard let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http",
+              url.user == nil, url.password == nil,
+              let host = url.host?.lowercased(), !host.isEmpty,
+              !NetGuard.isIPLiteral(host) else { return false }
+
+        // Match PluginNet's transport boundary: HTTPS 443 and HTTP 80 only.
+        // Explicit HTTP remains available for legacy manifests; learned hosts are HTTPS-only.
+        if let port = url.port {
+            guard (scheme == "https" && port == 443) || (scheme == "http" && port == 80) else { return false }
+        }
         let explicitlyAllowed = explicitPolicy.allows(host)
-        let dynamicallyAllowed = url.scheme == "https"
-            && url.user == nil && url.password == nil
+        let dynamicallyAllowed = scheme == "https"
             && (url.port == nil || url.port == 443)
             && learnedHosts.contains(host)
-        return (explicitlyAllowed || dynamicallyAllowed) && !NetGuard.isIPLiteral(host)
+        return explicitlyAllowed || dynamicallyAllowed
     }
 
     private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
@@ -244,7 +253,7 @@ enum PluginMedia {
         }
         private func allows(_ url: URL) -> Bool {
             PluginMedia.allows(url, explicitPolicy: explicitPolicy, learnedHosts: learnedHosts)
-                && !NetGuard.resolvesToBlocked(url.host ?? "")
+                && !NetGuard.resolvesToBlocked(url.host ?? "", useCache: false)
         }
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest) async -> URLRequest? {
@@ -275,7 +284,7 @@ enum PluginMedia {
             PluginLog.add(r.plugin, "✕ 图片域名未授权 \(host)")
             throw ProviderError.invalid("图片域名未授权：\(host)")
         }
-        let blocked = await Task.detached { NetGuard.resolvesToBlocked(host) }.value
+        let blocked = await Task.detached { NetGuard.resolvesToBlocked(host, useCache: false) }.value
         if blocked { throw ProviderError.invalid("图片地址解析到内网") }
         var data: Data
         if let fx = PluginFixtures.responder, let reply = fx(URLRequest(url: r.url)) { data = reply.body }
