@@ -115,8 +115,12 @@ final class BoardFeed: ObservableObject {
     }
     let board: BoardSpec
     @Published private(set) var state: State = .idle
-    /// At most one network request per board, matching upstream's in-flight guard.
+    /// At most one active network request per board.
     private var loadingTask: Task<[HGSeries], Never>?
+    private var loadingRequestID: UUID?
+    /// Multiple force-refresh callers join the same refresh queued behind an active request.
+    private var forcedRefreshTask: Task<[HGSeries], Never>?
+    private var forcedRefreshRequestID: UUID?
 
     init(_ b: BoardSpec) { board = b }
 
@@ -128,25 +132,60 @@ final class BoardFeed: ObservableObject {
         return true
     }
 
-    /// Concurrent callers await the same in-flight request; they never start a second fetch.
-    /// This keeps the plugin fallback-hero resolver deterministic without queuing refresh requests.
+    /// Normal callers reuse an in-flight request. A force refresh queues exactly one new
+    /// first-page fetch after that request finishes; concurrent force callers join it.
     func loadFirstPageIfNeeded(force: Bool = false) async -> [HGSeries] {
-        if let loadingTask { return await loadingTask.value }
+        if force, let forcedRefreshTask {
+            return await forcedRefreshTask.value
+        }
+
+        if let activeTask = loadingTask {
+            guard force else { return await activeTask.value }
+
+            let requestID = UUID()
+            let refreshTask = Task { @MainActor in
+                _ = await activeTask.value
+                return await self.fetchFirstPage()
+            }
+            loadingTask = refreshTask
+            loadingRequestID = requestID
+            forcedRefreshTask = refreshTask
+            forcedRefreshRequestID = requestID
+
+            let result = await refreshTask.value
+            if loadingRequestID == requestID {
+                loadingTask = nil
+                loadingRequestID = nil
+            }
+            if forcedRefreshRequestID == requestID {
+                forcedRefreshTask = nil
+                forcedRefreshRequestID = nil
+            }
+            return result
+        }
+
         if case .loaded = state, !force { return items }
 
-        let task = Task { @MainActor in
-            do {
-                state = .loaded(try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items)
-            } catch {
-                // A failed refresh keeps what is already on screen.
-                if items.isEmpty { state = .failed(error) }
-            }
-            return items
-        }
+        let requestID = UUID()
+        let task = Task { @MainActor in await self.fetchFirstPage() }
         loadingTask = task
+        loadingRequestID = requestID
         let result = await task.value
-        loadingTask = nil
+        if loadingRequestID == requestID {
+            loadingTask = nil
+            loadingRequestID = nil
+        }
         return result
+    }
+
+    private func fetchFirstPage() async -> [HGSeries] {
+        do {
+            state = .loaded(try await board.fetch(HGPage(items: [], hasMore: true, nextOffset: nil), []).items)
+        } catch {
+            // A failed refresh keeps what is already on screen.
+            if items.isEmpty { state = .failed(error) }
+        }
+        return items
     }
 
     func load(force: Bool = false) {
