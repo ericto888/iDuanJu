@@ -269,7 +269,6 @@ private struct HomeBottomSafeArea: ViewModifier {
 /// 分类条联动（选中项自动滚到居中、指示条跟随）。每页：二级榜单选择 → 竖海报 hero → 真实榜单分段。
 /// 横滑冲突：hero 轮播区域内的横滑归轮播；其它区域横滑翻来源页；首页是根页面，没有系统侧滑返回。
 struct HomeView: View {
-    @Environment(\.homeScrollChromeHidden) private var homeScrollChromeHidden
     @ObservedObject private var gate = SourceGate.shared
     @ObservedObject private var pluginStore = PluginStore.shared
     @ObservedObject private var cmsStore = CMSStore.shared
@@ -436,35 +435,32 @@ struct HomeView: View {
 
     private var header: some View {
         VStack(spacing: 0) {
-                LiquidGlassGroup(spacing: 10) {
-                    HStack(spacing: 10) {
-                        NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
-                            DSSearchBarLabel()
-                                .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
-                                .liquidGlassCapsule(interactive: true)
-                        }
-                        .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
-                        Button { showChannels = true } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
-                                Text("筛选").font(.system(size: 14, weight: .medium))
-                            }
-                            .foregroundStyle(STVTheme.text)
+            LiquidGlassGroup(spacing: 10) {
+                HStack(spacing: 10) {
+                    NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
+                        DSSearchBarLabel()
                             .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
                             .liquidGlassCapsule(interactive: true)
-                        }
-                        .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
                     }
+                    .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
+                    Button { showChannels = true } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
+                            Text("筛选").font(.system(size: 14, weight: .medium))
+                        }
+                        .foregroundStyle(STVTheme.text)
+                        .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
+                        .liquidGlassCapsule(interactive: true)
+                    }
+                    .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
                 }
-                .padding(.horizontal, 16)
-                // Keep the search header visible while the bottom tab bar follows the baseline scroll behavior.
+            }
+            .padding(.horizontal, 16)
             HomeChannelBar(items: sources, selection: $source, label: \.label, ink: STVTheme.text)
                 .padding(.top, 12)
         }
         .padding(.top, 8)
         .padding(.bottom, 8)
-        // Avoid animating header height: changing the top inset during deceleration
-        // can feed back into scroll geometry and repeatedly reverse the hide state.
         .background { LiquidEdgeFade(visible: pinned) }
         .background { SpanReader(span: $headerSpan) }
     }
