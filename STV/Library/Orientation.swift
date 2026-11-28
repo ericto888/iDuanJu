@@ -28,8 +28,27 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
     private static var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     static var mask: UIInterfaceOrientationMask = UIDevice.current.userInterfaceIdiom == .pad ? .all : .portrait
     private static var rotationGeneration = 0
+    @MainActor private static var fullscreenSnapshot: (mask: UIInterfaceOrientationMask, orientation: UIInterfaceOrientation)?
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         Self.isPad ? .all : Self.mask
+    }
+
+    /// Apply the playback policy without rotating the device: portrait videos lock portrait;
+    /// landscape videos keep the orientation that was active when playback began.
+    @MainActor static func applyVideoOrientation(isPortrait: Bool) {
+        guard fullscreenSnapshot == nil else { return }
+        rotationGeneration += 1
+        if isPad { mask = .all; refresh(); return }
+        if isPortrait {
+            mask = .portrait
+        } else if let scene = activeScene {
+            switch scene.interfaceOrientation {
+            case .landscapeLeft, .landscapeRight: mask = .landscape
+            case .portrait, .portraitUpsideDown: mask = .portrait
+            default: break
+            }
+        }
+        refresh()
     }
 
     @MainActor static func unlock() {
@@ -37,51 +56,55 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
         mask = isPad ? .all : .allButUpsideDown
         refresh()
     }
-    /// 横屏 button: rotate now; rotation stays unlocked so turning the phone back to portrait exits.
+
+    /// Enter fullscreen only on explicit user action, remembering both the prior mask and orientation.
     @MainActor static func enterLandscape() {
         rotationGeneration += 1
-        mask = isPad ? .all : .allButUpsideDown
-        refresh()
-        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
+        if fullscreenSnapshot == nil {
+            fullscreenSnapshot = (mask, activeScene?.interfaceOrientation)
         }
+        mask = isPad ? .all : .landscape
+        refresh()
+        activeScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
     }
-    /// 退出横屏 button.
+
+    /// Exit fullscreen and restore the exact orientation policy that was active before entering it.
     @MainActor static func exitLandscape() {
         rotationGeneration += 1
-        let generation = rotationGeneration
-        if isPad {
-            mask = .all
-            refresh()
-            return
-        }
-        // UIKit may ignore a portrait geometry request made while the supported mask remains unrestricted.
-        // Constrain during the rotation, then restore sensor rotation after the transition completes.
-        mask = .portrait
+        guard let snapshot = fullscreenSnapshot else { return }
+        fullscreenSnapshot = nil
+        mask = snapshot.mask
         refresh()
-        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState == .foregroundActive }) {
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
+        guard let scene = activeScene,
+              let orientation = snapshot.orientation else { return }
+        let target: UIInterfaceOrientationMask
+        switch orientation {
+        case .portrait: target = .portrait
+        case .portraitUpsideDown: target = .portraitUpsideDown
+        case .landscapeLeft: target = .landscapeLeft
+        case .landscapeRight: target = .landscapeRight
+        default: return
         }
-        // `requestGeometryUpdate`'s closure is an errorHandler (never called on success).
-        // Restore sensor rotation after the portrait transition settles.
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 550_000_000)
-            // A dismissed player must not unlock a subsequent portrait-only screen.
-            if generation == rotationGeneration { mask = .allButUpsideDown; refresh() }
-        }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: target)) { _ in }
     }
+
     @MainActor static func lockPortrait() {
         rotationGeneration += 1
+        fullscreenSnapshot = nil
         if isPad {
             mask = .all
             refresh()
             return
         }
         mask = .portrait
-        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait))
-        }
+        activeScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
         refresh()
+    }
+
+    @MainActor private static var activeScene: UIWindowScene? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
     }
     @MainActor private static func refresh() {
         for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
