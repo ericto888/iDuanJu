@@ -90,9 +90,18 @@ enum PluginMediaDomainCache {
             // tracking and video URLs can also end in familiar suffixes. Only learn
             // hosts when the URL is attached to an explicit image-bearing field.
             let prefix = ns.substring(to: match.range.location)
-            let imageFieldPattern = #""(?:cover|coverUrl|poster|posterUrl|image|imageUrl|img|pic|picUrl|thumb|thumbnail|avatar|banner|src)"\s*:\s*["']?$|(?:data-(?:src|original|lazy-src)|src|poster)\s*=\s*["']?$"#
-            let imageField = prefix.range(of: imageFieldPattern, options: .regularExpression) != nil
-            guard imageField else { continue }
+            // JSON: only explicit image-bearing keys. A generic "src" key is
+            // ambiguous (often video/script), so it must never grant image access.
+            let jsonImageFieldPattern = #""(?:cover|coverUrl|poster|posterUrl|image|imageUrl|img|pic|picUrl|thumb|thumbnail|avatar|banner)"\s*:\s*["']?$"#
+            let jsonImageField = prefix.range(of: jsonImageFieldPattern, options: .regularExpression) != nil
+
+            // HTML: accept source attributes only when they belong to an image
+            // element. A video/script/source src must not teach a CDN host.
+            let htmlImageFieldPattern = #"<img\b[^>]*\b(?:src|data-src|data-original|data-lazy-src)\s*=\s*["']?$"#
+            let htmlPosterFieldPattern = #"<video\b[^>]*\bposter\s*=\s*["']?$"#
+            let htmlImageField = prefix.range(of: htmlImageFieldPattern, options: [.regularExpression, .caseInsensitive]) != nil
+                || prefix.range(of: htmlPosterFieldPattern, options: [.regularExpression, .caseInsensitive]) != nil
+            guard jsonImageField || htmlImageField else { continue }
             discovered.insert(host)
         }
         guard !discovered.isEmpty else { return }
