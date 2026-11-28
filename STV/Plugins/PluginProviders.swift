@@ -91,12 +91,22 @@ enum PluginMediaDomainCache {
 
         var payloads: [Data] = []
         var totalBytes = 0
+        // Bound total traversal work, not just recursion depth and per-array width.
+        // JSON objects can contain millions of shallow keys, so depth alone is insufficient.
+        var remainingNodes = 4_096
         func visit(_ value: Any, depth: Int) {
-            guard depth <= 16, payloads.count < 64, totalBytes < 4 << 20 else { return }
+            guard remainingNodes > 0, depth <= 16, payloads.count < 64, totalBytes < 4 << 20 else { return }
+            remainingNodes -= 1
             if let object = value as? [String: Any] {
-                for child in object.values { visit(child, depth: depth + 1) }
+                for child in object.values {
+                    guard remainingNodes > 0, payloads.count < 64, totalBytes < 4 << 20 else { break }
+                    visit(child, depth: depth + 1)
+                }
             } else if let array = value as? [Any] {
-                for child in array.prefix(512) { visit(child, depth: depth + 1) }
+                for child in array.prefix(512) {
+                    guard remainingNodes > 0, payloads.count < 64, totalBytes < 4 << 20 else { break }
+                    visit(child, depth: depth + 1)
+                }
             } else if let string = value as? String {
                 var encoded = string.trimmingCharacters(in: .whitespacesAndNewlines)
                     .filter { !$0.isWhitespace }
@@ -205,39 +215,46 @@ enum PluginMediaDomainCache {
         let text = raw.replacingOccurrences(of: #"\/"#, with: "/")
             .replacingOccurrences(of: #"\\u002[fF]"#, with: "/", options: .regularExpression)
         let ns = text as NSString
-        let pattern = #"https://[A-Za-z0-9.-]+(?::443)?(?:/[^\s"'<>\\]*)?"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return }
-        let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
         var observed = Set<String>()
-        for match in matches {
-            var candidate = ns.substring(with: match.range)
-            while let last = candidate.last, ".,;)]}".contains(last) { candidate.removeLast() }
-            guard let components = URLComponents(string: candidate),
-                  components.scheme?.lowercased() == "https",
-                  components.user == nil, components.password == nil,
-                  components.port == nil || components.port == 443,
-                  let host = components.host?.lowercased(),
-                  host != sourceHost, !NetGuard.isIPLiteral(host),
-                  DomainRule(host) != nil else { continue }
-            // Remember only that this host appeared in a successful authorized
-            // response. This does not grant access by itself; PluginMedia.ref
-            // promotes it only when the provider classifies a URL as an image.
-            observed.insert(host)
+        let scanRange = NSRange(location: 0, length: ns.length)
 
-            // Every external HTTPS host in the trusted response is only a short-lived
-            // candidate. It becomes usable only when the native provider classifies an
-            // exact URL as an image and calls PluginMedia.ref.
+        // Enumerate lazily and stop as soon as the per-response candidate budget is
+        // reached. matches(in:) allocates an array for every match in the body first.
+        let pattern = #"https://[A-Za-z0-9.-]+(?::443)?(?:/[^\\s"'<>\\\\]*)?"#
+        if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+            regex.enumerateMatches(in: text, range: scanRange) { match, _, stop in
+                guard observed.count < maxDomains, let match else {
+                    stop.pointee = true
+                    return
+                }
+                var candidate = ns.substring(with: match.range)
+                while let last = candidate.last, ".,;)]}".contains(last) { candidate.removeLast() }
+                guard let components = URLComponents(string: candidate),
+                      components.scheme?.lowercased() == "https",
+                      components.user == nil, components.password == nil,
+                      components.port == nil || components.port == 443,
+                      let host = components.host?.lowercased(),
+                      host != sourceHost, !NetGuard.isIPLiteral(host),
+                      DomainRule(host) != nil else { return }
+                observed.insert(host)
+                if observed.count >= maxDomains { stop.pointee = true }
+            }
         }
 
         // Some APIs return CDN origins as bare host strings rather than URLs.
-        // They remain candidates only; a provider must later construct and classify
-        // an exact HTTPS image URL before the host can be promoted.
-        let bareHostPattern = #"(?<![A-Za-z0-9.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}(?![A-Za-z0-9.-])"#
-        if let hostRegex = try? NSRegularExpression(pattern: bareHostPattern, options: [.caseInsensitive]) {
-            for match in hostRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+        // This second lazy pass shares the same budget with URL matches.
+        let bareHostPattern = #"(?<![A-Za-z0-9.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}(?![A-Za-z0-9.-])"#
+        if observed.count < maxDomains,
+           let hostRegex = try? NSRegularExpression(pattern: bareHostPattern, options: [.caseInsensitive]) {
+            hostRegex.enumerateMatches(in: text, range: scanRange) { match, _, stop in
+                guard observed.count < maxDomains, let match else {
+                    stop.pointee = true
+                    return
+                }
                 let host = ns.substring(with: match.range).lowercased()
-                guard host != sourceHost, !NetGuard.isIPLiteral(host), DomainRule(host) != nil else { continue }
+                guard host != sourceHost, !NetGuard.isIPLiteral(host), DomainRule(host) != nil else { return }
                 observed.insert(host)
+                if observed.count >= maxDomains { stop.pointee = true }
             }
         }
         guard !observed.isEmpty else { return }
