@@ -238,6 +238,25 @@ final class PluginTests: XCTestCase {
         let pluginID = "com.test.sandbox"
         PluginMediaDomainCache.clear(pluginID: pluginID)
         PluginMediaDomainCache.clear(pluginID: "com.test.other")
+
+        // Nuxt payloads can serialize image URLs in indexed tables, so the
+        // image key is not adjacent to the URL in the raw response. The
+        // provider's typed cover reference is the authoritative image signal.
+        let nuxtID = "com.test.nuxt-image"
+        PluginMediaDomainCache.clear(pluginID: nuxtID)
+        _ = PluginMedia.ref(plugin: nuxtID, url: "https://pic.vojggi.cn/no-extension")
+        XCTAssertEqual(PluginMediaDomainCache.domains(pluginID: nuxtID), ["pic.vojggi.cn"])
+        XCTAssertTrue(PluginMedia.allows(URL(string: "https://pic.vojggi.cn/no-extension")!,
+                                         explicitPolicy: DomainPolicy(["yeguodj.com"]),
+                                         learnedHosts: Set(PluginMediaDomainCache.domains(pluginID: nuxtID))))
+        PluginMediaDomainCache.clear(pluginID: nuxtID)
+
+        let insecureImageID = "com.test.insecure-image"
+        PluginMediaDomainCache.clear(pluginID: insecureImageID)
+        _ = PluginMedia.ref(plugin: insecureImageID, url: "http://pic.vojggi.cn/no-extension")
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: insecureImageID).isEmpty,
+                      "dynamic image learning must remain HTTPS-only")
+        PluginMediaDomainCache.clear(pluginID: insecureImageID)
         let payload = #"{"cover":"https:\/\/img-cdn.example.net/posters/cover","stream":"https://video-cdn.example.net/index.m3u8","api":"https://api-cdn.example.net/data","legacy":"http://old-image.example.net/cover.jpg"}"#
         PluginFixtures.responder = { _ in
             PluginFixtures.Reply(status: 200, headers: ["content-type": "application/json"], body: Data(payload.utf8))
