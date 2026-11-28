@@ -122,7 +122,7 @@ struct GlassTabBar: View {
                 HStack(spacing: 4) {
                     ForEach(items.indices, id: \.self) { i in
                         NavBarItem(title: items[i].0, symbol: items[i].1, on: i == selection, height: 48, ns: ns) { pick(i) }
-                            .accessibilityIdentifier("tab.\\(i)")
+                            .accessibilityIdentifier("tab.\(i)")
                     }
                 }
                 .padding(6)
@@ -208,7 +208,7 @@ struct GlassNavigationRail: View {
                 VStack(spacing: 6) {
                     ForEach(items.indices, id: \.self) { i in
                         NavBarItem(title: items[i].0, symbol: items[i].1, on: i == selection, height: 56, ns: ns) { pick(i) }
-                            .accessibilityIdentifier("tab.\\(i)")
+                            .accessibilityIdentifier("tab.\(i)")
                     }
                 }
                 .padding(6)
