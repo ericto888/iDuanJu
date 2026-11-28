@@ -269,7 +269,6 @@ private struct HomeBottomSafeArea: ViewModifier {
 /// 分类条联动（选中项自动滚到居中、指示条跟随）。每页：二级榜单选择 → 竖海报 hero → 真实榜单分段。
 /// 横滑冲突：hero 轮播区域内的横滑归轮播；其它区域横滑翻来源页；首页是根页面，没有系统侧滑返回。
 struct HomeView: View {
-    @Environment(\.homeScrollChromeHidden) private var homeScrollChromeHidden
     @ObservedObject private var gate = SourceGate.shared
     @ObservedObject private var pluginStore = PluginStore.shared
     @ObservedObject private var cmsStore = CMSStore.shared
@@ -397,8 +396,7 @@ struct HomeView: View {
                     scrollSourceKey = next.key
                 }
             }
-        }
-        .compatOnChange(of: scrollSourceKey) { nextKey in
+        }        .compatOnChange(of: scrollSourceKey) { nextKey in
             guard let nextKey, nextKey != source.key,
                   let next = sources.first(where: { $0.key == nextKey }) else { return }
             if !visited.contains(next) { visited.insert(next) }
@@ -437,37 +435,32 @@ struct HomeView: View {
 
     private var header: some View {
         VStack(spacing: 0) {
-            if !homeScrollChromeHidden {
-                LiquidGlassGroup(spacing: 10) {
-                    HStack(spacing: 10) {
-                        NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
-                            DSSearchBarLabel()
-                                .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
-                                .liquidGlassCapsule(interactive: true)
-                        }
-                        .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
-                        Button { showChannels = true } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
-                                Text("筛选").font(.system(size: 14, weight: .medium))
-                            }
-                            .foregroundStyle(STVTheme.text)
+            LiquidGlassGroup(spacing: 10) {
+                HStack(spacing: 10) {
+                    NavigationLink(value: Route.searchFromSource(activeSearchSource)) {
+                        DSSearchBarLabel()
                             .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
                             .liquidGlassCapsule(interactive: true)
-                        }
-                        .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
                     }
+                    .buttonStyle(GlassPress()).accessibilityLabel("搜索").accessibilityIdentifier("home.search")
+                    Button { showChannels = true } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "line.3.horizontal.decrease").font(.system(size: 14, weight: .semibold))
+                            Text("筛选").font(.system(size: 14, weight: .medium))
+                        }
+                        .foregroundStyle(STVTheme.text)
+                        .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
+                        .liquidGlassCapsule(interactive: true)
+                    }
+                    .buttonStyle(GlassPress()).accessibilityLabel("筛选与全部频道").accessibilityIdentifier("home.filter")
                 }
-                .padding(.horizontal, 16)
-                // Collapse without animating the scroll view's top inset.
             }
+            .padding(.horizontal, 16)
             HomeChannelBar(items: sources, selection: $source, label: \.label, ink: STVTheme.text)
-                .padding(.top, homeScrollChromeHidden ? 0 : 12)
+                .padding(.top, 12)
         }
-        .padding(.top, homeScrollChromeHidden ? 0 : 8)
+        .padding(.top, 8)
         .padding(.bottom, 8)
-        // Avoid animating header height: changing the top inset during deceleration
-        // can feed back into scroll geometry and repeatedly reverse the hide state.
         .background { LiquidEdgeFade(visible: pinned) }
         .background { SpanReader(span: $headerSpan) }
     }
@@ -797,8 +790,7 @@ private struct HomeFeedPage: View {
                     self.boards.forEach { BoardCache.shared.feed($0).load(force: true) }
                 }
             }
-        }
-        .task(id: tab) {
+        }        .task(id: tab) {
             if case .site(let site) = tab, usesCategoryShelves(site) {
                 let requestID = UUID()
                 pluginHomeRequestID = requestID
@@ -1197,8 +1189,7 @@ struct HomeChannelBar<T: Hashable>: View {
                 }
                 .padding(.horizontal, 20)
                 .animation(DS.select, value: selection)
-                .animation(DS.select, value: items)
-            }
+                .animation(DS.select, value: items)            }
             .accessibilityIdentifier("home.channels")
             .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.93),
                                          .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
