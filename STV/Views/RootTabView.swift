@@ -11,39 +11,6 @@ extension EnvironmentValues {
     }
 }
 
-private struct HomeScrollActivityKey: EnvironmentKey {
-    static let defaultValue: (Bool) -> Void = { _ in }
-}
-
-extension EnvironmentValues {
-    var homeScrollActivity: (Bool) -> Void {
-        get { self[HomeScrollActivityKey.self] }
-        set { self[HomeScrollActivityKey.self] = newValue }
-    }
-}
-
-private struct HomeScrollBeganKey: EnvironmentKey {
-    static let defaultValue: () -> Void = {}
-}
-
-extension EnvironmentValues {
-    var homeScrollBegan: () -> Void {
-        get { self[HomeScrollBeganKey.self] }
-        set { self[HomeScrollBeganKey.self] = newValue }
-    }
-}
-
-private struct HomeScrollEndedKey: EnvironmentKey {
-    static let defaultValue: () -> Void = {}
-}
-
-extension EnvironmentValues {
-    var homeScrollEnded: () -> Void {
-        get { self[HomeScrollEndedKey.self] }
-        set { self[HomeScrollEndedKey.self] = newValue }
-    }
-}
-
 /// 四个根页面 + 窄屏底部悬浮玻璃胶囊 / 平板宽屏左侧悬浮玻璃导航轨（系统 TabBar 隐藏）。
 /// 导航栏只在根页面显示；进入详情 / 播放器等二级页面时隐藏。
 struct RootTabView: View {
@@ -52,27 +19,6 @@ struct RootTabView: View {
     @State private var tabBarHidden = false
     @State private var restoreTask: Task<Void, Never>?
 
-    /// iOS 18+: hide on upward movement only. A downward reversal during the
-    /// same finger interaction must not reveal the chrome; the interaction-end
-    /// callback is the single place that restores it.
-    private func updateHomeChromeForScrollDirection(_ scrollingUp: Bool) {
-        guard scrollingUp else { return }
-        restoreTask?.cancel()
-        if !tabBarHidden { tabBarHidden = true }
-    }
-
-    /// Restore only after the scroll view reports that the user's touch/scroll activity has ended.
-    /// The short debounce avoids revealing the chrome between momentum-scroll phases.
-    private func restoreHomeChromeAfterScrollEnd() {
-        restoreTask?.cancel()
-        guard tabBarHidden else { return }
-        restoreTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 450_000_000)
-            guard !Task.isCancelled else { return }
-            withAnimation(DS.select) { tabBarHidden = false }
-            restoreTask = nil
-        }
-    }
     static let items: [(String, String)] = [("首页", "house.fill"), ("TVBox", "tv.fill"),
                                             ("找剧", "square.grid.2x2.fill"), ("我的", "person.crop.circle.fill")]
     var body: some View {
@@ -101,31 +47,10 @@ struct RootTabView: View {
                 }
                 .tint(STVTheme.accent)
                 .environment(\.homeScrollChromeHidden, tabBarHidden)
-                .environment(\.homeScrollActivity) { scrollingUp in
-                    guard showNav && tab == 0 && !metrics.useRail else { return }
-                    updateHomeChromeForScrollDirection(scrollingUp)
-                }
-                .environment(\.homeScrollBegan) {
-                    guard showNav && tab == 0 && !metrics.useRail else { return }
-                    restoreTask?.cancel()
-                    restoreTask = nil
-                }
-                .environment(\.homeScrollEnded) {
-                    guard showNav && tab == 0 && !metrics.useRail else { return }
-                    restoreHomeChromeAfterScrollEnd()
-                }
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
                         .onChanged { value in
                             guard showNav && !metrics.useRail else { return }
-
-                            // 首页 iOS 18+ 由 HomePageInset 的滚动活动回调负责，
-                            // 保证同一次手势内反向下滑不会提前显示搜索框和导航栏。
-                            if tab == 0 {
-                                if #available(iOS 18.0, *) { return }
-                            }
-
-                            // 非首页恢复上游通用导航行为；首页仅在旧系统使用此兼容路径。
                             let dy = value.translation.height
                             let dx = value.translation.width
                             guard abs(dy) > abs(dx) * 1.2 else { return }
@@ -138,15 +63,6 @@ struct RootTabView: View {
                             }
                         }
                         .onEnded { _ in
-                            guard showNav && !metrics.useRail else { return }
-
-                            if tab == 0 {
-                                if #available(iOS 18.0, *) { return }
-                                restoreHomeChromeAfterScrollEnd()
-                                return
-                            }
-
-                            // 与 upstream/dev-v1.6.45 一致：松手后延迟 450ms 恢复。
                             guard tabBarHidden else { return }
                             restoreTask?.cancel()
                             restoreTask = Task { @MainActor in
