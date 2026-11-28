@@ -269,6 +269,10 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     @Published private(set) var pipActive = false
     @Published var pipError: String?
     @Published private(set) var restoringPiP = false
+    /// Short post-PiP-stop grace window so a late AVKit `rate = 0` notification right after restore cannot pause playback.
+    private var pipRestoreGraceUntil: Date = .distantPast
+    /// True if `didEnterBackground()` auto-paused before an automatic PiP start callback arrived.
+    private var pausedByBackground = false
     private var backgrounded = false
     @Published private var interrupted = false
     private var recoverInterruptedTransport = false
@@ -556,9 +560,18 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
 
     func pictureInPictureControllerWillStartPictureInPicture(_ controller: AVPictureInPictureController) {
         guard controller === pip else { return }
+        handlePiPWillStart()
+    }
+
+    func handlePiPWillStart() {
         restoringPiP = false
+        pipRestoreGraceUntil = .distantPast
         pipActive = true
         engine.setPiPActive(true)
+        if pausedByBackground {
+            pausedByBackground = false
+            setPaused(false)
+        }
     }
 
     func pictureInPictureController(_ controller: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
@@ -577,13 +590,23 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
 
     func pictureInPictureController(_ controller: AVPictureInPictureController,
                                     restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completion: @escaping (Bool) -> Void) {
+        completion(handlePiPRestoreUI(matchesController: controller === pip))
+    }
+
+    @discardableResult
+    func handlePiPRestoreUI(matchesController: Bool = true) -> Bool {
         restoringPiP = true
         pipActive = false
-        completion(controller === pip && observer != nil)
+        return matchesController && observer != nil
     }
 
     func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
         guard controller === pip else { return }
+        handlePiPDidStop()
+    }
+
+    func handlePiPDidStop() {
+        let wasRestoring = restoringPiP
         pipActive = false
         restoringPiP = false
         clockAnchor = nil
@@ -595,10 +618,19 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
             if readyIndex != nil { refreshPiP() }
         } else {
             engine.setPiPActive(false)
-            if !restoringPiP { setPaused(true) }
-            else { resumeIfRequested() }
+            if !wasRestoring {
+                setPaused(true)
+            } else {
+                pipRestoreGraceUntil = Date().addingTimeInterval(0.35)
+                resumeIfRequested()
+                let token = activation
+                Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(250))
+                    guard let self, self.activation == token, !self.backgrounded else { return }
+                    self.resumeIfRequested()
+                }
+            }
         }
-        restoringPiP = false
     }
 
     func didEnterBackground() {
@@ -606,12 +638,16 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         save(force: true)
         LibraryStore.shared.flush()
         if !pipActive && !continuePiP && pip?.isPictureInPictureActive != true && !paused {
+            pausedByBackground = true
             setPaused(true)
+        } else {
+            pausedByBackground = false
         }
     }
 
     /// Fires before the foreground frame is composited so the inline player never flashes the PiP placeholder pill.
     func willEnterForeground() {
+        pausedByBackground = false
         if pip?.isPictureInPictureActive == true || pipActive {
             continuePiP = false
             restoringPiP = true
@@ -622,6 +658,7 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
 
     func didBecomeActive() {
         clockAnchor = nil
+        pausedByBackground = false
         guard backgrounded else { return }
         backgrounded = false
         audioSessionActive = false
@@ -631,9 +668,9 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
             restoringPiP = true
             pipActive = false
             pip?.stopPictureInPicture()
-        } else {
-            restoringPiP = false
         }
+        // Keep `restoringPiP` intact if `willEnterForeground` / `restoreUserInterface` already started
+        // stopping PiP; `pictureInPictureControllerDidStopPictureInPicture` will consume and clear it.
         resumeIfRequested()
         // Engine foreground restoration may itself be asynchronous. Reconcile once afterwards,
         // re-reading intent so a pause pressed in the meantime always wins.
@@ -641,6 +678,9 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard let self, self.activation == token, !self.backgrounded else { return }
+            if self.restoringPiP, self.pip?.isPictureInPictureActive != true {
+                self.restoringPiP = false
+            }
             self.resumeIfRequested()
         }
     }
@@ -1396,7 +1436,10 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
         } else { recoverInterruptedTransport = false }
         wantsPlayback = !value
         transportPaused = value
-        if value { continuePiP = false }
+        if value {
+            pipRestoreGraceUntil = .distantPast
+            continuePiP = false
+        }
         if value {
             engine.pause()
             save(force: true)
@@ -1422,6 +1465,10 @@ final class PlaybackCoordinator: NSObject, @preconcurrency AVPictureInPictureCon
     private func bindTransportRequests(_ target: PlayerEngine) {
         target.onPlaybackRequested = { [weak self, weak target] playing in
             guard let self, let target, self.engine === target, !self.restoringPiP else { return }
+            if !playing, Date() < self.pipRestoreGraceUntil {
+                self.resumeIfRequested()
+                return
+            }
             guard self.readyIndex != nil else {
                 // nothing of the current episode is open yet: what the core holds is the one before
                 if playing { target.pause() }
