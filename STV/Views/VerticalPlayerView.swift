@@ -1349,7 +1349,7 @@ struct PlayerScreen: View {
     /// Double tap: left third −10 s, right third +10 s, middle play / pause.
     private func handleDoubleTap(_ x: CGFloat) {
         guard !locked else { return }
-        if !co.isLive, x < 1.0 / 3 || x > 2.0 / 3 {
+        if !co.isLive, x < 0.20 || x > 0.80 {
             let step = x > 2.0 / 3 ? 10 : -10, now = Date()
             // Same direction within the streak window adds up: +10, +20, +30 …
             let total = (seekRun.flatMap { now.timeIntervalSince($0.at) < 0.9 && ($0.total > 0) == (step > 0) ? $0.total : nil } ?? 0) + step
@@ -1811,7 +1811,7 @@ struct PlayerTouchCatcher: UIViewRepresentable {
         /// Single tap now; second tap within 0.3 s near the first = double tap; side streak keeps seeking.
         private func tapped(at p: CGPoint, in view: UIView) {
             let x = p.x / max(1, view.bounds.width), now = Date()
-            let side: Bool? = x < 1.0 / 3 ? false : (x > 2.0 / 3 ? true : nil)
+            let side: Bool? = x < 0.20 ? false : (x > 0.80 ? true : nil)
             guard doubleTapEnabled else { onTap(); return }
             if let s = streak, now < s.until, side == s.right {
                 streak = (now.addingTimeInterval(0.7), s.right)
