@@ -117,18 +117,25 @@ enum NetGuard {
     }
 
     /// True when any address the host resolves to is in a blocked range. Blocking call (plugin thread).
-    static func resolvesToBlocked(_ host: String) -> Bool {
+    static func resolvesToBlocked(_ host: String, useCache: Bool = true) -> Bool {
         let h = host.lowercased()
         if h == "localhost" || h.hasSuffix(".localhost") || h.hasSuffix(".local") { return true }
-        cacheLock.lock()
-        if let (t, v) = cache[h], !v, Date().timeIntervalSince(t) < 300 { cacheLock.unlock(); return false }
-        cacheLock.unlock()
+        if useCache {
+            cacheLock.lock()
+            if let (t, v) = cache[h], !v, Date().timeIntervalSince(t) < 300 {
+                cacheLock.unlock()
+                return false
+            }
+            cacheLock.unlock()
+        }
         let addrs = resolverOverride?(h) ?? resolve(h)
+        // Fail closed: a hostname with no usable DNS answer must not be treated as safe.
+        guard !addrs.isEmpty else { return true }
         let hasAllowed = addrs.contains { !isBlockedIP($0) }
         // Proxy Fake-IP (Clash / sing-box) often returns a 198.18.x.x IPv4 paired with an fc00::/18 IPv6;
         // do not block the whole host for the companion Fake-IPv6 when an allowed address is present.
         let blocked = addrs.contains { isBlockedIP($0) && !(hasAllowed && isIPv6ULA($0)) }
-        if !blocked && !addrs.isEmpty {
+        if !blocked && useCache {
             cacheLock.lock(); cache[h] = (Date(), false); cacheLock.unlock()
         }
         return blocked
