@@ -204,6 +204,7 @@ struct HomeHeader {
     var pagerTop: CGFloat = 0
     var tabBar: CGFloat = 0
     var onScrolled: (Bool) -> Void = { _ in }
+    var onScrollActivityBegan: () -> Void = {}
     var onScrollActivityEnded: () -> Void = {}
     var onScrollDirection: (Bool) -> Void = { _ in }
 }
@@ -257,7 +258,9 @@ private struct HomePageInset: ViewModifier {
                     }
                 }
                 .compatOnScrollActivity { active in
-                    if !active {
+                    if active {
+                        header.onScrollActivityBegan()
+                    } else {
                         lastScrollY = nil
                         header.onScrollActivityEnded()
                     }
@@ -302,6 +305,7 @@ private struct HomeBottomSafeArea: ViewModifier {
 struct HomeView: View {
     @Environment(\.homeScrollChromeHidden) private var homeScrollChromeHidden
     @Environment(\.homeScrollActivity) private var homeScrollActivity
+    @Environment(\.homeScrollBegan) private var homeScrollBegan
     @Environment(\.homeScrollEnded) private var homeScrollEnded
     @ObservedObject private var gate = SourceGate.shared
     @ObservedObject private var pluginStore = PluginStore.shared
@@ -369,6 +373,9 @@ struct HomeView: View {
             if scrolled[s] != v {
                 withAnimation(DS.select) { scrolled[s] = v }
             }
+        }, onScrollActivityBegan: {
+            guard s == source else { return }
+            homeScrollBegan()
         }, onScrollActivityEnded: {
             guard s == source else { return }
             homeScrollEnded()
