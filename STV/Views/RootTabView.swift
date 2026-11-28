@@ -118,20 +118,17 @@ struct GlassTabBar: View {
     var onReselect: (Int) -> Void = { _ in }
     @Namespace private var ns
     var body: some View {
-        LiquidGlassGroup(spacing: 10) {
-            HStack(spacing: 10) {
-                HStack(spacing: 4) {
-                    ForEach(items.indices, id: \.self) { i in
-                        NavBarItem(title: items[i].0, symbol: items[i].1, on: i == selection, height: 48, ns: ns) { pick(i) }
-                            .accessibilityIdentifier("tab.\(i)")
-                    }
+        HStack(spacing: 10) {
+            HStack(spacing: 4) {
+                ForEach(items.indices, id: \.self) { i in
+                    NavBarItem(title: items[i].0, symbol: items[i].1, on: i == selection, height: 48, ns: ns) { pick(i) }
+                        .accessibilityIdentifier("tab.\(i)")
                 }
-                .padding(6)
-                .liquidGlassCapsule(interactive: true)
+            }
+            .padding(6)
 
-                if let searchTag {
-                    NavSearchButton(on: selection == searchTag, size: 60) { pick(searchTag) }
-                }
+            if let searchTag {
+                NavSearchButton(on: selection == searchTag, size: 60) { pick(searchTag) }
             }
         }
         .frame(maxWidth: 420)
@@ -160,11 +157,6 @@ private struct NavBarItem: View {
             }
             .foregroundStyle(on ? STVTheme.accent : STVTheme.secondary)
             .frame(maxWidth: .infinity).frame(height: height)
-            .background {
-                if on {
-                    Capsule(style: .continuous).fill(STVTheme.glassBorder).matchedGeometryEffect(id: "pill", in: ns)
-                }
-            }
             .contentShape(Capsule())
         }
         .buttonStyle(PressScale(scale: 0.94))
