@@ -82,10 +82,22 @@ enum HomeSource: Hashable, Identifiable {
             if let k = src.cmsKey, let s = CMSStore.site(k), s.origin == "TVBox" || s.origin.hasPrefix("TVBox") { return false }
             return true
         }
-        return [.hongguo] + (g.showHuangguo ? [.huangguo] : []) + [.ai] + nonTVBoxSites.map { .site($0) }
-            + (preferenceEnabled("stv.home.showChannels") ? [.channels] : [])
-            + (preferenceEnabled("stv.home.showManga") ? [.manga] : [])
-            + (preferenceEnabled("stv.home.showNovel") ? [.novel] : [])
+        var result: [HomeSource] = [.hongguo]
+        if g.showHuangguo {
+            result.append(.huangguo)
+        }
+        result.append(.ai)
+        result.append(contentsOf: nonTVBoxSites.map { HomeSource.site($0) })
+        if preferenceEnabled("stv.home.showChannels") {
+            result.append(.channels)
+        }
+        if preferenceEnabled("stv.home.showManga") {
+            result.append(.manga)
+        }
+        if preferenceEnabled("stv.home.showNovel") {
+            result.append(.novel)
+        }
+        return result
     }
     @MainActor static var all: [HomeSource] {
         let raw = defaultAll
