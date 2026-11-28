@@ -255,6 +255,16 @@ final class PluginTests: XCTestCase {
         XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: "com.test.other").isEmpty,
                       "learned image hosts must not cross plugin boundaries")
 
+        // A familiar file suffix in an unrelated field must not grant image access.
+        let unrelatedID = "com.test.unrelated-url"
+        PluginMediaDomainCache.learn(pluginID: unrelatedID,
+                                     sourceURL: URL(string: "https://example.com/page")!,
+                                     sourcePolicy: DomainPolicy(["example.com"]),
+                                     contentType: "application/json",
+                                     body: Data(#"{"analytics":"https://tracking-cdn.example.net/pixel.jpg","video":"https://video-cdn.example.net/poster.mp4"}"#.utf8))
+        XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: unrelatedID).isEmpty)
+        PluginMediaDomainCache.clear(pluginID: unrelatedID)
+
         // Dynamic image permission is deliberately separate from host.http permission.
         await expectCode("E_PERMISSION") {
             try await p.evalForTest("(async () => (await host.http.get('https://img-cdn.example.net/cover.webp')).status)()")
