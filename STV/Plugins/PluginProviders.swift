@@ -201,6 +201,12 @@ enum PluginOut {
         }
         return out
     }
+    /// 插件声明的图片处理（封面 coverTransform / 章节图片 transform）。
+    /// 只接受宿主原生支持的 stripes（横条重排）与 aes（整包解密）。
+    static func mediaTransform(_ v: Any?) -> [String: Any]? {
+        guard let t = v as? [String: Any], ["stripes", "aes"].contains(t["type"] as? String ?? "") else { return nil }
+        return t
+    }
     static func categories(_ v: Any?) -> [PluginCategory] {
         let all = ((v as? [[String: Any]]) ?? []).prefix(60).compactMap { c -> PluginCategory? in
             let id = s(c["id"]), name = s(c["name"], max: 40)
@@ -230,7 +236,8 @@ struct JSComicProvider: MangaProvider {
         guard !ContentFilter.isBlocked([title] + tags) else { return nil }
         let cover = PluginOut.url(o["cover"])
         return MangaItem(source: source, mangaId: id, title: title,
-                         cover: PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"])),
+                         cover: PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"]),
+                                                transform: PluginOut.mediaTransform(o["coverTransform"])),
                          author: PluginOut.s(o["author"], max: 80), tags: tags, latest: PluginOut.s(o["remarks"], max: 40))
     }
 
@@ -264,7 +271,8 @@ struct JSComicProvider: MangaProvider {
         let title = PluginOut.s(o["title"], max: 200)
         if !title.isEmpty { item.title = title }
         let cover = PluginOut.url(o["cover"])
-        if !cover.isEmpty { item.cover = PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"])) }
+        if !cover.isEmpty { item.cover = PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"]),
+                                                        transform: PluginOut.mediaTransform(o["coverTransform"])) }
         let tags = PluginOut.strings(o["tags"])
         if !tags.isEmpty { item.tags = tags }
         let author = PluginOut.s(o["author"], max: 80)
@@ -285,9 +293,7 @@ struct JSComicProvider: MangaProvider {
             let u = PluginOut.url(i["url"])
             guard !u.isEmpty else { return nil }
             let h = common.merging(PluginOut.headers(i["headers"])) { _, b in b }
-            var t = i["transform"] as? [String: Any]
-            if let tt = t, !["stripes", "aes"].contains(tt["type"] as? String ?? "") { t = nil }
-            return PluginMedia.ref(plugin: pluginID, url: u, headers: h, transform: t)
+            return PluginMedia.ref(plugin: pluginID, url: u, headers: h, transform: PluginOut.mediaTransform(i["transform"]))
         }
         guard !imgs.isEmpty else { throw ProviderError.upstream("插件没有返回图片") }
         return imgs
@@ -301,9 +307,19 @@ struct JSVideoProvider: SiteProvider {
     var pluginID: String { source.pluginID ?? "" }
     static let homeID = "__home"
 
+    static func visibleCategories(cached: [PluginCategory], features: [String]?) -> [SiteCategory] {
+        let mapped = cached.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }
+        // Category-shelf plugins expose only real categories. Legacy plugins retain the
+        // historical __home entry so DynamicSiteFeed can keep using home() as its feed.
+        if PluginHomeFeatures.usesCategoryShelves(features) { return mapped }
+        return mapped.isEmpty ? [SiteCategory(id: homeID, title: "推荐", path: homeID)] : mapped
+    }
+
     var categories: [SiteCategory] {
-        [SiteCategory(id: Self.homeID, title: "推荐", path: Self.homeID)]
-            + (PluginStore.snapshot(pluginID)?.cachedCategories ?? []).map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }
+        Self.visibleCategories(
+            cached: PluginStore.snapshot(pluginID)?.cachedCategories ?? [],
+            features: PluginStore.snapshot(pluginID)?.manifest.homeFeatures
+        )
     }
 
     private func series(_ o: [String: Any]) -> HGSeries? {
@@ -311,7 +327,8 @@ struct JSVideoProvider: SiteProvider {
         guard !id.isEmpty, !title.isEmpty else { return nil }
         let tags = PluginOut.strings(o["tags"]) + PluginOut.strings(o["badges"])
         guard !ContentFilter.isBlocked([title] + tags) else { return nil }
-        let cover = PluginMedia.ref(plugin: pluginID, url: PluginOut.url(o["cover"]), headers: PluginOut.headers(o["coverHeaders"]))
+        let cover = PluginMedia.ref(plugin: pluginID, url: PluginOut.url(o["cover"]), headers: PluginOut.headers(o["coverHeaders"]),
+                                    transform: PluginOut.mediaTransform(o["coverTransform"]))
         return HGSeries(source: source, seriesId: id, title: title, cover: cover, subtitle: PluginOut.s(o["remarks"], max: 40).nilIfEmpty,
                         actors: PluginOut.strings(o["actors"]), orientation: (o["orientation"] as? String) == "portrait" ? "portrait" : nil, tags: tags)
     }
@@ -322,14 +339,42 @@ struct JSVideoProvider: SiteProvider {
         return HGPage(items: items, hasMore: (o["hasMore"] as? Bool ?? false) && !items.isEmpty, nextOffset: p + 1)
     }
 
+    /// Parse home() without conflating an omitted categories field with an explicitly empty list.
+    /// A missing field preserves the last known categories; an explicit [] clears them.
+    func parseHomeResponse(_ response: [String: Any], features explicitFeatures: [String]? = nil) -> (categories: [PluginCategory]?, featured: [HGSeries]) {
+        // Only a real array is an update. Missing/null/malformed values must not erase cached categories.
+        let categories = (response["categories"] as? [[String: Any]]).map { PluginOut.categories($0) }
+        let features = explicitFeatures ?? PluginStore.snapshot(pluginID)?.manifest.homeFeatures
+        let featured = PluginHomeFeatures.has("featured", in: features)
+            ? PluginOut.unique(((response["items"] as? [[String: Any]]) ?? []).prefix(100).compactMap(series)) { $0.id }
+            : []
+        return (categories, featured)
+    }
+
+    /// Load homepage data for the shared native HomeFeedPage / HomeShelf presentation.
+    /// Featured items are opt-in; category items remain in their own shelves.
+    func homeData() async throws -> (categories: [SiteCategory], featured: [HGSeries]) {
+        let response = try await PluginRuntime.call(pluginID, "home", [:]) as? [String: Any] ?? [:]
+        let parsed = parseHomeResponse(response)
+        if let categories = parsed.categories {
+            await MainActor.run { PluginStore.shared.cacheCategories(pluginID, categories) }
+        }
+        let categories = parsed.categories ?? PluginStore.snapshot(pluginID)?.cachedCategories ?? []
+        return (categories.map { SiteCategory(id: $0.id, title: $0.name, path: $0.id, isRank: $0.isRank) }, parsed.featured)
+    }
+
     func list(_ c: SiteCategory, page p: Int) async throws -> HGPage {
         if c.id == Self.homeID || c.id.isEmpty {
             if p > 1 { return HGPage(items: [], hasMore: false) }
             let r = try await PluginRuntime.call(pluginID, "home", [:])
-            let cats = PluginOut.categories((r as? [String: Any])?["categories"])
-            let id = pluginID
-            await MainActor.run { PluginStore.shared.cacheCategories(id, cats) }
-            if let items = (r as? [String: Any])?["items"] as? [Any], !items.isEmpty { return page(r, 1) }
+            let response = r as? [String: Any] ?? [:]
+            let parsed = parseHomeResponse(response)
+            if let cats = parsed.categories {
+                let id = pluginID
+                await MainActor.run { PluginStore.shared.cacheCategories(id, cats) }
+            }
+            if let items = response["items"] as? [Any], !items.isEmpty { return page(r, 1) }
+            let cats = parsed.categories ?? PluginStore.snapshot(pluginID)?.cachedCategories ?? []
             guard let first = cats.first else { return HGPage(items: [], hasMore: false) }
             return page(try await PluginRuntime.call(pluginID, "category", ["id": first.id, "page": 1, "filters": [String: String]()]), 1)
         }
@@ -357,7 +402,8 @@ struct JSVideoProvider: SiteProvider {
         }
         let cover = PluginOut.url(o["cover"])
         return HGSeriesDetail(source: source, seriesId: s.seriesId, title: title,
-                              cover: cover.isEmpty ? s.cover : PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"])),
+                              cover: cover.isEmpty ? s.cover : PluginMedia.ref(plugin: pluginID, url: cover, headers: PluginOut.headers(o["coverHeaders"]),
+                                                                                transform: PluginOut.mediaTransform(o["coverTransform"])),
                               desc: PluginOut.s(o["desc"], max: 4000), author: PluginOut.s(o["director"], max: 80).nilIfEmpty,
                               actors: PluginOut.strings(o["actors"]), onlineTime: 0, totalEps: eps.count, episodes: eps, tags: tags,
                               episodeLabel: eps.count > 1 ? "共\(eps.count)集" : "长视频")
