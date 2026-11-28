@@ -15,6 +15,32 @@ enum PluginType: String, Codable, CaseIterable, Hashable {
     }
 }
 
+enum PluginHomeFeatures {
+    static func has(_ feature: String, in features: [String]?) -> Bool {
+        features?.contains(feature) ?? false
+    }
+    static func usesCategoryShelves(_ features: [String]?) -> Bool {
+        has("categoryShelves", in: features)
+    }
+    static func showsFeaturedCarousel(_ features: [String]?, itemCount: Int) -> Bool {
+        has("featured", in: features) && itemCount > 0
+    }
+    static func usesNumbering(_ features: [String]?) -> Bool {
+        has("numbered", in: features)
+    }
+    /// Sequentially inspect categories so the fallback hero is deterministic in site order.
+    @MainActor static func firstPopulated<T>(_ values: [T], hasItems: @MainActor (T) async -> Bool) async -> T? {
+        for value in values {
+            guard !Task.isCancelled else { return nil }
+            if await hasItems(value) {
+                guard !Task.isCancelled else { return nil }
+                return value
+            }
+        }
+        return nil
+    }
+}
+
 struct PluginManifest: Codable, Hashable {
     struct Author: Codable, Hashable { var name: String; var contact: String? }
     struct Permissions: Codable, Hashable {
@@ -58,6 +84,8 @@ struct PluginManifest: Codable, Hashable {
     var icon: String?
     var permissions: Permissions
     var capabilities: [String]
+    /// Optional homepage presentation features: featured / categoryShelves / numbered.
+    var homeFeatures: [String]?
     var settings: [Setting]?
     var update: Update?
     var integrity: Integrity?
@@ -98,6 +126,12 @@ struct PluginManifest: Codable, Hashable {
             p.append("域名格式不对：\(d)（只允许 example.com 或 *.example.com）")
         }
         for c in type.requiredCapabilities where !capabilities.contains(c) { p.append("type=\(type.rawValue) 必须实现 \(c)") }
+        if let homeFeatures {
+            let allowed: Set<String> = ["featured", "categoryShelves", "numbered"]
+            if Set(homeFeatures).count != homeFeatures.count { p.append("homeFeatures 不能包含重复项") }
+            for feature in homeFeatures where !allowed.contains(feature) { p.append("不支持的 homeFeatures：\(feature)") }
+            if !homeFeatures.isEmpty && !capabilities.contains("home") { p.append("声明 homeFeatures 时 capabilities 必须包含 home") }
+        }
         for s in settings ?? [] {
             if s.key.range(of: #"^[a-zA-Z][a-zA-Z0-9_]{0,31}$"#, options: .regularExpression) == nil { p.append("settings.key 不合法：\(s.key)") }
             if !["text", "select", "secret"].contains(s.type) { p.append("settings.type 只能是 text/select/secret：\(s.key)") }
