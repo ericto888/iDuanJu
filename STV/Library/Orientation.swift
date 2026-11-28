@@ -56,7 +56,7 @@ final class OrientationGate: NSObject, UIApplicationDelegate {
     @MainActor static func unlock() {
         rotationGeneration += 1
         fullscreenSnapshot = nil
-        mask = isPad ? .all : .allButUpsideDown
+        mask = isPad ? .all : .portrait
         refresh()
     }
 
