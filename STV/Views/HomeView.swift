@@ -236,6 +236,7 @@ private struct HomePageInset: ViewModifier {
         return max(0, rest.top - (placed?.top ?? header.pagerTop))
     }
     private var bottom: CGFloat {
+        guard header.tabBar > 0 else { return 0 }
         guard let rest = header.rest, let placed else { return header.tabBar }
         return max(0, placed.bottom - rest.bottom)
     }
