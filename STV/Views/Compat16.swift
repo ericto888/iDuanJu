@@ -89,49 +89,8 @@ extension View {
     /// Reports vertical finger interaction independently of scroll deceleration.
     /// The drag recognizer provides a reliable finger-up signal; scroll phases remain
     /// as a secondary signal for system-driven interaction transitions.
-    @ViewBuilder
     func compatOnScrollActivity(action: @escaping (Bool) -> Void) -> some View {
-        if #available(iOS 18.0, *) {
-            self
-                .onScrollPhaseChange { oldPhase, newPhase in
-                    if newPhase == .interacting {
-                        reportScrollActivity(true, action: action)
-                    } else if newPhase == .decelerating || (oldPhase == .interacting && newPhase == .idle) {
-                        // Deceleration begins when the finger lifts: start the restore
-                        // delay here rather than waiting for momentum scrolling to finish.
-                        reportScrollActivity(false, action: action)
-                    }
-                }
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 8)
-                        .onChanged { value in
-                            let dx = abs(value.translation.width)
-                            let dy = abs(value.translation.height)
-                            if dy > dx * 1.2 {
-                                reportScrollActivity(true, action: action)
-                            }
-                        }
-                        .onEnded { value in
-                            let dx = abs(value.translation.width)
-                            let dy = abs(value.translation.height)
-                            if dy > dx * 1.2 {
-                                reportScrollActivity(false, action: action)
-                            }
-                        }
-                )
-        } else {
-            self
-        }
-    }
-
-    /// The scroll phase and drag recognizer can report the same transition.
-    /// Emit only state changes so duplicate finger-up events do not restart the 450ms timer.
-    @State private var isScrollActive = false
-
-    private func reportScrollActivity(_ active: Bool, action: (Bool) -> Void) {
-        guard isScrollActive != active else { return }
-        isScrollActive = active
-        action(active)
+        modifier(CompatScrollActivity(action: action))
     }
 
     /// iOS 16+ replacement for `.onScrollGeometryChange(for: CGFloat.self)` scroll Y reporting.
@@ -216,6 +175,49 @@ extension View {
         } else {
             self
         }
+    }
+}
+
+/// Tracks scroll activity once even when the drag recognizer and scroll phase
+/// report the same transition.
+private struct CompatScrollActivity: ViewModifier {
+    let action: (Bool) -> Void
+    @State private var isScrollActive = false
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content
+                .onScrollPhaseChange { oldPhase, newPhase in
+                    if newPhase == .interacting {
+                        report(true)
+                    } else if newPhase == .decelerating || (oldPhase == .interacting && newPhase == .idle) {
+                        // Deceleration begins when the finger lifts; begin the restore
+                        // delay here rather than waiting for momentum scrolling to finish.
+                        report(false)
+                    }
+                }
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { value in
+                            let dx = abs(value.translation.width)
+                            let dy = abs(value.translation.height)
+                            if dy > dx * 1.2 { report(true) }
+                        }
+                        .onEnded { value in
+                            let dx = abs(value.translation.width)
+                            let dy = abs(value.translation.height)
+                            if dy > dx * 1.2 { report(false) }
+                        }
+                )
+        } else {
+            content
+        }
+    }
+
+    private func report(_ active: Bool) {
+        guard isScrollActive != active else { return }
+        isScrollActive = active
+        action(active)
     }
 }
 
