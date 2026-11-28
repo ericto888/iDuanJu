@@ -463,6 +463,18 @@ final class PluginTests: XCTestCase {
         XCTAssertTrue(PluginMediaDomainCache.domains(pluginID: forgedID).isEmpty,
                       "plugin-created ciphertext without response provenance must not teach a CDN")
         PluginMediaDomainCache.clear(pluginID: forgedID)
+
+        let unauthorizedID = "com.test.unauthorized-encrypted-response"
+        PluginMediaDomainCache.clear(pluginID: unauthorizedID)
+        PluginMediaDomainCache.observeEncryptedPayloads(pluginID: unauthorizedID,
+                                                         sourceURL: URL(string: "https://evil.example.net/response")!,
+                                                         sourcePolicy: DomainPolicy(["example.com"]),
+                                                         contentType: "application/json", body: envelope)
+        PluginMediaDomainCache.learnDecryptedPayload(pluginID: unauthorizedID, ciphertext: ciphertext,
+                                                      plaintext: plaintext)
+        XCTAssertTrue(PluginMediaDomainCache.candidates(pluginID: unauthorizedID).isEmpty,
+                      "an encrypted response from an unauthorized origin must not seed candidates")
+        PluginMediaDomainCache.clear(pluginID: unauthorizedID)
     }
 
     func testCryptoAndCodec() async throws {
