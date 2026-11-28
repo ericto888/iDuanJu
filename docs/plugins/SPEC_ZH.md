@@ -92,7 +92,7 @@ return {
 
 图片 CDN 权限：
 - 图片地址优先使用 manifest 的 `permissions.media`（未声明时同 `permissions.http`）域名。
-- 新版 App 会从该插件成功请求的、已授权 `permissions.http` 站点 HTML/JSON/JavaScript 响应中，识别明确的图片 URL 字段并学习其中的 HTTPS 图片 CDN 主机名。
+- 新版 App 会从该插件成功请求的、已授权 `permissions.http` 站点 HTML/JSON/JavaScript 响应中，识别明确的图片 URL 字段并学习其中的 HTTPS 图片 CDN 主机名；同时，宿主在把插件返回的 `cover`、`poster`、缩略图或漫画章节图片转换为原生图片引用时，也会把该明确标记的图片 URL 主机加入同一动态缓存。后一机制可覆盖 Nuxt 等索引/表格序列化 payload（图片字段名与 URL 不相邻）的情况。
 - 动态学习只增加该插件的图片读取权限，不会扩大 `host.http` 权限；JSON 仅识别明确的图片字段（如 `cover`、`image`、`pic`、`thumb`、`poster`），不把通用 `src` 当作图片字段；HTML 仅识别 `<img>` 的 `src`/懒加载属性及 `<video>` 的 `poster`，不会从 video/script 的 `src` 学习。不能仅凭 `.jpg` 等后缀授权。按插件隔离，24 小时过期，最多 64 个域名。响应扫描上限为 8MB；插件更新、卸载或清除数据后，旧请求不能重新写入缓存。只接受 HTTPS 公网域名；IP、本机及内网地址仍会被拦截。
 - 图片初始地址和每一跳重定向都会重新校验域名与公网地址；重定向到未授权主机仍会被阻止。图片大小上限仍为 30MB。
 
