@@ -36,6 +36,16 @@ enum PluginMediaDomainCache {
     /// HTTPS hosts seen in successful, authorized source responses. They are
     /// candidates only; a provider must later classify an exact URL as an image.
     private static var observedHosts: [String: [String: TimeInterval]] = [:]
+    private struct EncryptedPayload {
+        let sourceURL: URL
+        let sourcePolicy: DomainPolicy
+        let generation: UInt64
+        let expiresAt: TimeInterval
+        let bytes: Data
+    }
+    /// Encoded payload fragments from successful authorized responses. A decrypt result
+    /// is inspected only when its exact ciphertext bytes came from one of these responses.
+    private static var encryptedPayloads: [String: [EncryptedPayload]] = [:]
 
     static func generation(pluginID: String) -> UInt64 {
         lock.lock(); defer { lock.unlock() }
@@ -55,7 +65,75 @@ enum PluginMediaDomainCache {
         lock.lock(); defer { lock.unlock() }
         generations[pluginID, default: 0] &+= 1
         observedHosts.removeValue(forKey: pluginID)
+        encryptedPayloads.removeValue(forKey: pluginID)
         UserDefaults.standard.removeObject(forKey: keyPrefix + pluginID)
+    }
+
+    /// Record bounded base64 payloads embedded in a successful authorized JSON response.
+    /// These are provenance tokens, not permissions; a later decrypt must use matching bytes.
+    static func observeEncryptedPayloads(pluginID: String, sourceURL: URL, sourcePolicy: DomainPolicy,
+                                          contentType: String, body: Data, expectedGeneration: UInt64? = nil,
+                                          now: Date = Date()) {
+        guard sourceURL.scheme?.lowercased() == "https",
+              let sourceHost = sourceURL.host?.lowercased(), sourcePolicy.allows(sourceHost),
+              contentType.lowercased().contains("json"), body.count <= 8 << 20,
+              let root = try? JSONSerialization.jsonObject(with: body, options: [.fragmentsAllowed]) else { return }
+
+        var payloads: [Data] = []
+        var totalBytes = 0
+        func visit(_ value: Any, depth: Int) {
+            guard depth <= 16, payloads.count < 64, totalBytes < 4 << 20 else { return }
+            if let object = value as? [String: Any] {
+                for child in object.values { visit(child, depth: depth + 1) }
+            } else if let array = value as? [Any] {
+                for child in array.prefix(512) { visit(child, depth: depth + 1) }
+            } else if let string = value as? String {
+                var encoded = string.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+                guard encoded.count >= 32, encoded.count <= 3 << 20 else { return }
+                while encoded.count % 4 != 0 { encoded += "=" }
+                guard let bytes = Data(base64Encoded: encoded), bytes.count >= 16,
+                      bytes.count <= 2 << 20, totalBytes + bytes.count <= 4 << 20 else { return }
+                payloads.append(bytes)
+                totalBytes += bytes.count
+            }
+        }
+        visit(root, depth: 0)
+        guard !payloads.isEmpty else { return }
+
+        lock.lock()
+        if let expectedGeneration, generations[pluginID, default: 0] != expectedGeneration {
+            lock.unlock()
+            return
+        }
+        let timestamp = now.timeIntervalSince1970
+        var entries = encryptedPayloads[pluginID, default: []].filter { $0.expiresAt > timestamp }
+        for bytes in payloads {
+            entries.append(EncryptedPayload(sourceURL: sourceURL, sourcePolicy: sourcePolicy,
+                                            generation: generations[pluginID, default: 0],
+                                            expiresAt: timestamp + 10 * 60, bytes: bytes))
+        }
+        if entries.count > 128 { entries = Array(entries.suffix(128)) }
+        encryptedPayloads[pluginID] = entries
+        lock.unlock()
+    }
+
+    /// Inspect decrypted text only when the exact input bytes are contained in a
+    /// base64 payload observed in a successful authorized response for this plugin.
+    static func learnDecryptedPayload(pluginID: String, ciphertext: Data, plaintext: Data, now: Date = Date()) {
+        guard ciphertext.count >= 16, plaintext.count <= 8 << 20,
+              String(data: plaintext, encoding: .utf8) != nil else { return }
+        let timestamp = now.timeIntervalSince1970
+        lock.lock()
+        var entries = encryptedPayloads[pluginID, default: []].filter { $0.expiresAt > timestamp }
+        encryptedPayloads[pluginID] = entries
+        let match = entries.first { entry in
+            generations[pluginID, default: 0] == entry.generation && entry.bytes.range(of: ciphertext) != nil
+        }
+        lock.unlock()
+        guard let match else { return }
+        learn(pluginID: pluginID, sourceURL: match.sourceURL, sourcePolicy: match.sourcePolicy,
+              contentType: "application/json", body: plaintext, expectedGeneration: match.generation, now: now)
     }
 
     /// A provider has already classified this value as an image (cover, poster,
@@ -112,13 +190,12 @@ enum PluginMediaDomainCache {
         let text = raw.replacingOccurrences(of: #"\/"#, with: "/")
             .replacingOccurrences(of: #"\\u002[fF]"#, with: "/", options: .regularExpression)
         let ns = text as NSString
-        let pattern = #"https://[A-Za-z0-9.-]+(?::443)?/[^\s"'<>\\]*"#
+        let pattern = #"https://[A-Za-z0-9.-]+(?::443)?(?:/[^\s"'<>\\]*)?"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return }
         let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
         guard !matches.isEmpty else { return }
 
         var observed = Set<String>()
-        var discovered = Set<String>()
         for match in matches {
             var candidate = ns.substring(with: match.range)
             while let last = candidate.last, ".,;)]}".contains(last) { candidate.removeLast() }
@@ -134,23 +211,9 @@ enum PluginMediaDomainCache {
             // promotes it only when the provider classifies a URL as an image.
             observed.insert(host)
 
-            // A file extension alone is not evidence that a URL is an image: API,
-            // tracking and video URLs can also end in familiar suffixes. Only learn
-            // hosts when the URL is attached to an explicit image-bearing field.
-            let prefix = ns.substring(to: match.range.location)
-            // JSON: only explicit image-bearing keys. A generic "src" key is
-            // ambiguous (often video/script), so it must never grant image access.
-            let jsonImageFieldPattern = #""(?:cover|coverUrl|poster|posterUrl|image|imageUrl|img|pic|picUrl|thumb|thumbnail|avatar|banner)"\s*:\s*["']?$"#
-            let jsonImageField = prefix.range(of: jsonImageFieldPattern, options: .regularExpression) != nil
-
-            // HTML: accept source attributes only when they belong to an image
-            // element. A video/script/source src must not teach a CDN host.
-            let htmlImageFieldPattern = #"<img\b[^>]*\b(?:src|data-src|data-original|data-lazy-src)\s*=\s*["']?$"#
-            let htmlPosterFieldPattern = #"<video\b[^>]*\bposter\s*=\s*["']?$"#
-            let htmlImageField = prefix.range(of: htmlImageFieldPattern, options: [.regularExpression, .caseInsensitive]) != nil
-                || prefix.range(of: htmlPosterFieldPattern, options: [.regularExpression, .caseInsensitive]) != nil
-            guard jsonImageField || htmlImageField else { continue }
-            discovered.insert(host)
+            // Every external HTTPS host in the trusted response is only a short-lived
+            // candidate. It becomes usable only when the native provider classifies an
+            // exact URL as an image and calls PluginMedia.ref.
         }
         guard !observed.isEmpty else { return }
 
@@ -162,33 +225,15 @@ enum PluginMediaDomainCache {
         let timestamp = now.timeIntervalSince1970
         var candidates = observedHosts[pluginID, default: [:]].filter { $0.value > timestamp }
         for host in observed { candidates[host] = timestamp + 10 * 60 }
-        observedHosts[pluginID] = candidates
-        guard !discovered.isEmpty else {
-            lock.unlock()
-            return
-        }
-        let key = keyPrefix + pluginID
-        var stored = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
-        let nowTimestamp = now.timeIntervalSince1970
-        let fresh = discovered.filter { host in
-            guard let expiresAt = stored[host] else { return true }
-            return expiresAt <= nowTimestamp
-        }
-        let expiry = nowTimestamp + ttl
-        for host in discovered { stored[host] = expiry }
-        stored = stored.filter { $0.value > nowTimestamp }
-        if stored.count > maxDomains {
-            let keep = stored.sorted {
+        if candidates.count > maxDomains {
+            let keep = candidates.sorted {
                 if $0.value != $1.value { return $0.value > $1.value }
                 return $0.key < $1.key
             }.prefix(maxDomains)
-            stored = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
+            candidates = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
         }
-        UserDefaults.standard.set(stored, forKey: key)
+        observedHosts[pluginID] = candidates
         lock.unlock()
-        if !fresh.isEmpty {
-            PluginLog.add(pluginID, "📝 动态授权图片 CDN（24 小时）：\(fresh.sorted().joined(separator: ", "))")
-        }
     }
 }
 
